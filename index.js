@@ -19,8 +19,7 @@ const DEFAULT_BUDGET_ID = process.env.YNAB_BUDGET_ID;
 // --- Helpers ---
 
 function resolveBudgetId(input) {
-  const id = input || DEFAULT_BUDGET_ID;
-  if (!id) throw new Error("budgetId is required (pass it or set YNAB_BUDGET_ID env var)");
+  const id = input || DEFAULT_BUDGET_ID || "last-used";
   return id;
 }
 
@@ -40,8 +39,12 @@ async function run(fn) {
   try {
     return await fn();
   } catch (e) {
-    const msg = e?.error?.detail || e?.message || String(e);
-    return { content: [{ type: "text", text: `Error: ${msg}` }] };
+    const detail = e?.error?.detail;
+    const name = e?.error?.name;
+    const msg = detail
+      ? (name ? `${name}: ${detail}` : detail)
+      : (e?.message || String(e));
+    return { content: [{ type: "text", text: `Error: ${msg}` }], isError: true };
   }
 }
 
@@ -61,7 +64,7 @@ server.tool("get_user", "Get the authenticated user", {}, () =>
   })
 );
 
-server.tool("list_budgets", "List all budgets", {}, () =>
+server.tool("list_budgets", "List all budgets. Use a budget ID from the results in other tools, or omit budgetId to use the last-used budget.", {}, () =>
   run(async () => {
     const { data } = await api.budgets.getBudgets();
     return ok(data.budgets.map((b) => ({ id: b.id, name: b.name, last_modified_on: b.last_modified_on })));
@@ -100,6 +103,26 @@ server.tool(
 
 // ==================== Accounts ====================
 
+function formatAccount(a) {
+  const out = {
+    id: a.id,
+    name: a.name,
+    type: a.type,
+    on_budget: a.on_budget,
+    closed: a.closed,
+    balance: dollars(a.balance),
+    cleared_balance: dollars(a.cleared_balance),
+    uncleared_balance: dollars(a.uncleared_balance),
+    transfer_payee_id: a.transfer_payee_id,
+    direct_import_linked: a.direct_import_linked,
+    direct_import_in_error: a.direct_import_in_error,
+    last_reconciled_at: a.last_reconciled_at,
+    deleted: a.deleted,
+  };
+  if ("note" in a) out.note = a.note;
+  return out;
+}
+
 server.tool(
   "list_accounts",
   "List all accounts in a budget",
@@ -107,18 +130,7 @@ server.tool(
   ({ budgetId }) =>
     run(async () => {
       const { data } = await api.accounts.getAccounts(resolveBudgetId(budgetId));
-      return ok(
-        data.accounts.map((a) => ({
-          id: a.id,
-          name: a.name,
-          type: a.type,
-          on_budget: a.on_budget,
-          closed: a.closed,
-          balance: dollars(a.balance),
-          cleared_balance: dollars(a.cleared_balance),
-          uncleared_balance: dollars(a.uncleared_balance),
-        }))
-      );
+      return ok(data.accounts.map(formatAccount));
     })
 );
 
@@ -132,8 +144,7 @@ server.tool(
   ({ budgetId, accountId }) =>
     run(async () => {
       const { data } = await api.accounts.getAccountById(resolveBudgetId(budgetId), accountId);
-      const a = data.account;
-      return ok({ ...a, balance: dollars(a.balance), cleared_balance: dollars(a.cleared_balance), uncleared_balance: dollars(a.uncleared_balance) });
+      return ok(formatAccount(data.account));
     })
 );
 
@@ -151,11 +162,34 @@ server.tool(
       const { data } = await api.accounts.createAccount(resolveBudgetId(budgetId), {
         account: { name, type, balance: milliunits(bal) },
       });
-      return ok(data.account);
+      return ok(formatAccount(data.account));
     })
 );
 
 // ==================== Categories ====================
+
+function formatCategory(c) {
+  return {
+    id: c.id,
+    category_group_id: c.category_group_id,
+    category_group_name: c.category_group_name,
+    name: c.name,
+    hidden: c.hidden,
+    note: c.note,
+    budgeted: dollars(c.budgeted),
+    activity: dollars(c.activity),
+    balance: dollars(c.balance),
+    goal_type: c.goal_type,
+    goal_target: dollars(c.goal_target),
+    goal_target_date: c.goal_target_date,
+    goal_percentage_complete: c.goal_percentage_complete,
+    goal_months_to_budget: c.goal_months_to_budget,
+    goal_under_funded: dollars(c.goal_under_funded),
+    goal_overall_funded: dollars(c.goal_overall_funded),
+    goal_overall_left: dollars(c.goal_overall_left),
+    goal_needs_whole_amount: c.goal_needs_whole_amount,
+  };
+}
 
 server.tool(
   "list_categories",
@@ -176,6 +210,7 @@ server.tool(
             budgeted: dollars(c.budgeted),
             activity: dollars(c.activity),
             balance: dollars(c.balance),
+            goal_type: c.goal_type,
           })),
         }))
       );
@@ -192,8 +227,7 @@ server.tool(
   ({ budgetId, categoryId }) =>
     run(async () => {
       const { data } = await api.categories.getCategoryById(resolveBudgetId(budgetId), categoryId);
-      const c = data.category;
-      return ok({ ...c, budgeted: dollars(c.budgeted), activity: dollars(c.activity), balance: dollars(c.balance), goal_target: dollars(c.goal_target) });
+      return ok(formatCategory(data.category));
     })
 );
 
@@ -208,8 +242,7 @@ server.tool(
   ({ budgetId, month, categoryId }) =>
     run(async () => {
       const { data } = await api.categories.getMonthCategoryById(resolveBudgetId(budgetId), month, categoryId);
-      const c = data.category;
-      return ok({ ...c, budgeted: dollars(c.budgeted), activity: dollars(c.activity), balance: dollars(c.balance) });
+      return ok(formatCategory(data.category));
     })
 );
 
@@ -227,8 +260,33 @@ server.tool(
       const { data } = await api.categories.updateMonthCategory(resolveBudgetId(budgetId), month, categoryId, {
         category: { budgeted: milliunits(budgeted) },
       });
-      const c = data.category;
-      return ok({ ...c, budgeted: dollars(c.budgeted), activity: dollars(c.activity), balance: dollars(c.balance) });
+      return ok(formatCategory(data.category));
+    })
+);
+
+server.tool(
+  "update_category",
+  "Update a category's name, note, goal target, or move it to a different group",
+  {
+    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+    categoryId: z.string().describe("Category ID"),
+    name: z.string().optional().describe("New category name"),
+    note: z.string().nullable().optional().describe("Category note (null to clear)"),
+    categoryGroupId: z.string().optional().describe("Move to a different category group"),
+    goalTarget: z.number().nullable().optional().describe("Goal target amount in dollars (only if category already has a goal)"),
+  },
+  ({ budgetId, categoryId, name, note, categoryGroupId, goalTarget }) =>
+    run(async () => {
+      const cat = {};
+      if (name !== undefined) cat.name = name;
+      if (note !== undefined) cat.note = note;
+      if (categoryGroupId !== undefined) cat.category_group_id = categoryGroupId;
+      if (goalTarget !== undefined) cat.goal_target = goalTarget != null ? milliunits(goalTarget) : null;
+
+      const { data } = await api.categories.updateCategory(resolveBudgetId(budgetId), categoryId, {
+        category: cat,
+      });
+      return ok(formatCategory(data.category));
     })
 );
 
@@ -292,6 +350,7 @@ server.tool(
           budgeted: dollars(m.budgeted),
           activity: dollars(m.activity),
           to_be_budgeted: dollars(m.to_be_budgeted),
+          age_of_money: m.age_of_money,
         }))
       );
     })
@@ -314,12 +373,17 @@ server.tool(
         budgeted: dollars(m.budgeted),
         activity: dollars(m.activity),
         to_be_budgeted: dollars(m.to_be_budgeted),
+        age_of_money: m.age_of_money,
         categories: m.categories?.map((c) => ({
           id: c.id,
           name: c.name,
+          category_group_name: c.category_group_name,
           budgeted: dollars(c.budgeted),
           activity: dollars(c.activity),
           balance: dollars(c.balance),
+          goal_type: c.goal_type,
+          goal_target: dollars(c.goal_target),
+          goal_under_funded: dollars(c.goal_under_funded),
         })),
       });
     })
@@ -344,6 +408,9 @@ function formatTransaction(t) {
     category_id: t.category_id,
     category_name: t.category_name,
     transfer_account_id: t.transfer_account_id,
+    import_id: t.import_id,
+    import_payee_name: t.import_payee_name,
+    debt_transaction_type: t.debt_transaction_type,
     subtransactions: t.subtransactions?.map((s) => ({
       id: s.id,
       amount: dollars(s.amount),
@@ -383,12 +450,8 @@ server.tool(
         const { data } = await api.transactions.getTransactionsByPayee(bid, payeeId, sinceDate, type);
         transactions = data.transactions;
       } else if (month) {
-        // getTransactionsByMonth doesn't exist in SDK — use sinceDate filter
-        const startDate = month;
-        const [y, m] = month.split("-").map(Number);
-        const endDate = new Date(y, m, 0).toISOString().slice(0, 10); // last day of month
-        const { data } = await api.transactions.getTransactions(bid, startDate, type);
-        transactions = data.transactions.filter((t) => t.date <= endDate);
+        const { data } = await api.transactions.getTransactionsByMonth(bid, month, sinceDate, type);
+        transactions = data.transactions;
       } else {
         const { data } = await api.transactions.getTransactions(bid, sinceDate, type);
         transactions = data.transactions;
@@ -427,22 +490,41 @@ server.tool(
     cleared: z.enum(["cleared", "uncleared", "reconciled"]).optional().describe("Cleared status"),
     approved: z.boolean().optional().describe("Whether transaction is approved"),
     flagColor: z.enum(["red", "orange", "yellow", "green", "blue", "purple"]).optional().describe("Flag color"),
+    importId: z.string().optional().describe("Unique import ID for deduplication (max 36 chars). If omitted and the transaction is later imported, duplicates may be created."),
+    subtransactions: z.array(z.object({
+      amount: z.number().describe("Subtransaction amount in dollars"),
+      categoryId: z.string().optional().describe("Category ID"),
+      payeeId: z.string().optional().describe("Payee ID"),
+      payeeName: z.string().optional().describe("Payee name"),
+      memo: z.string().optional().describe("Memo"),
+    })).optional().describe("Split transaction into subtransactions. The subtransaction amounts must sum to the total transaction amount."),
   },
-  ({ budgetId, accountId, date, amount, payeeId, payeeName, categoryId, memo, cleared, approved, flagColor }) =>
+  ({ budgetId, accountId, date, amount, payeeId, payeeName, categoryId, memo, cleared, approved, flagColor, importId, subtransactions }) =>
     run(async () => {
+      const txn = {
+        account_id: accountId,
+        date,
+        amount: milliunits(amount),
+        payee_id: payeeId,
+        payee_name: payeeName,
+        category_id: categoryId,
+        memo,
+        cleared,
+        approved,
+        flag_color: flagColor,
+        import_id: importId,
+      };
+      if (subtransactions) {
+        txn.subtransactions = subtransactions.map((s) => ({
+          amount: milliunits(s.amount),
+          category_id: s.categoryId,
+          payee_id: s.payeeId,
+          payee_name: s.payeeName,
+          memo: s.memo,
+        }));
+      }
       const { data } = await api.transactions.createTransaction(resolveBudgetId(budgetId), {
-        transaction: {
-          account_id: accountId,
-          date,
-          amount: milliunits(amount),
-          payee_id: payeeId,
-          payee_name: payeeName,
-          category_id: categoryId,
-          memo,
-          cleared,
-          approved,
-          flag_color: flagColor,
-        },
+        transaction: txn,
       });
       return ok(formatTransaction(data.transaction));
     })
@@ -496,7 +578,7 @@ server.tool(
   ({ budgetId, transactionId }) =>
     run(async () => {
       const { data } = await api.transactions.deleteTransaction(resolveBudgetId(budgetId), transactionId);
-      return ok(data.transaction);
+      return ok(formatTransaction(data.transaction));
     })
 );
 
@@ -569,6 +651,16 @@ function formatScheduledTransaction(t) {
     payee_name: t.payee_name,
     category_id: t.category_id,
     category_name: t.category_name,
+    transfer_account_id: t.transfer_account_id,
+    subtransactions: t.subtransactions?.map((s) => ({
+      id: s.id,
+      amount: dollars(s.amount),
+      memo: s.memo,
+      payee_id: s.payee_id,
+      payee_name: s.payee_name,
+      category_id: s.category_id,
+      category_name: s.category_name,
+    })),
   };
 }
 
@@ -632,6 +724,50 @@ server.tool(
 );
 
 server.tool(
+  "update_scheduled_transaction",
+  "Update an existing scheduled transaction. Only provided fields are changed. Amounts in dollars.",
+  {
+    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+    scheduledTransactionId: z.string().describe("Scheduled transaction ID"),
+    accountId: z.string().optional().describe("Account ID"),
+    date: z.string().optional().describe("Next occurrence date (YYYY-MM-DD)"),
+    frequency: z.enum(["never", "daily", "weekly", "everyOtherWeek", "twiceAMonth", "every4Weeks", "monthly", "everyOtherMonth", "every3Months", "every4Months", "twiceAYear", "yearly", "everyOtherYear"]).optional().describe("Recurrence frequency"),
+    amount: z.number().optional().describe("Amount in dollars (negative for outflows)"),
+    payeeId: z.string().nullable().optional().describe("Payee ID"),
+    payeeName: z.string().nullable().optional().describe("Payee name"),
+    categoryId: z.string().nullable().optional().describe("Category ID"),
+    memo: z.string().nullable().optional().describe("Memo"),
+    flagColor: z.enum(["red", "orange", "yellow", "green", "blue", "purple"]).nullable().optional().describe("Flag color"),
+  },
+  ({ budgetId, scheduledTransactionId, accountId, date, frequency, amount, payeeId, payeeName, categoryId, memo, flagColor }) =>
+    run(async () => {
+      const bid = resolveBudgetId(budgetId);
+      // PUT replaces the full resource — fetch current values to merge with updates
+      const { data: current } = await api.scheduledTransactions.getScheduledTransactionById(bid, scheduledTransactionId);
+      const existing = current.scheduled_transaction;
+
+      const st = {
+        account_id: accountId ?? existing.account_id,
+        date: date ?? existing.date_next,
+        frequency: frequency ?? existing.frequency,
+        amount: amount !== undefined ? milliunits(amount) : existing.amount,
+        payee_id: payeeId !== undefined ? payeeId : existing.payee_id,
+        payee_name: payeeName !== undefined ? payeeName : existing.payee_name,
+        category_id: categoryId !== undefined ? categoryId : existing.category_id,
+        memo: memo !== undefined ? memo : existing.memo,
+        flag_color: flagColor !== undefined ? flagColor : existing.flag_color,
+      };
+
+      const { data } = await api.scheduledTransactions.updateScheduledTransaction(
+        bid,
+        scheduledTransactionId,
+        { scheduled_transaction: st }
+      );
+      return ok(formatScheduledTransaction(data.scheduled_transaction));
+    })
+);
+
+server.tool(
   "delete_scheduled_transaction",
   "Delete a scheduled transaction",
   {
@@ -641,7 +777,7 @@ server.tool(
   ({ budgetId, scheduledTransactionId }) =>
     run(async () => {
       const { data } = await api.scheduledTransactions.deleteScheduledTransaction(resolveBudgetId(budgetId), scheduledTransactionId);
-      return ok(data.scheduled_transaction);
+      return ok(formatScheduledTransaction(data.scheduled_transaction));
     })
 );
 
@@ -725,6 +861,11 @@ server.tool(
 );
 
 // --- Start ---
+
+process.on("uncaughtException", (err) => {
+  console.error("Uncaught exception:", err);
+  process.exit(1);
+});
 
 const transport = new StdioServerTransport();
 await server.connect(transport);

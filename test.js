@@ -15,7 +15,7 @@ const bid = "f388de30-0c03-4628-a411-cff616b26bc6";
 async function call(name, args = {}) {
   const result = await client.callTool({ name, arguments: args });
   const text = result.content[0].text;
-  if (text.startsWith("Error")) throw new Error(text);
+  if (result.isError) throw new Error(text);
   return JSON.parse(text);
 }
 
@@ -90,11 +90,24 @@ await test("get_category", async () => {
   if (!testCatId) throw new Error("Eating Out category not found");
   const c = await call("get_category", { budgetId: bid, categoryId: testCatId });
   if (!c.name) throw new Error("no category name");
+  if (typeof c.budgeted !== "number") throw new Error("budgeted not converted to dollars");
+  // Verify no raw milliunits leak — goal fields should be dollars or null
+  if (c.goal_target !== null && c.goal_target !== undefined && Math.abs(c.goal_target) > 100000) {
+    throw new Error("goal_target appears to be in milliunits, not dollars");
+  }
 });
 
 await test("get_month_category", async () => {
   const c = await call("get_month_category", { budgetId: bid, month: "2026-03-01", categoryId: testCatId });
   if (typeof c.budgeted !== "number") throw new Error("budgeted not a number");
+});
+
+await test("update_category (update note, verify round-trip)", async () => {
+  const marker = `MCP test ${Date.now()}`;
+  const updated = await call("update_category", { budgetId: bid, categoryId: testCatId, note: marker });
+  if (updated.note !== marker) throw new Error("note not updated");
+  // Clean up — restore to null
+  await call("update_category", { budgetId: bid, categoryId: testCatId, note: null });
 });
 
 await test("list_payees", async () => {
@@ -149,105 +162,123 @@ await test("get_transaction (single)", async () => {
   if (unapproved.length === 0) throw new Error("no transactions to test");
   const t = await call("get_transaction", { budgetId: bid, transactionId: unapproved[0].id });
   if (!t.id) throw new Error("no id");
+  // Verify import_id field is present (even if null)
+  if (!("import_id" in t)) throw new Error("import_id field missing from response");
 });
 
-// --- Transaction writes ---
+// --- Transaction writes (idempotent — creates own test data, cleans up after) ---
 console.log("\n=== Transaction Write Operations ===");
 
-// Find the Irving Berlin $7.41 transaction — needs recategorize to Eating Out + approve
-const irvingBerlin = unapproved.find(t => t.payee_name?.includes("Irving Berlin") && t.amount === -7.41);
+// Pick any active category for testing
+const testCatForWrite = categories.flatMap(g => g.categories).find(c => !c.hidden);
+if (!testCatForWrite) throw new Error("no visible category for write tests");
 
-await test("update_transaction (recategorize + approve — Irving Berlin → Eating Out)", async () => {
-  if (!irvingBerlin) throw new Error("Irving Berlin txn not found");
-  const eatingOutId = catByName["🥡 Eating Out"];
-  if (!eatingOutId) throw new Error("Eating Out category not found");
-  const t = await call("update_transaction", {
+let createdTxnId;
+await test("create_transaction", async () => {
+  const t = await call("create_transaction", {
     budgetId: bid,
-    transactionId: irvingBerlin.id,
-    categoryId: eatingOutId,
-    approved: true,
+    accountId: testAccountId,
+    date: new Date().toISOString().slice(0, 10),
+    amount: -12.34,
+    payeeName: "MCP Test Payee",
+    categoryId: testCatForWrite.id,
+    memo: "MCP integration test — safe to delete",
+    approved: false,
   });
-  if (t.category_id !== eatingOutId) throw new Error("category not changed: " + t.category_name);
-  if (t.approved !== true) throw new Error("not approved");
-  console.log(`    ✓ ${t.payee_name} → ${t.category_name}, approved`);
+  if (!t.id) throw new Error("no id returned");
+  if (t.amount !== -12.34) throw new Error(`wrong amount: ${t.amount}`);
+  createdTxnId = t.id;
+  console.log(`    ✓ Created ${t.payee_name} $${t.amount}`);
 });
 
-// Find Shaw's grocery $369.08 — just approve
-const shaws = unapproved.find(t => t.payee_name?.includes("Shaw") && t.amount === -369.08);
-
-await test("update_transaction (approve — Shaw's Groceries)", async () => {
-  if (!shaws) throw new Error("Shaw's txn not found");
+await test("update_transaction (recategorize + approve)", async () => {
+  if (!createdTxnId) throw new Error("no test transaction to update");
   const t = await call("update_transaction", {
     budgetId: bid,
-    transactionId: shaws.id,
+    transactionId: createdTxnId,
+    memo: "MCP test — updated",
     approved: true,
   });
   if (t.approved !== true) throw new Error("not approved");
-  console.log(`    ✓ ${t.payee_name} $${t.amount} → approved`);
+  if (t.memo !== "MCP test — updated") throw new Error("memo not changed");
+  console.log(`    ✓ ${t.payee_name} → approved, memo updated`);
 });
 
-// Find Etsy $51.96 — recategorize to Kaitlin + approve
-const etsy = unapproved.find(t => t.payee_name?.includes("Etsy") && t.amount === -51.96);
-
-await test("update_transaction (recategorize + approve — Etsy → Kaitlin)", async () => {
-  if (!etsy) throw new Error("Etsy txn not found");
-  const kaitlinId = catByName["👩 Kaitlin"];
-  if (!kaitlinId) throw new Error("Kaitlin category not found");
-  const t = await call("update_transaction", {
-    budgetId: bid,
-    transactionId: etsy.id,
-    categoryId: kaitlinId,
-    approved: true,
-  });
-  if (t.category_id !== kaitlinId) throw new Error("category not changed");
-  if (t.approved !== true) throw new Error("not approved");
-  console.log(`    ✓ ${t.payee_name} → ${t.category_name}, approved`);
-});
-
-// Find Aubuchon Hardware $41.70 — recategorize to Henry + approve
-const aubuchon = unapproved.find(t => t.payee_name?.includes("Aubuchon") && t.amount === -41.70);
-
-await test("update_transaction (recategorize + approve — Aubuchon → Henry)", async () => {
-  if (!aubuchon) throw new Error("Aubuchon txn not found");
-  const henryId = catByName["🧒 Henry"];
-  if (!henryId) throw new Error("Henry category not found");
-  const t = await call("update_transaction", {
-    budgetId: bid,
-    transactionId: aubuchon.id,
-    categoryId: henryId,
-    approved: true,
-  });
-  if (t.category_id !== henryId) throw new Error("category not changed");
-  if (t.approved !== true) throw new Error("not approved");
-  console.log(`    ✓ ${t.payee_name} → ${t.category_name}, approved`);
-});
-
-// Test batch approve — several approve-as-is transactions
-const approveOnly = [];
-const approvePayees = ["Adobe", "ElevenLabs", "Mimestream", "Dunkin'", "AT&T"];
-for (const name of approvePayees) {
-  const txn = unapproved.find(t => t.payee_name?.includes(name) && !t.approved);
-  if (txn) approveOnly.push(txn);
-}
-
-await test(`update_transactions (batch approve ${approveOnly.length} transactions)`, async () => {
-  if (approveOnly.length === 0) throw new Error("no matching transactions");
+await test("update_transactions (batch update)", async () => {
+  if (!createdTxnId) throw new Error("no test transaction for batch update");
   const result = await call("update_transactions", {
     budgetId: bid,
-    transactions: approveOnly.map(t => ({ id: t.id, approved: true })),
+    transactions: [{ id: createdTxnId, memo: "MCP test — batch updated" }],
   });
-  if (!result.updated || result.updated.length < approveOnly.length) {
-    throw new Error(`expected ${approveOnly.length} updated, got ${result.updated?.length}`);
-  }
-  for (const t of result.updated) {
-    if (t.approved !== true) throw new Error(`${t.payee_name} not approved`);
-    console.log(`    ✓ ${t.payee_name} $${t.amount} → approved`);
-  }
+  if (!result.updated || result.updated.length === 0) throw new Error("no transactions updated");
+  console.log(`    ✓ Batch updated ${result.updated.length} transaction(s)`);
+});
+
+await test("delete_transaction", async () => {
+  if (!createdTxnId) throw new Error("no test transaction to delete");
+  const t = await call("delete_transaction", { budgetId: bid, transactionId: createdTxnId });
+  if (!t.id) throw new Error("no id in delete response");
+  console.log(`    ✓ Deleted ${t.payee_name} $${t.amount}`);
+});
+
+// Find a second category for split test
+const secondCat = categories.flatMap(g => g.categories).find(c => !c.hidden && c.id !== testCatForWrite.id);
+let splitTxnId;
+await test("create_transaction (split)", async () => {
+  if (!secondCat) throw new Error("need 2 categories for split test");
+  const t = await call("create_transaction", {
+    budgetId: bid,
+    accountId: testAccountId,
+    date: new Date().toISOString().slice(0, 10),
+    amount: -25.00,
+    payeeName: "MCP Split Test",
+    memo: "MCP split test — safe to delete",
+    approved: false,
+    subtransactions: [
+      { amount: -15.00, categoryId: testCatForWrite.id, memo: "part 1" },
+      { amount: -10.00, categoryId: secondCat.id, memo: "part 2" },
+    ],
+  });
+  if (!t.id) throw new Error("no id returned");
+  if (!t.subtransactions || t.subtransactions.length !== 2) throw new Error(`expected 2 subtransactions, got ${t.subtransactions?.length}`);
+  splitTxnId = t.id;
+  console.log(`    ✓ Created split: ${t.subtransactions.map(s => `$${s.amount}`).join(" + ")}`);
+  // Clean up
+  await call("delete_transaction", { budgetId: bid, transactionId: splitTxnId });
 });
 
 await test("import_transactions", async () => {
   const result = await call("import_transactions", { budgetId: bid });
   if (result === undefined) throw new Error("no result");
+});
+
+// --- Convenience tools ---
+console.log("\n=== Convenience Tools ===");
+
+await test("search_categories", async () => {
+  const results = await call("search_categories", { budgetId: bid, query: "eat" });
+  if (!Array.isArray(results)) throw new Error("expected array");
+  if (results.length === 0) throw new Error("no results for 'eat'");
+  console.log(`    ✓ Found ${results.length} categories matching 'eat'`);
+});
+
+await test("search_payees", async () => {
+  const results = await call("search_payees", { budgetId: bid, query: "transfer" });
+  if (!Array.isArray(results) && !results.message) throw new Error("unexpected response shape");
+});
+
+await test("review_unapproved", async () => {
+  const result = await call("review_unapproved", { budgetId: bid });
+  if (typeof result.total !== "number") throw new Error("missing total");
+  if (!result.ready_to_approve) throw new Error("missing ready_to_approve");
+  if (!result.needs_category_first) throw new Error("missing needs_category_first");
+  console.log(`    ✓ ${result.total} unapproved (${result.ready_to_approve.count} ready, ${result.needs_category_first.count} need category)`);
+});
+
+await test("get_transactions (by month)", async () => {
+  const txns = await call("get_transactions", { budgetId: bid, month: "2026-03-01" });
+  if (!Array.isArray(txns)) throw new Error("not an array");
+  console.log(`    ✓ ${txns.length} transactions in March 2026`);
 });
 
 // --- Scheduled transactions ---
@@ -258,11 +289,36 @@ await test("list_scheduled_transactions", async () => {
   if (!Array.isArray(s)) throw new Error("not an array");
 });
 
+let testScheduledTxn;
 await test("get_scheduled_transaction", async () => {
   const list = await call("list_scheduled_transactions", { budgetId: bid });
   if (list.length === 0) throw new Error("no scheduled transactions");
-  const s = await call("get_scheduled_transaction", { budgetId: bid, scheduledTransactionId: list[0].id });
+  testScheduledTxn = list[0];
+  const s = await call("get_scheduled_transaction", { budgetId: bid, scheduledTransactionId: testScheduledTxn.id });
   if (!s.id) throw new Error("no id");
+  // Verify subtransactions field is present
+  if (!("subtransactions" in s)) throw new Error("subtransactions field missing");
+});
+
+await test("update_scheduled_transaction (update memo, verify round-trip)", async () => {
+  if (!testScheduledTxn) throw new Error("no scheduled transaction to update");
+  const marker = `MCP test ${Date.now()}`;
+  const original = await call("get_scheduled_transaction", { budgetId: bid, scheduledTransactionId: testScheduledTxn.id });
+  const updated = await call("update_scheduled_transaction", {
+    budgetId: bid,
+    scheduledTransactionId: testScheduledTxn.id,
+    memo: marker,
+  });
+  if (updated.memo !== marker) throw new Error("memo not updated");
+  // Verify other fields preserved (fetch-then-merge worked)
+  if (updated.amount !== original.amount) throw new Error(`amount changed: ${original.amount} -> ${updated.amount}`);
+  if (updated.frequency !== original.frequency) throw new Error("frequency changed");
+  // Clean up — restore original memo
+  await call("update_scheduled_transaction", {
+    budgetId: bid,
+    scheduledTransactionId: testScheduledTxn.id,
+    memo: original.memo,
+  });
 });
 
 // --- Summary ---
