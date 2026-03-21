@@ -48,11 +48,29 @@ async function run(fn) {
   }
 }
 
+// Direct API helper for endpoints not yet in the ynab SDK
+const BASE_URL = "https://api.ynab.com/v1";
+async function ynabFetch(path, { method = "GET", body } = {}) {
+  const opts = {
+    method,
+    headers: { Authorization: `Bearer ${API_TOKEN}`, "Content-Type": "application/json" },
+  };
+  if (body) opts.body = JSON.stringify(body);
+  const res = await fetch(`${BASE_URL}${path}`, opts);
+  const json = await res.json();
+  if (!res.ok) {
+    const err = new Error(json?.error?.detail || `HTTP ${res.status}`);
+    err.error = json?.error;
+    throw err;
+  }
+  return json.data;
+}
+
 // --- Server ---
 
 const server = new McpServer({
   name: "ynab-mcp-server",
-  version: "1.0.0",
+  version: "1.2.0",
 });
 
 // ==================== User & Budgets ====================
@@ -67,13 +85,13 @@ server.tool("get_user", "Get the authenticated user", {}, () =>
 server.tool("list_budgets", "List all budgets. Use a budget ID from the results in other tools, or omit budgetId to use the last-used budget.", {}, () =>
   run(async () => {
     const { data } = await api.budgets.getBudgets();
-    return ok(data.budgets.map((b) => ({ id: b.id, name: b.name, last_modified_on: b.last_modified_on })));
+    return ok(data.budgets.map((b) => ({ id: b.id, name: b.name, last_modified_on: b.last_modified_on, first_month: b.first_month, last_month: b.last_month })));
   })
 );
 
 server.tool(
   "get_budget",
-  "Get full budget details including accounts, categories, and payees",
+  "Get a budget summary including name, currency format, and account/category/payee counts",
   { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") },
   ({ budgetId }) =>
     run(async () => {
@@ -82,6 +100,10 @@ server.tool(
       return ok({
         id: b.id,
         name: b.name,
+        last_modified_on: b.last_modified_on,
+        first_month: b.first_month,
+        last_month: b.last_month,
+        date_format: b.date_format,
         currency_format: b.currency_format,
         accounts: b.accounts?.length,
         categories: b.categories?.length,
@@ -180,6 +202,10 @@ function formatCategory(c) {
     activity: dollars(c.activity),
     balance: dollars(c.balance),
     goal_type: c.goal_type,
+    goal_day: c.goal_day,
+    goal_cadence: c.goal_cadence,
+    goal_cadence_frequency: c.goal_cadence_frequency,
+    goal_creation_month: c.goal_creation_month,
     goal_target: dollars(c.goal_target),
     goal_target_date: c.goal_target_date,
     goal_percentage_complete: c.goal_percentage_complete,
@@ -290,6 +316,67 @@ server.tool(
     })
 );
 
+server.tool(
+  "create_category",
+  "Create a new category in a category group",
+  {
+    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+    categoryGroupId: z.string().describe("Category group ID to create the category in"),
+    name: z.string().describe("Category name"),
+    note: z.string().optional().describe("Category note"),
+    goalTarget: z.number().optional().describe("Goal target amount in dollars (creates a 'Needed for Spending' goal)"),
+    goalTargetDate: z.string().optional().describe("Goal target date in ISO format (e.g. 2026-12-01)"),
+  },
+  ({ budgetId, categoryGroupId, name, note, goalTarget, goalTargetDate }) =>
+    run(async () => {
+      const bid = resolveBudgetId(budgetId);
+      const cat = { category_group_id: categoryGroupId, name };
+      if (note !== undefined) cat.note = note;
+      if (goalTarget !== undefined) cat.goal_target = milliunits(goalTarget);
+      if (goalTargetDate !== undefined) cat.goal_target_date = goalTargetDate;
+      const data = await ynabFetch(`/budgets/${bid}/categories`, {
+        method: "POST",
+        body: { category: cat },
+      });
+      return ok(formatCategory(data.category));
+    })
+);
+
+server.tool(
+  "create_category_group",
+  "Create a new category group",
+  {
+    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+    name: z.string().describe("Category group name (max 50 characters)"),
+  },
+  ({ budgetId, name }) =>
+    run(async () => {
+      const data = await ynabFetch(`/budgets/${resolveBudgetId(budgetId)}/category_groups`, {
+        method: "POST",
+        body: { category_group: { name } },
+      });
+      return ok(data.category_group);
+    })
+);
+
+server.tool(
+  "update_category_group",
+  "Rename a category group",
+  {
+    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+    categoryGroupId: z.string().describe("Category group ID"),
+    name: z.string().describe("New category group name (max 50 characters)"),
+  },
+  ({ budgetId, categoryGroupId, name }) =>
+    run(async () => {
+      const data = await ynabFetch(`/budgets/${resolveBudgetId(budgetId)}/category_groups/${categoryGroupId}`, {
+        method: "PATCH",
+        body: { category_group: { name } },
+      });
+      return ok(data.category_group);
+    })
+);
+
 // ==================== Payees ====================
 
 server.tool(
@@ -331,6 +418,47 @@ server.tool(
         payee: { name },
       });
       return ok(data.payee);
+    })
+);
+
+// ==================== Payee Locations ====================
+
+server.tool(
+  "list_payee_locations",
+  "List all payee locations (GPS coordinates where transactions occurred)",
+  { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") },
+  ({ budgetId }) =>
+    run(async () => {
+      const { data } = await api.payeeLocations.getPayeeLocations(resolveBudgetId(budgetId));
+      return ok(data.payee_locations);
+    })
+);
+
+server.tool(
+  "get_payee_location",
+  "Get a specific payee location",
+  {
+    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+    payeeLocationId: z.string().describe("Payee location ID"),
+  },
+  ({ budgetId, payeeLocationId }) =>
+    run(async () => {
+      const { data } = await api.payeeLocations.getPayeeLocationById(resolveBudgetId(budgetId), payeeLocationId);
+      return ok(data.payee_location);
+    })
+);
+
+server.tool(
+  "get_payee_locations_by_payee",
+  "Get all locations for a specific payee",
+  {
+    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+    payeeId: z.string().describe("Payee ID"),
+  },
+  ({ budgetId, payeeId }) =>
+    run(async () => {
+      const { data } = await api.payeeLocations.getPayeeLocationsByPayee(resolveBudgetId(budgetId), payeeId);
+      return ok(data.payee_locations);
     })
 );
 
@@ -386,6 +514,72 @@ server.tool(
           goal_under_funded: dollars(c.goal_under_funded),
         })),
       });
+    })
+);
+
+// ==================== Money Movements ====================
+
+function formatMoneyMovement(m) {
+  return {
+    id: m.id,
+    month: m.month,
+    moved_at: m.moved_at,
+    note: m.note,
+    money_movement_group_id: m.money_movement_group_id,
+    performed_by_user_id: m.performed_by_user_id,
+    from_category_id: m.from_category_id,
+    to_category_id: m.to_category_id,
+    amount: dollars(m.amount),
+  };
+}
+
+server.tool(
+  "list_money_movements",
+  "List all money movements (budget re-allocations between categories)",
+  { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") },
+  ({ budgetId }) =>
+    run(async () => {
+      const data = await ynabFetch(`/budgets/${resolveBudgetId(budgetId)}/money_movements`);
+      return ok(data.money_movements.map(formatMoneyMovement));
+    })
+);
+
+server.tool(
+  "get_money_movements_by_month",
+  "Get money movements for a specific month",
+  {
+    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+    month: z.string().describe("Month in YYYY-MM-DD format (first of month), or 'current'"),
+  },
+  ({ budgetId, month }) =>
+    run(async () => {
+      const data = await ynabFetch(`/budgets/${resolveBudgetId(budgetId)}/months/${month}/money_movements`);
+      return ok(data.money_movements.map(formatMoneyMovement));
+    })
+);
+
+server.tool(
+  "list_money_movement_groups",
+  "List all money movement groups (batches of related money movements)",
+  { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") },
+  ({ budgetId }) =>
+    run(async () => {
+      const data = await ynabFetch(`/budgets/${resolveBudgetId(budgetId)}/money_movement_groups`);
+      return ok(data.money_movement_groups);
+    })
+);
+
+server.tool(
+  "get_money_movement_groups_by_month",
+  "Get money movement groups for a specific month",
+  {
+    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+    month: z.string().describe("Month in YYYY-MM-DD format (first of month), or 'current'"),
+  },
+  ({ budgetId, month }) =>
+    run(async () => {
+      const data = await ynabFetch(`/budgets/${resolveBudgetId(budgetId)}/months/${month}/money_movement_groups`);
+      return ok(data.money_movement_groups);
     })
 );
 
@@ -477,7 +671,7 @@ server.tool(
 
 server.tool(
   "create_transaction",
-  "Create a new transaction. Amounts are in dollars (positive for inflows, negative for outflows).",
+  "Create a new transaction. Amounts are in dollars (positive for inflows, negative for outflows). Note: future-dated transactions cannot be created here — use create_scheduled_transaction instead.",
   {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     accountId: z.string().describe("Account ID"),
@@ -527,6 +721,50 @@ server.tool(
         transaction: txn,
       });
       return ok(formatTransaction(data.transaction));
+    })
+);
+
+server.tool(
+  "create_transactions",
+  "Create multiple transactions at once. Amounts are in dollars. Returns created transactions and any duplicate import IDs. Future-dated transactions are not supported — use create_scheduled_transaction instead.",
+  {
+    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+    transactions: z.array(z.object({
+      accountId: z.string().describe("Account ID"),
+      date: z.string().describe("Transaction date (YYYY-MM-DD)"),
+      amount: z.number().describe("Amount in dollars (negative for outflows, positive for inflows)"),
+      payeeId: z.string().optional().describe("Payee ID"),
+      payeeName: z.string().optional().describe("Payee name (creates new payee if no payeeId)"),
+      categoryId: z.string().optional().describe("Category ID"),
+      memo: z.string().optional().describe("Transaction memo"),
+      cleared: z.enum(["cleared", "uncleared", "reconciled"]).optional().describe("Cleared status"),
+      approved: z.boolean().optional().describe("Whether transaction is approved"),
+      flagColor: z.enum(["red", "orange", "yellow", "green", "blue", "purple"]).optional().describe("Flag color"),
+      importId: z.string().optional().describe("Unique import ID for deduplication (max 36 chars)"),
+    })).describe("Array of transactions to create"),
+  },
+  ({ budgetId, transactions: txns }) =>
+    run(async () => {
+      const mapped = txns.map((t) => ({
+        account_id: t.accountId,
+        date: t.date,
+        amount: milliunits(t.amount),
+        payee_id: t.payeeId,
+        payee_name: t.payeeName,
+        category_id: t.categoryId,
+        memo: t.memo,
+        cleared: t.cleared,
+        approved: t.approved,
+        flag_color: t.flagColor,
+        import_id: t.importId,
+      }));
+      const { data } = await api.transactions.createTransactions(resolveBudgetId(budgetId), {
+        transactions: mapped,
+      });
+      return ok({
+        created: data.transactions?.map(formatTransaction),
+        duplicate_import_ids: data.duplicate_import_ids,
+      });
     })
 );
 

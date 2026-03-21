@@ -123,6 +123,20 @@ await test("get_payee", async () => {
   if (!p.name) throw new Error("no payee name");
 });
 
+// --- Payee Locations ---
+console.log("\n=== Payee Locations ===");
+
+await test("list_payee_locations", async () => {
+  const locs = await call("list_payee_locations", { budgetId: bid });
+  if (!Array.isArray(locs)) throw new Error("not an array");
+  console.log(`    ✓ ${locs.length} payee locations`);
+});
+
+await test("get_payee_locations_by_payee", async () => {
+  const locs = await call("get_payee_locations_by_payee", { budgetId: bid, payeeId: testPayeeId });
+  if (!Array.isArray(locs)) throw new Error("not an array");
+});
+
 await test("list_months", async () => {
   const m = await call("list_months", { budgetId: bid });
   if (m.length === 0) throw new Error("no months");
@@ -131,6 +145,71 @@ await test("list_months", async () => {
 await test("get_month", async () => {
   const m = await call("get_month", { budgetId: bid, month: "2026-03-01" });
   if (!m.categories) throw new Error("no categories in month");
+});
+
+// --- Category & Category Group CRUD ---
+console.log("\n=== Category & Category Group CRUD ===");
+
+let testGroupId;
+await test("create_category_group", async () => {
+  const g = await call("create_category_group", { budgetId: bid, name: "MCP Test Group" });
+  if (!g.id) throw new Error("no id returned");
+  testGroupId = g.id;
+  console.log(`    ✓ Created group: ${g.name} (${g.id})`);
+});
+
+await test("update_category_group", async () => {
+  if (!testGroupId) throw new Error("no test group");
+  const g = await call("update_category_group", { budgetId: bid, categoryGroupId: testGroupId, name: "MCP Test Group Renamed" });
+  if (g.name !== "MCP Test Group Renamed") throw new Error("name not updated");
+  console.log(`    ✓ Renamed group to: ${g.name}`);
+});
+
+let createdCatId;
+await test("create_category", async () => {
+  if (!testGroupId) throw new Error("no test group");
+  const c = await call("create_category", { budgetId: bid, categoryGroupId: testGroupId, name: "MCP Test Category", note: "Test note" });
+  if (!c.id) throw new Error("no id returned");
+  createdCatId = c.id;
+  console.log(`    ✓ Created category: ${c.name}`);
+});
+
+// Clean up: hide the test category by deleting its group's categories won't work via API,
+// but we can at least verify the category was created correctly
+await test("verify created category", async () => {
+  if (!createdCatId) throw new Error("no test category");
+  const c = await call("get_category", { budgetId: bid, categoryId: createdCatId });
+  if (c.name !== "MCP Test Category") throw new Error("wrong name");
+  if (c.note !== "Test note") throw new Error("wrong note");
+  console.log(`    ✓ Verified category: ${c.name}, note: ${c.note}`);
+});
+
+// --- Money Movements ---
+console.log("\n=== Money Movements ===");
+
+await test("list_money_movements", async () => {
+  const ms = await call("list_money_movements", { budgetId: bid });
+  if (!Array.isArray(ms)) throw new Error("not an array");
+  console.log(`    ✓ ${ms.length} money movements`);
+});
+
+await test("get_money_movements_by_month", async () => {
+  const ms = await call("get_money_movements_by_month", { budgetId: bid, month: "2026-03-01" });
+  if (!Array.isArray(ms)) throw new Error("not an array");
+  console.log(`    ✓ ${ms.length} money movements in March 2026`);
+  if (ms.length > 0 && typeof ms[0].amount !== "number") throw new Error("amount not converted to dollars");
+});
+
+await test("list_money_movement_groups", async () => {
+  const gs = await call("list_money_movement_groups", { budgetId: bid });
+  if (!Array.isArray(gs)) throw new Error("not an array");
+  console.log(`    ✓ ${gs.length} money movement groups`);
+});
+
+await test("get_money_movement_groups_by_month", async () => {
+  const gs = await call("get_money_movement_groups_by_month", { budgetId: bid, month: "2026-03-01" });
+  if (!Array.isArray(gs)) throw new Error("not an array");
+  console.log(`    ✓ ${gs.length} money movement groups in March 2026`);
 });
 
 // --- Transaction reads ---
@@ -245,6 +324,23 @@ await test("create_transaction (split)", async () => {
   console.log(`    ✓ Created split: ${t.subtransactions.map(s => `$${s.amount}`).join(" + ")}`);
   // Clean up
   await call("delete_transaction", { budgetId: bid, transactionId: splitTxnId });
+});
+
+await test("create_transactions (bulk)", async () => {
+  const today = new Date().toISOString().slice(0, 10);
+  const result = await call("create_transactions", {
+    budgetId: bid,
+    transactions: [
+      { accountId: testAccountId, date: today, amount: -5.00, payeeName: "MCP Bulk Test 1", categoryId: testCatForWrite.id, memo: "bulk test — safe to delete", approved: false },
+      { accountId: testAccountId, date: today, amount: -3.50, payeeName: "MCP Bulk Test 2", categoryId: testCatForWrite.id, memo: "bulk test — safe to delete", approved: false },
+    ],
+  });
+  if (!result.created || result.created.length !== 2) throw new Error(`expected 2 created, got ${result.created?.length}`);
+  console.log(`    ✓ Bulk created ${result.created.length} transactions`);
+  // Clean up
+  for (const t of result.created) {
+    await call("delete_transaction", { budgetId: bid, transactionId: t.id });
+  }
 });
 
 await test("import_transactions", async () => {
