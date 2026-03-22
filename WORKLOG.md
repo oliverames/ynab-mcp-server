@@ -6,9 +6,9 @@
 
 **Decisions made**: Verified against the canonical OpenAPI spec (not just SDK types) after discovering the SDK's `SaveCategory` TypeScript type was missing `goal_target_date` and the `SaveTransaction` type included `import_id` which isn't actually writable on updates. Kept `lastKnowledgeOfServer` out — it's a delta-sync optimization parameter, not a functional gap, and MCP tools are stateless. Passed `debt_interest_rates` raw (percentages) while converting `debt_minimum_payments`/`debt_escrow_amounts` (milliunits) — they have mixed units in the same model.
 
-**Left off at**: Implementation is complete and all 43 tests pass. Next step is `npm publish` to push v1.2.1 to npm. The previous worklog's open questions are now resolved: `update_category` supports moving between groups (was already there), `goalTargetDate` is now supported, and `lastKnowledgeOfServer` was intentionally omitted.
+**Left off at**: Implementation complete, README updated, code simplified. All 43 tests pass. Next step is `npm publish` to push v1.2.1 to npm.
 
-**Open questions**: None. The `list_budgets` response shape changed from array to object (breaking change) — monitor for any downstream issues.
+**Open questions**: The `list_budgets` response shape changed from array to object (breaking change) — monitor for downstream issues.
 
 ---
 
