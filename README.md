@@ -132,7 +132,9 @@ That's it. Your AI can now talk to YNAB.
 - **Bulk operations** — `create_transactions` and `update_transactions` handle arrays in a single API call.
 - **Fetch-then-merge updates** — scheduled transaction updates (which use PUT semantics) automatically fetch the current state and merge your changes, so you only specify what changed.
 - **Fuzzy search** — `search_categories` and `search_payees` do case-insensitive partial matching across all entries.
-- **Approval workflow** — `review_unapproved` groups transactions into "ready to approve" (has category) and "needs attention" (uncategorized), with a built-in warning against approving uncategorized entries.
+- **Approval workflow** — `review_unapproved` groups transactions into "ready to approve" (categorized, split, or transfer) and "needs attention" (uncategorized), with a built-in warning against approving uncategorized entries.
+- **Nullable updates** — update tools accept `null` for clearable fields (`memo`, `payeeName`, `categoryId`, `flagColor`) to distinguish "don't change" (omit) from "clear this field" (`null`).
+- **Debt account support** — loan and debt accounts include `debt_original_balance`, `debt_interest_rates`, `debt_minimum_payments`, and `debt_escrow_amounts` with correct unit conversion (rates stay as percentages, payments convert from milliunits).
 
 ---
 
@@ -143,7 +145,7 @@ That's it. Your AI can now talk to YNAB.
 | Tool | Description |
 |------|-------------|
 | `get_user` | Get the authenticated user |
-| `list_budgets` | List all budgets with IDs, names, and date ranges |
+| `list_budgets` | List all budgets with IDs, names, date ranges, format settings, and default budget |
 | `get_budget` | Get budget summary (name, currency, account/category/payee counts) |
 | `get_budget_settings` | Get currency and date format settings |
 
@@ -151,8 +153,8 @@ That's it. Your AI can now talk to YNAB.
 
 | Tool | Description |
 |------|-------------|
-| `list_accounts` | List all accounts with balances in dollars |
-| `get_account` | Get details for a specific account |
+| `list_accounts` | List all accounts with balances, debt details, and import status |
+| `get_account` | Get full account details including notes and debt fields |
 | `create_account` | Create a new account (checking, savings, creditCard, mortgage, etc.) |
 
 **Supported account types:** `checking`, `savings`, `cash`, `creditCard`, `lineOfCredit`, `otherAsset`, `otherLiability`, `mortgage`, `autoLoan`, `studentLoan`, `personalLoan`, `medicalDebt`, `otherDebt`
@@ -165,7 +167,7 @@ That's it. Your AI can now talk to YNAB.
 | `get_category` | Get full category details including goal progress and cadence |
 | `get_month_category` | Get category budget for a specific month |
 | `update_month_category` | Set the budgeted amount for a category in a month |
-| `update_category` | Update name, note, goal target, or move to a different group |
+| `update_category` | Update name, note, goal target, goal target date, or move to a different group |
 | `create_category` | Create a new category in an existing group (with optional goal) |
 | `create_category_group` | Create a new category group |
 | `update_category_group` | Rename a category group |
@@ -192,8 +194,8 @@ That's it. Your AI can now talk to YNAB.
 
 | Tool | Description |
 |------|-------------|
-| `list_months` | List budget months with income, budgeted, activity, to-be-budgeted, age of money |
-| `get_month` | Get month detail with per-category budget/activity/balance breakdown |
+| `list_months` | List budget months with income, budgeted, activity, to-be-budgeted, age of money, and notes |
+| `get_month` | Get month detail with per-category budget/activity/balance/goal breakdown |
 
 ### Money Movements
 
@@ -211,7 +213,7 @@ That's it. Your AI can now talk to YNAB.
 | `get_transactions` | Get transactions with filters: by account, category, payee, month, or status (`unapproved`/`uncategorized`) |
 | `get_transaction` | Get a single transaction by ID (includes subtransactions) |
 | `create_transaction` | Create a transaction with optional split (subtransactions must sum to total) |
-| `create_transactions` | Bulk create multiple transactions in a single API call |
+| `create_transactions` | Bulk create multiple transactions in a single API call (supports split transactions) |
 | `update_transaction` | Partial update — only specified fields change |
 | `update_transactions` | Batch update multiple transactions at once |
 | `delete_transaction` | Delete a transaction |
@@ -233,7 +235,7 @@ That's it. Your AI can now talk to YNAB.
 
 | Tool | Description |
 |------|-------------|
-| `review_unapproved` | Get unapproved transactions grouped by readiness: "ready to approve" (categorized) vs. "needs category first" (uncategorized). Includes a warning against blind approval. |
+| `review_unapproved` | Get unapproved transactions grouped by readiness: "ready to approve" (categorized, split, or transfer) vs. "needs category first" (uncategorized). Includes a warning against blind approval. |
 
 ---
 
