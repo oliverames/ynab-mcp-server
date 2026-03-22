@@ -1,5 +1,17 @@
 # Worklog
 
+## 2026-03-22 — v1.2.1: Bug fixes and field coverage audit via Ralph Loop
+
+**What changed**: Used a 9-iteration Ralph Loop to systematically audit the entire MCP server. Fixed `review_unapproved` misclassifying split and transfer transactions. Fixed `update_transactions` snake_case schema inconsistency. Added `.nullable()` to update tool fields that need clearing. Added 14+ missing response fields across all formatters (verified field-by-field against OpenAPI spec v1.79.0). Added `goalTargetDate` to `update_category`. Added subtransactions to bulk `create_transactions`. Reverted an incorrect `importId` addition after the OpenAPI spec proved the SDK types were misleading. Added `default_budget`, `date_format`, `currency_format` to `list_budgets`. Added debt account fields to `formatAccount` with correct milliunits-vs-percentage conversion.
+
+**Decisions made**: Verified against the canonical OpenAPI spec (not just SDK types) after discovering the SDK's `SaveCategory` TypeScript type was missing `goal_target_date` and the `SaveTransaction` type included `import_id` which isn't actually writable on updates. Kept `lastKnowledgeOfServer` out — it's a delta-sync optimization parameter, not a functional gap, and MCP tools are stateless. Passed `debt_interest_rates` raw (percentages) while converting `debt_minimum_payments`/`debt_escrow_amounts` (milliunits) — they have mixed units in the same model.
+
+**Left off at**: Implementation is complete and all 43 tests pass. Next step is `npm publish` to push v1.2.1 to npm. The previous worklog's open questions are now resolved: `update_category` supports moving between groups (was already there), `goalTargetDate` is now supported, and `lastKnowledgeOfServer` was intentionally omitted.
+
+**Open questions**: None. The `list_budgets` response shape changed from array to object (breaking change) — monitor for any downstream issues.
+
+---
+
 ## 2026-03-21 — Published v1.2.0 to npm
 
 **What changed**: Published `@oliverames/ynab-mcp-server@1.2.0` to npm. Also published `@oliverames/meta-mcp-server@2.0.0` (new package) and `@oliverames/sprout-mcp-server@1.1.0`.
