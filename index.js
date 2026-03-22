@@ -70,7 +70,7 @@ async function ynabFetch(path, { method = "GET", body } = {}) {
 
 const server = new McpServer({
   name: "ynab-mcp-server",
-  version: "1.2.0",
+  version: "1.2.1",
 });
 
 // ==================== User & Budgets ====================
@@ -85,7 +85,13 @@ server.tool("get_user", "Get the authenticated user", {}, () =>
 server.tool("list_budgets", "List all budgets. Use a budget ID from the results in other tools, or omit budgetId to use the last-used budget.", {}, () =>
   run(async () => {
     const { data } = await api.budgets.getBudgets();
-    return ok(data.budgets.map((b) => ({ id: b.id, name: b.name, last_modified_on: b.last_modified_on, first_month: b.first_month, last_month: b.last_month })));
+    const result = {
+      budgets: data.budgets.map((b) => ({ id: b.id, name: b.name, last_modified_on: b.last_modified_on, first_month: b.first_month, last_month: b.last_month, date_format: b.date_format, currency_format: b.currency_format })),
+    };
+    if (data.default_budget) {
+      result.default_budget = { id: data.default_budget.id, name: data.default_budget.name };
+    }
+    return ok(result);
   })
 );
 
@@ -139,6 +145,10 @@ function formatAccount(a) {
     direct_import_linked: a.direct_import_linked,
     direct_import_in_error: a.direct_import_in_error,
     last_reconciled_at: a.last_reconciled_at,
+    debt_original_balance: dollars(a.debt_original_balance),
+    debt_interest_rates: a.debt_interest_rates,
+    debt_minimum_payments: a.debt_minimum_payments ? Object.fromEntries(Object.entries(a.debt_minimum_payments).map(([k, v]) => [k, dollars(v)])) : a.debt_minimum_payments,
+    debt_escrow_amounts: a.debt_escrow_amounts ? Object.fromEntries(Object.entries(a.debt_escrow_amounts).map(([k, v]) => [k, dollars(v)])) : a.debt_escrow_amounts,
     deleted: a.deleted,
   };
   if ("note" in a) out.note = a.note;
@@ -195,6 +205,7 @@ function formatCategory(c) {
     id: c.id,
     category_group_id: c.category_group_id,
     category_group_name: c.category_group_name,
+    original_category_group_id: c.original_category_group_id,
     name: c.name,
     hidden: c.hidden,
     note: c.note,
@@ -214,6 +225,7 @@ function formatCategory(c) {
     goal_overall_funded: dollars(c.goal_overall_funded),
     goal_overall_left: dollars(c.goal_overall_left),
     goal_needs_whole_amount: c.goal_needs_whole_amount,
+    deleted: c.deleted,
   };
 }
 
@@ -229,6 +241,7 @@ server.tool(
           id: g.id,
           name: g.name,
           hidden: g.hidden,
+          deleted: g.deleted,
           categories: g.categories.map((c) => ({
             id: c.id,
             name: c.name,
@@ -237,6 +250,7 @@ server.tool(
             activity: dollars(c.activity),
             balance: dollars(c.balance),
             goal_type: c.goal_type,
+            deleted: c.deleted,
           })),
         }))
       );
@@ -300,14 +314,16 @@ server.tool(
     note: z.string().nullable().optional().describe("Category note (null to clear)"),
     categoryGroupId: z.string().optional().describe("Move to a different category group"),
     goalTarget: z.number().nullable().optional().describe("Goal target amount in dollars (only if category already has a goal)"),
+    goalTargetDate: z.string().nullable().optional().describe("Goal target date in ISO format (e.g. 2026-12-01, null to clear)"),
   },
-  ({ budgetId, categoryId, name, note, categoryGroupId, goalTarget }) =>
+  ({ budgetId, categoryId, name, note, categoryGroupId, goalTarget, goalTargetDate }) =>
     run(async () => {
       const cat = {};
       if (name !== undefined) cat.name = name;
       if (note !== undefined) cat.note = note;
       if (categoryGroupId !== undefined) cat.category_group_id = categoryGroupId;
       if (goalTarget !== undefined) cat.goal_target = goalTarget != null ? milliunits(goalTarget) : null;
+      if (goalTargetDate !== undefined) cat.goal_target_date = goalTargetDate;
 
       const { data } = await api.categories.updateCategory(resolveBudgetId(budgetId), categoryId, {
         category: cat,
@@ -386,7 +402,7 @@ server.tool(
   ({ budgetId }) =>
     run(async () => {
       const { data } = await api.payees.getPayees(resolveBudgetId(budgetId));
-      return ok(data.payees.map((p) => ({ id: p.id, name: p.name, transfer_account_id: p.transfer_account_id })));
+      return ok(data.payees.map((p) => ({ id: p.id, name: p.name, transfer_account_id: p.transfer_account_id, deleted: p.deleted })));
     })
 );
 
@@ -474,11 +490,13 @@ server.tool(
       return ok(
         data.months.map((m) => ({
           month: m.month,
+          note: m.note,
           income: dollars(m.income),
           budgeted: dollars(m.budgeted),
           activity: dollars(m.activity),
           to_be_budgeted: dollars(m.to_be_budgeted),
           age_of_money: m.age_of_money,
+          deleted: m.deleted,
         }))
       );
     })
@@ -497,14 +515,17 @@ server.tool(
       const m = data.month;
       return ok({
         month: m.month,
+        note: m.note,
         income: dollars(m.income),
         budgeted: dollars(m.budgeted),
         activity: dollars(m.activity),
         to_be_budgeted: dollars(m.to_be_budgeted),
         age_of_money: m.age_of_money,
+        deleted: m.deleted,
         categories: m.categories?.map((c) => ({
           id: c.id,
           name: c.name,
+          hidden: c.hidden,
           category_group_name: c.category_group_name,
           budgeted: dollars(c.budgeted),
           activity: dollars(c.activity),
@@ -512,6 +533,7 @@ server.tool(
           goal_type: c.goal_type,
           goal_target: dollars(c.goal_target),
           goal_under_funded: dollars(c.goal_under_funded),
+          deleted: c.deleted,
         })),
       });
     })
@@ -530,6 +552,7 @@ function formatMoneyMovement(m) {
     from_category_id: m.from_category_id,
     to_category_id: m.to_category_id,
     amount: dollars(m.amount),
+    deleted: m.deleted,
   };
 }
 
@@ -602,17 +625,25 @@ function formatTransaction(t) {
     category_id: t.category_id,
     category_name: t.category_name,
     transfer_account_id: t.transfer_account_id,
+    transfer_transaction_id: t.transfer_transaction_id,
+    matched_transaction_id: t.matched_transaction_id,
     import_id: t.import_id,
     import_payee_name: t.import_payee_name,
+    import_payee_name_original: t.import_payee_name_original,
     debt_transaction_type: t.debt_transaction_type,
+    deleted: t.deleted,
     subtransactions: t.subtransactions?.map((s) => ({
       id: s.id,
+      transaction_id: s.transaction_id,
       amount: dollars(s.amount),
       memo: s.memo,
       payee_id: s.payee_id,
       payee_name: s.payee_name,
       category_id: s.category_id,
       category_name: s.category_name,
+      transfer_account_id: s.transfer_account_id,
+      transfer_transaction_id: s.transfer_transaction_id,
+      deleted: s.deleted,
     })),
   };
 }
@@ -741,23 +772,42 @@ server.tool(
       approved: z.boolean().optional().describe("Whether transaction is approved"),
       flagColor: z.enum(["red", "orange", "yellow", "green", "blue", "purple"]).optional().describe("Flag color"),
       importId: z.string().optional().describe("Unique import ID for deduplication (max 36 chars)"),
+      subtransactions: z.array(z.object({
+        amount: z.number().describe("Subtransaction amount in dollars"),
+        categoryId: z.string().optional().describe("Category ID"),
+        payeeId: z.string().optional().describe("Payee ID"),
+        payeeName: z.string().optional().describe("Payee name"),
+        memo: z.string().optional().describe("Memo"),
+      })).optional().describe("Split transaction into subtransactions"),
     })).describe("Array of transactions to create"),
   },
   ({ budgetId, transactions: txns }) =>
     run(async () => {
-      const mapped = txns.map((t) => ({
-        account_id: t.accountId,
-        date: t.date,
-        amount: milliunits(t.amount),
-        payee_id: t.payeeId,
-        payee_name: t.payeeName,
-        category_id: t.categoryId,
-        memo: t.memo,
-        cleared: t.cleared,
-        approved: t.approved,
-        flag_color: t.flagColor,
-        import_id: t.importId,
-      }));
+      const mapped = txns.map((t) => {
+        const out = {
+          account_id: t.accountId,
+          date: t.date,
+          amount: milliunits(t.amount),
+          payee_id: t.payeeId,
+          payee_name: t.payeeName,
+          category_id: t.categoryId,
+          memo: t.memo,
+          cleared: t.cleared,
+          approved: t.approved,
+          flag_color: t.flagColor,
+          import_id: t.importId,
+        };
+        if (t.subtransactions) {
+          out.subtransactions = t.subtransactions.map((s) => ({
+            amount: milliunits(s.amount),
+            category_id: s.categoryId,
+            payee_id: s.payeeId,
+            payee_name: s.payeeName,
+            memo: s.memo,
+          }));
+        }
+        return out;
+      });
       const { data } = await api.transactions.createTransactions(resolveBudgetId(budgetId), {
         transactions: mapped,
       });
@@ -777,10 +827,10 @@ server.tool(
     accountId: z.string().optional().describe("Account ID"),
     date: z.string().optional().describe("Transaction date (YYYY-MM-DD)"),
     amount: z.number().optional().describe("Amount in dollars"),
-    payeeId: z.string().optional().describe("Payee ID"),
-    payeeName: z.string().optional().describe("Payee name"),
+    payeeId: z.string().nullable().optional().describe("Payee ID (null to remove)"),
+    payeeName: z.string().nullable().optional().describe("Payee name (null to clear)"),
     categoryId: z.string().nullable().optional().describe("Category ID (null to uncategorize)"),
-    memo: z.string().optional().describe("Transaction memo"),
+    memo: z.string().nullable().optional().describe("Transaction memo (null to clear)"),
     cleared: z.enum(["cleared", "uncleared", "reconciled"]).optional().describe("Cleared status"),
     approved: z.boolean().optional().describe("Whether transaction is approved"),
     flagColor: z.enum(["red", "orange", "yellow", "green", "blue", "purple"]).nullable().optional().describe("Flag color (null to remove)"),
@@ -829,16 +879,16 @@ server.tool(
       .array(
         z.object({
           id: z.string().describe("Transaction ID"),
-          account_id: z.string().optional(),
-          date: z.string().optional(),
+          accountId: z.string().optional().describe("Account ID"),
+          date: z.string().optional().describe("Transaction date (YYYY-MM-DD)"),
           amount: z.number().optional().describe("Amount in dollars"),
-          payee_id: z.string().optional(),
-          payee_name: z.string().optional(),
-          category_id: z.string().optional(),
-          memo: z.string().optional(),
-          cleared: z.enum(["cleared", "uncleared", "reconciled"]).optional(),
-          approved: z.boolean().optional(),
-          flag_color: z.enum(["red", "orange", "yellow", "green", "blue", "purple"]).nullable().optional(),
+          payeeId: z.string().nullable().optional().describe("Payee ID (null to remove)"),
+          payeeName: z.string().nullable().optional().describe("Payee name (null to clear)"),
+          categoryId: z.string().nullable().optional().describe("Category ID (null to uncategorize)"),
+          memo: z.string().nullable().optional().describe("Transaction memo (null to clear)"),
+          cleared: z.enum(["cleared", "uncleared", "reconciled"]).optional().describe("Cleared status"),
+          approved: z.boolean().optional().describe("Whether transaction is approved"),
+          flagColor: z.enum(["red", "orange", "yellow", "green", "blue", "purple"]).nullable().optional().describe("Flag color (null to remove)"),
         })
       )
       .describe("Array of transaction updates"),
@@ -846,8 +896,17 @@ server.tool(
   ({ budgetId, transactions: txns }) =>
     run(async () => {
       const mapped = txns.map((t) => {
-        const out = { ...t };
-        if (out.amount !== undefined) out.amount = milliunits(out.amount);
+        const out = { id: t.id };
+        if (t.accountId !== undefined) out.account_id = t.accountId;
+        if (t.date !== undefined) out.date = t.date;
+        if (t.amount !== undefined) out.amount = milliunits(t.amount);
+        if (t.payeeId !== undefined) out.payee_id = t.payeeId;
+        if (t.payeeName !== undefined) out.payee_name = t.payeeName;
+        if (t.categoryId !== undefined) out.category_id = t.categoryId;
+        if (t.memo !== undefined) out.memo = t.memo;
+        if (t.cleared !== undefined) out.cleared = t.cleared;
+        if (t.approved !== undefined) out.approved = t.approved;
+        if (t.flagColor !== undefined) out.flag_color = t.flagColor;
         return out;
       });
       const { data } = await api.transactions.updateTransactions(resolveBudgetId(budgetId), {
@@ -890,14 +949,18 @@ function formatScheduledTransaction(t) {
     category_id: t.category_id,
     category_name: t.category_name,
     transfer_account_id: t.transfer_account_id,
+    deleted: t.deleted,
     subtransactions: t.subtransactions?.map((s) => ({
       id: s.id,
+      scheduled_transaction_id: s.scheduled_transaction_id,
       amount: dollars(s.amount),
       memo: s.memo,
       payee_id: s.payee_id,
       payee_name: s.payee_name,
       category_id: s.category_id,
       category_name: s.category_name,
+      transfer_account_id: s.transfer_account_id,
+      deleted: s.deleted,
     })),
   };
 }
@@ -1067,7 +1130,7 @@ server.tool(
       const q = query.toLowerCase();
       const matches = data.payees
         .filter((p) => p.name.toLowerCase().includes(q))
-        .map((p) => ({ id: p.id, name: p.name, transfer_account_id: p.transfer_account_id }));
+        .map((p) => ({ id: p.id, name: p.name, transfer_account_id: p.transfer_account_id, deleted: p.deleted }));
       if (matches.length === 0) return ok({ message: `No payees matching "${query}"` });
       return ok(matches);
     })
@@ -1081,8 +1144,11 @@ server.tool(
     run(async () => {
       const { data } = await api.transactions.getTransactions(resolveBudgetId(budgetId), undefined, "unapproved");
       const txns = data.transactions.map(formatTransaction);
-      const categorized = txns.filter((t) => t.category_id && t.category_name !== "Uncategorized");
-      const uncategorized = txns.filter((t) => !t.category_id || t.category_name === "Uncategorized");
+      const isCategorized = (t) => (t.category_id && t.category_name !== "Uncategorized")
+        || (t.subtransactions && t.subtransactions.length > 0) // split transactions are categorized via subtransactions
+        || t.transfer_account_id; // transfers don't need categories
+      const categorized = txns.filter(isCategorized);
+      const uncategorized = txns.filter((t) => !isCategorized(t));
       return ok({
         total: txns.length,
         ready_to_approve: {

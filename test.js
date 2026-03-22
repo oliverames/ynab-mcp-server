@@ -42,8 +42,8 @@ await test("get_user", async () => {
 });
 
 await test("list_budgets", async () => {
-  const budgets = await call("list_budgets");
-  if (budgets.length === 0) throw new Error("no budgets");
+  const result = await call("list_budgets");
+  if (result.budgets.length === 0) throw new Error("no budgets");
 });
 
 await test("get_budget", async () => {
