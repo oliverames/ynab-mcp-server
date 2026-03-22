@@ -31,6 +31,36 @@ function milliunits(dollars) {
   return Math.round(dollars * 1000);
 }
 
+function dollarsMap(obj) {
+  return obj ? Object.fromEntries(Object.entries(obj).map(([k, v]) => [k, dollars(v)])) : obj;
+}
+
+function mapTransactionInput(t) {
+  const out = {
+    account_id: t.accountId,
+    date: t.date,
+    amount: milliunits(t.amount),
+    payee_id: t.payeeId,
+    payee_name: t.payeeName,
+    category_id: t.categoryId,
+    memo: t.memo,
+    cleared: t.cleared,
+    approved: t.approved,
+    flag_color: t.flagColor,
+    import_id: t.importId,
+  };
+  if (t.subtransactions) {
+    out.subtransactions = t.subtransactions.map((s) => ({
+      amount: milliunits(s.amount),
+      category_id: s.categoryId,
+      payee_id: s.payeeId,
+      payee_name: s.payeeName,
+      memo: s.memo,
+    }));
+  }
+  return out;
+}
+
 function ok(data) {
   return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
 }
@@ -147,8 +177,8 @@ function formatAccount(a) {
     last_reconciled_at: a.last_reconciled_at,
     debt_original_balance: dollars(a.debt_original_balance),
     debt_interest_rates: a.debt_interest_rates,
-    debt_minimum_payments: a.debt_minimum_payments ? Object.fromEntries(Object.entries(a.debt_minimum_payments).map(([k, v]) => [k, dollars(v)])) : a.debt_minimum_payments,
-    debt_escrow_amounts: a.debt_escrow_amounts ? Object.fromEntries(Object.entries(a.debt_escrow_amounts).map(([k, v]) => [k, dollars(v)])) : a.debt_escrow_amounts,
+    debt_minimum_payments: dollarsMap(a.debt_minimum_payments),
+    debt_escrow_amounts: dollarsMap(a.debt_escrow_amounts),
     deleted: a.deleted,
   };
   if ("note" in a) out.note = a.note;
@@ -724,32 +754,10 @@ server.tool(
       memo: z.string().optional().describe("Memo"),
     })).optional().describe("Split transaction into subtransactions. The subtransaction amounts must sum to the total transaction amount."),
   },
-  ({ budgetId, accountId, date, amount, payeeId, payeeName, categoryId, memo, cleared, approved, flagColor, importId, subtransactions }) =>
+  ({ budgetId, ...txnFields }) =>
     run(async () => {
-      const txn = {
-        account_id: accountId,
-        date,
-        amount: milliunits(amount),
-        payee_id: payeeId,
-        payee_name: payeeName,
-        category_id: categoryId,
-        memo,
-        cleared,
-        approved,
-        flag_color: flagColor,
-        import_id: importId,
-      };
-      if (subtransactions) {
-        txn.subtransactions = subtransactions.map((s) => ({
-          amount: milliunits(s.amount),
-          category_id: s.categoryId,
-          payee_id: s.payeeId,
-          payee_name: s.payeeName,
-          memo: s.memo,
-        }));
-      }
       const { data } = await api.transactions.createTransaction(resolveBudgetId(budgetId), {
-        transaction: txn,
+        transaction: mapTransactionInput(txnFields),
       });
       return ok(formatTransaction(data.transaction));
     })
@@ -783,33 +791,8 @@ server.tool(
   },
   ({ budgetId, transactions: txns }) =>
     run(async () => {
-      const mapped = txns.map((t) => {
-        const out = {
-          account_id: t.accountId,
-          date: t.date,
-          amount: milliunits(t.amount),
-          payee_id: t.payeeId,
-          payee_name: t.payeeName,
-          category_id: t.categoryId,
-          memo: t.memo,
-          cleared: t.cleared,
-          approved: t.approved,
-          flag_color: t.flagColor,
-          import_id: t.importId,
-        };
-        if (t.subtransactions) {
-          out.subtransactions = t.subtransactions.map((s) => ({
-            amount: milliunits(s.amount),
-            category_id: s.categoryId,
-            payee_id: s.payeeId,
-            payee_name: s.payeeName,
-            memo: s.memo,
-          }));
-        }
-        return out;
-      });
       const { data } = await api.transactions.createTransactions(resolveBudgetId(budgetId), {
-        transactions: mapped,
+        transactions: txns.map(mapTransactionInput),
       });
       return ok({
         created: data.transactions?.map(formatTransaction),
