@@ -10,7 +10,7 @@ const transport = new StdioClientTransport({
 const client = new Client({ name: "test", version: "1.0.0" });
 await client.connect(transport);
 
-const bid = "f388de30-0c03-4628-a411-cff616b26bc6";
+const bid = process.env.YNAB_TEST_BUDGET_ID || "your-budget-id-here";
 
 async function call(name, args = {}) {
   const result = await client.callTool({ name, arguments: args });

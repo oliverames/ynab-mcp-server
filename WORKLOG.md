@@ -16,7 +16,7 @@
 
 **What changed**: Published `@oliverames/ynab-mcp-server@1.2.0` to npm. Also published `@oliverames/meta-mcp-server@2.0.0` (new package) and `@oliverames/sprout-mcp-server@1.1.0`.
 
-**Decisions made**: Existing npm auth token couldn't create new scoped packages — needed a granular access token. Saved the new token to `~/.npmrc`, `~/.claude/settings.json`, and `~/Developer/credentials/tokens.json`.
+**Decisions made**: Existing npm auth token couldn't create new scoped packages — needed a granular access token with publish scope.
 
 **Left off at**: All three MCP servers are published and up to date on npm. No further work needed.
 
