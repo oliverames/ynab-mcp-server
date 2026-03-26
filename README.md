@@ -10,25 +10,31 @@
 </p>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/@oliverames/ynab-mcp-server"><img src="https://img.shields.io/npm/v/@oliverames/ynab-mcp-server" alt="npm version"></a>
-  <a href="https://modelcontextprotocol.io"><img src="https://img.shields.io/badge/MCP-compatible-blue" alt="MCP compatible"></a>
-  <a href="https://api.ynab.com"><img src="https://img.shields.io/badge/YNAB%20API-v1.79-green" alt="YNAB API v1.79"></a>
-  <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/license-MIT-brightgreen" alt="License: MIT"></a>
+  <code>43 tools</code> &bull;
+  <code>100% API coverage</code> &bull;
+  <code>YNAB API v1.79</code>
 </p>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/ynab-mcp-server"><img src="https://img.shields.io/npm/v/ynab-mcp-server?style=flat-square&color=f5a542" alt="npm"></a>
+  <a href="https://www.npmjs.com/package/@oliverames/ynab-mcp-server"><img src="https://img.shields.io/npm/v/%40oliverames%2Fynab-mcp-server?style=flat-square&color=f5a542" alt="npm"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-f5a542?style=flat-square" alt="License"></a>
   <a href="https://www.buymeacoffee.com/oliverames"><img src="https://img.shields.io/badge/Buy_Me_a_Coffee-support-f5a542?style=flat-square&logo=buy-me-a-coffee&logoColor=white" alt="Buy Me a Coffee"></a>
 </p>
 
+<p align="center">
+  <a href="#quick-start">Quick Start</a> &bull;
+  <a href="#what-you-can-do">What You Can Do</a> &bull;
+  <a href="#tools-reference">All 43 Tools</a> &bull;
+  <a href="#environment-variables">Configuration</a>
+</p>
+
 ---
 
-**43 tools. 100% API coverage. Zero configuration.**
+## Why This Exists
 
-Connect any MCP-compatible AI assistant — Claude, GPT, or your own agents — to your YNAB budget. Read transactions, categorize spending, manage accounts, review scheduled payments, track money movements, and more. All monetary values are automatically converted between dollars and YNAB's internal milliunits format so the AI never has to think about it.
+YNAB's budgeting philosophy works best when you interact with your budget frequently — but the app interface isn't designed for quick queries or bulk operations. "How much did I spend on groceries this month?" shouldn't require navigating three screens. "Categorize all my Amazon orders from this week" shouldn't be a manual, one-by-one process.
 
-Built on the [official YNAB JavaScript SDK](https://github.com/ynab/ynab-sdk-js) with direct API calls for the newest endpoints (category creation, category groups, money movements) that the SDK hasn't caught up with yet.
+This server gives your AI assistant full access to YNAB's API, turning natural language into budget operations. All monetary values are automatically converted between dollars and YNAB's internal milliunits format so the AI never has to think about it. Built on the [official YNAB JavaScript SDK](https://github.com/ynab/ynab-sdk-js) with direct API calls for the newest endpoints (category creation, category groups, money movements) that the SDK hasn't caught up with yet.
 
 ---
 
