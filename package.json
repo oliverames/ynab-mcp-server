@@ -12,7 +12,8 @@
   ],
   "scripts": {
     "start": "node index.js",
-    "test": "node test.js"
+    "test": "node test.js",
+    "postpublish": "$HOME/Developer/projects/ames-claude/bump-and-sync"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",
