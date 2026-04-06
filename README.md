@@ -258,6 +258,16 @@ That's it. Your AI can now talk to YNAB.
 | `YNAB_API_TOKEN` | Yes | [Personal access token](https://app.ynab.com/settings/developer) from YNAB Developer Settings |
 | `YNAB_BUDGET_ID` | No | Default budget ID. If omitted, uses `"last-used"` (your most recently accessed budget). Run `list_budgets` to find IDs. |
 
+### 1Password Integration
+
+If `YNAB_API_TOKEN` is not set in the environment, the server automatically attempts to resolve it from [1Password CLI](https://developer.1password.com/docs/cli/):
+
+```
+op://Development/YNAB API Token/credential
+```
+
+This means you can skip setting the env var entirely if you have `op` installed and a service account or session active. The fallback adds ~1-2s to startup and is silently skipped if 1Password is unavailable.
+
 ---
 
 ## Amount Handling
