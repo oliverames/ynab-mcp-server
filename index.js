@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { execFileSync } from "node:child_process";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
@@ -7,9 +8,19 @@ import * as ynab from "ynab";
 
 // --- Init ---
 
-const API_TOKEN = process.env.YNAB_API_TOKEN;
+let API_TOKEN = process.env.YNAB_API_TOKEN;
 if (!API_TOKEN) {
-  console.error("YNAB_API_TOKEN environment variable is required");
+  try {
+    API_TOKEN = execFileSync(
+      "op", ["read", "op://Development/YNAB API Token/credential"],
+      { encoding: "utf-8", timeout: 10000, stdio: ["pipe", "pipe", "pipe"] }
+    ).trim();
+  } catch {
+    // 1Password CLI unavailable or item not found
+  }
+}
+if (!API_TOKEN) {
+  console.error("YNAB_API_TOKEN environment variable is required (1Password fallback also failed)");
   process.exit(1);
 }
 
