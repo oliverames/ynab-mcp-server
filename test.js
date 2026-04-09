@@ -10,7 +10,12 @@ const transport = new StdioClientTransport({
 const client = new Client({ name: "test", version: "1.0.0" });
 await client.connect(transport);
 
-const bid = process.env.YNAB_TEST_BUDGET_ID || "your-budget-id-here";
+const bid = process.env.YNAB_TEST_BUDGET_ID || "last-used";
+
+// Dynamic date helpers — tests stay current regardless of when they run
+const now = new Date();
+const prevMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+const testMonth = prevMonth.toISOString().slice(0, 7) + "-01"; // e.g. "2025-03-01"
 
 async function call(name, args = {}) {
   const result = await client.callTool({ name, arguments: args });
@@ -84,10 +89,14 @@ for (const g of categories) {
   }
 }
 
+// Pick any visible, non-deleted category dynamically — no assumptions about budget structure
 let testCatId;
+let testCatName;
 await test("get_category", async () => {
-  testCatId = catByName["🥡 Eating Out"];
-  if (!testCatId) throw new Error("Eating Out category not found");
+  const found = categories.flatMap(g => g.categories).find(c => !c.hidden && !c.deleted);
+  if (!found) throw new Error("no visible category found in budget");
+  testCatId = found.id;
+  testCatName = found.name;
   const c = await call("get_category", { budgetId: bid, categoryId: testCatId });
   if (!c.name) throw new Error("no category name");
   if (typeof c.budgeted !== "number") throw new Error("budgeted not converted to dollars");
@@ -98,7 +107,7 @@ await test("get_category", async () => {
 });
 
 await test("get_month_category", async () => {
-  const c = await call("get_month_category", { budgetId: bid, month: "2026-03-01", categoryId: testCatId });
+  const c = await call("get_month_category", { budgetId: bid, month: testMonth, categoryId: testCatId });
   if (typeof c.budgeted !== "number") throw new Error("budgeted not a number");
 });
 
@@ -143,7 +152,7 @@ await test("list_months", async () => {
 });
 
 await test("get_month", async () => {
-  const m = await call("get_month", { budgetId: bid, month: "2026-03-01" });
+  const m = await call("get_month", { budgetId: bid, month: testMonth });
   if (!m.categories) throw new Error("no categories in month");
 });
 
@@ -194,7 +203,7 @@ await test("list_money_movements", async () => {
 });
 
 await test("get_money_movements_by_month", async () => {
-  const ms = await call("get_money_movements_by_month", { budgetId: bid, month: "2026-03-01" });
+  const ms = await call("get_money_movements_by_month", { budgetId: bid, month: testMonth });
   if (!Array.isArray(ms)) throw new Error("not an array");
   console.log(`    ✓ ${ms.length} money movements in March 2026`);
   if (ms.length > 0 && typeof ms[0].amount !== "number") throw new Error("amount not converted to dollars");
@@ -207,7 +216,7 @@ await test("list_money_movement_groups", async () => {
 });
 
 await test("get_money_movement_groups_by_month", async () => {
-  const gs = await call("get_money_movement_groups_by_month", { budgetId: bid, month: "2026-03-01" });
+  const gs = await call("get_money_movement_groups_by_month", { budgetId: bid, month: testMonth });
   if (!Array.isArray(gs)) throw new Error("not an array");
   console.log(`    ✓ ${gs.length} money movement groups in March 2026`);
 });
@@ -223,7 +232,7 @@ await test("get_transactions (unapproved)", async () => {
 });
 
 await test("get_transactions (by account)", async () => {
-  const txns = await call("get_transactions", { budgetId: bid, accountId: testAccountId, sinceDate: "2026-03-01" });
+  const txns = await call("get_transactions", { budgetId: bid, accountId: testAccountId, sinceDate: testMonth });
   if (!Array.isArray(txns)) throw new Error("not an array");
 });
 
@@ -352,10 +361,12 @@ await test("import_transactions", async () => {
 console.log("\n=== Convenience Tools ===");
 
 await test("search_categories", async () => {
-  const results = await call("search_categories", { budgetId: bid, query: "eat" });
+  // Search for the first few alpha chars of a known category — guaranteed to return at least one result
+  const query = (testCatName ?? "").replace(/[^a-zA-Z]/g, "").slice(0, 3).toLowerCase() || "the";
+  const results = await call("search_categories", { budgetId: bid, query });
   if (!Array.isArray(results)) throw new Error("expected array");
-  if (results.length === 0) throw new Error("no results for 'eat'");
-  console.log(`    ✓ Found ${results.length} categories matching 'eat'`);
+  if (results.length === 0) throw new Error(`no results for '${query}'`);
+  console.log(`    ✓ Found ${results.length} categories matching '${query}'`);
 });
 
 await test("search_payees", async () => {
@@ -372,7 +383,7 @@ await test("review_unapproved", async () => {
 });
 
 await test("get_transactions (by month)", async () => {
-  const txns = await call("get_transactions", { budgetId: bid, month: "2026-03-01" });
+  const txns = await call("get_transactions", { budgetId: bid, month: testMonth });
   if (!Array.isArray(txns)) throw new Error("not an array");
   console.log(`    ✓ ${txns.length} transactions in March 2026`);
 });

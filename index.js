@@ -9,18 +9,18 @@ import * as ynab from "ynab";
 // --- Init ---
 
 let API_TOKEN = process.env.YNAB_API_TOKEN;
-if (!API_TOKEN) {
+if (!API_TOKEN && process.env.YNAB_OP_PATH) {
   try {
     API_TOKEN = execFileSync(
-      "op", ["read", "op://Development/YNAB API Token/credential"],
+      "op", ["read", process.env.YNAB_OP_PATH],
       { encoding: "utf-8", timeout: 10000, stdio: ["pipe", "pipe", "pipe"] }
     ).trim();
   } catch {
-    // 1Password CLI unavailable or item not found
+    // 1Password CLI unavailable or item not found at YNAB_OP_PATH
   }
 }
 if (!API_TOKEN) {
-  console.error("YNAB_API_TOKEN environment variable is required (1Password fallback also failed)");
+  console.error("YNAB_API_TOKEN environment variable is required. Set YNAB_OP_PATH to enable 1Password CLI fallback (e.g. op://Vault/Item/credential).");
   process.exit(1);
 }
 
@@ -111,7 +111,7 @@ async function ynabFetch(path, { method = "GET", body } = {}) {
 
 const server = new McpServer({
   name: "ynab-mcp-server",
-  version: "1.2.1",
+  version: "1.2.3",
 });
 
 // ==================== User & Budgets ====================

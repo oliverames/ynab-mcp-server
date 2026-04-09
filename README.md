@@ -255,18 +255,31 @@ That's it. Your AI can now talk to YNAB.
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `YNAB_API_TOKEN` | Yes | [Personal access token](https://app.ynab.com/settings/developer) from YNAB Developer Settings |
+| `YNAB_API_TOKEN` | Yes* | [Personal access token](https://app.ynab.com/settings/developer) from YNAB Developer Settings |
 | `YNAB_BUDGET_ID` | No | Default budget ID. If omitted, uses `"last-used"` (your most recently accessed budget). Run `list_budgets` to find IDs. |
+| `YNAB_OP_PATH` | No | 1Password secret reference for your API token (see below). Required only if using the 1Password fallback instead of `YNAB_API_TOKEN`. |
+
+*`YNAB_API_TOKEN` is required unless `YNAB_OP_PATH` is set.
 
 ### 1Password Integration
 
-If `YNAB_API_TOKEN` is not set in the environment, the server automatically attempts to resolve it from [1Password CLI](https://developer.1password.com/docs/cli/):
+If you store your YNAB token in [1Password CLI](https://developer.1password.com/docs/cli/), set `YNAB_OP_PATH` to your secret reference and omit `YNAB_API_TOKEN`:
 
-```
-op://Development/YNAB API Token/credential
+```json
+{
+  "mcpServers": {
+    "ynab": {
+      "command": "npx",
+      "args": ["-y", "@oliverames/ynab-mcp-server"],
+      "env": {
+        "YNAB_OP_PATH": "op://Personal/YNAB API Token/credential"
+      }
+    }
+  }
+}
 ```
 
-This means you can skip setting the env var entirely if you have `op` installed and a service account or session active. The fallback adds ~1-2s to startup and is silently skipped if 1Password is unavailable.
+The fallback adds ~1-2s to startup and is silently skipped if `op` is unavailable or the item is not found.
 
 ---
 
