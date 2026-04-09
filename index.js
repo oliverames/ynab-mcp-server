@@ -30,8 +30,7 @@ const DEFAULT_BUDGET_ID = process.env.YNAB_BUDGET_ID;
 // --- Helpers ---
 
 function resolveBudgetId(input) {
-  const id = input || DEFAULT_BUDGET_ID || "last-used";
-  return id;
+  return input || DEFAULT_BUDGET_ID || "last-used";
 }
 
 function dollars(milliunits) {
@@ -69,6 +68,22 @@ function mapTransactionInput(t) {
       memo: s.memo,
     }));
   }
+  return out;
+}
+
+// Sparse patch mapper for update_transaction / update_transactions — only includes fields that were explicitly provided
+function mapTransactionUpdate(t) {
+  const out = {};
+  if (t.accountId  !== undefined) out.account_id  = t.accountId;
+  if (t.date       !== undefined) out.date         = t.date;
+  if (t.amount     !== undefined) out.amount        = milliunits(t.amount);
+  if (t.payeeId    !== undefined) out.payee_id      = t.payeeId;
+  if (t.payeeName  !== undefined) out.payee_name    = t.payeeName;
+  if (t.categoryId !== undefined) out.category_id   = t.categoryId;
+  if (t.memo       !== undefined) out.memo           = t.memo;
+  if (t.cleared    !== undefined) out.cleared        = t.cleared;
+  if (t.approved   !== undefined) out.approved       = t.approved;
+  if (t.flagColor  !== undefined) out.flag_color     = t.flagColor;
   return out;
 }
 
@@ -111,19 +126,25 @@ async function ynabFetch(path, { method = "GET", body } = {}) {
 
 const server = new McpServer({
   name: "ynab-mcp-server",
-  version: "1.2.3",
+  version: "1.3.0",
 });
 
 // ==================== User & Budgets ====================
 
-server.tool("get_user", "Get the authenticated user", {}, () =>
+server.registerTool(
+  "get_user",
+  { description: "Get the authenticated user" },
+  () =>
   run(async () => {
     const { data } = await api.user.getUser();
     return ok(data.user);
   })
 );
 
-server.tool("list_budgets", "List all budgets. Use a budget ID from the results in other tools, or omit budgetId to use the last-used budget.", {}, () =>
+server.registerTool(
+  "list_budgets",
+  { description: "List all budgets. Use a budget ID from the results in other tools, or omit budgetId to use the last-used budget." },
+  () =>
   run(async () => {
     const { data } = await api.budgets.getBudgets();
     const result = {
@@ -136,10 +157,9 @@ server.tool("list_budgets", "List all budgets. Use a budget ID from the results 
   })
 );
 
-server.tool(
+server.registerTool(
   "get_budget",
-  "Get a budget summary including name, currency format, and account/category/payee counts",
-  { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") },
+  { description: "Get a budget summary including name, currency format, and account/category/payee counts", inputSchema: { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") } },
   ({ budgetId }) =>
     run(async () => {
       const { data } = await api.budgets.getBudgetById(resolveBudgetId(budgetId));
@@ -159,10 +179,9 @@ server.tool(
     })
 );
 
-server.tool(
+server.registerTool(
   "get_budget_settings",
-  "Get budget settings (currency format, date format)",
-  { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") },
+  { description: "Get budget settings (currency format, date format)", inputSchema: { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") } },
   ({ budgetId }) =>
     run(async () => {
       const { data } = await api.budgets.getBudgetSettingsById(resolveBudgetId(budgetId));
@@ -196,10 +215,9 @@ function formatAccount(a) {
   return out;
 }
 
-server.tool(
+server.registerTool(
   "list_accounts",
-  "List all accounts in a budget",
-  { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") },
+  { description: "List all accounts in a budget", inputSchema: { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") } },
   ({ budgetId }) =>
     run(async () => {
       const { data } = await api.accounts.getAccounts(resolveBudgetId(budgetId));
@@ -207,13 +225,12 @@ server.tool(
     })
 );
 
-server.tool(
+server.registerTool(
   "get_account",
-  "Get details for a specific account",
-  {
+  { description: "Get details for a specific account", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     accountId: z.string().describe("Account ID"),
-  },
+  } },
   ({ budgetId, accountId }) =>
     run(async () => {
       const { data } = await api.accounts.getAccountById(resolveBudgetId(budgetId), accountId);
@@ -221,15 +238,14 @@ server.tool(
     })
 );
 
-server.tool(
+server.registerTool(
   "create_account",
-  "Create a new account",
-  {
+  { description: "Create a new account", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     name: z.string().describe("Account name"),
     type: z.enum(["checking", "savings", "cash", "creditCard", "lineOfCredit", "otherAsset", "otherLiability", "mortgage", "autoLoan", "studentLoan", "personalLoan", "medicalDebt", "otherDebt"]).describe("Account type"),
     balance: z.number().describe("Starting balance in dollars"),
-  },
+  } },
   ({ budgetId, name, type, balance: bal }) =>
     run(async () => {
       const { data } = await api.accounts.createAccount(resolveBudgetId(budgetId), {
@@ -270,10 +286,9 @@ function formatCategory(c) {
   };
 }
 
-server.tool(
+server.registerTool(
   "list_categories",
-  "List all category groups and their categories",
-  { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") },
+  { description: "List all category groups and their categories", inputSchema: { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") } },
   ({ budgetId }) =>
     run(async () => {
       const { data } = await api.categories.getCategories(resolveBudgetId(budgetId));
@@ -298,13 +313,12 @@ server.tool(
     })
 );
 
-server.tool(
+server.registerTool(
   "get_category",
-  "Get a specific category",
-  {
+  { description: "Get a specific category", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     categoryId: z.string().describe("Category ID"),
-  },
+  } },
   ({ budgetId, categoryId }) =>
     run(async () => {
       const { data } = await api.categories.getCategoryById(resolveBudgetId(budgetId), categoryId);
@@ -312,14 +326,13 @@ server.tool(
     })
 );
 
-server.tool(
+server.registerTool(
   "get_month_category",
-  "Get category budget for a specific month",
-  {
+  { description: "Get category budget for a specific month", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     month: z.string().describe("Month in YYYY-MM-DD format (first of month)"),
     categoryId: z.string().describe("Category ID"),
-  },
+  } },
   ({ budgetId, month, categoryId }) =>
     run(async () => {
       const { data } = await api.categories.getMonthCategoryById(resolveBudgetId(budgetId), month, categoryId);
@@ -327,15 +340,14 @@ server.tool(
     })
 );
 
-server.tool(
+server.registerTool(
   "update_month_category",
-  "Set the budgeted amount for a category in a specific month",
-  {
+  { description: "Set the budgeted amount for a category in a specific month", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     month: z.string().describe("Month in YYYY-MM-DD format (first of month)"),
     categoryId: z.string().describe("Category ID"),
     budgeted: z.number().describe("Amount to budget in dollars"),
-  },
+  } },
   ({ budgetId, month, categoryId, budgeted }) =>
     run(async () => {
       const { data } = await api.categories.updateMonthCategory(resolveBudgetId(budgetId), month, categoryId, {
@@ -345,10 +357,9 @@ server.tool(
     })
 );
 
-server.tool(
+server.registerTool(
   "update_category",
-  "Update a category's name, note, goal target, or move it to a different group",
-  {
+  { description: "Update a category's name, note, goal target, or move it to a different group", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     categoryId: z.string().describe("Category ID"),
     name: z.string().optional().describe("New category name"),
@@ -356,7 +367,7 @@ server.tool(
     categoryGroupId: z.string().optional().describe("Move to a different category group"),
     goalTarget: z.number().nullable().optional().describe("Goal target amount in dollars (only if category already has a goal)"),
     goalTargetDate: z.string().nullable().optional().describe("Goal target date in ISO format (e.g. 2026-12-01, null to clear)"),
-  },
+  } },
   ({ budgetId, categoryId, name, note, categoryGroupId, goalTarget, goalTargetDate }) =>
     run(async () => {
       const cat = {};
@@ -373,17 +384,16 @@ server.tool(
     })
 );
 
-server.tool(
+server.registerTool(
   "create_category",
-  "Create a new category in a category group",
-  {
+  { description: "Create a new category in a category group", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     categoryGroupId: z.string().describe("Category group ID to create the category in"),
     name: z.string().describe("Category name"),
     note: z.string().optional().describe("Category note"),
     goalTarget: z.number().optional().describe("Goal target amount in dollars (creates a 'Needed for Spending' goal)"),
     goalTargetDate: z.string().optional().describe("Goal target date in ISO format (e.g. 2026-12-01)"),
-  },
+  } },
   ({ budgetId, categoryGroupId, name, note, goalTarget, goalTargetDate }) =>
     run(async () => {
       const bid = resolveBudgetId(budgetId);
@@ -399,13 +409,12 @@ server.tool(
     })
 );
 
-server.tool(
+server.registerTool(
   "create_category_group",
-  "Create a new category group",
-  {
+  { description: "Create a new category group", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     name: z.string().describe("Category group name (max 50 characters)"),
-  },
+  } },
   ({ budgetId, name }) =>
     run(async () => {
       const data = await ynabFetch(`/budgets/${resolveBudgetId(budgetId)}/category_groups`, {
@@ -416,14 +425,13 @@ server.tool(
     })
 );
 
-server.tool(
+server.registerTool(
   "update_category_group",
-  "Rename a category group",
-  {
+  { description: "Rename a category group", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     categoryGroupId: z.string().describe("Category group ID"),
     name: z.string().describe("New category group name (max 50 characters)"),
-  },
+  } },
   ({ budgetId, categoryGroupId, name }) =>
     run(async () => {
       const data = await ynabFetch(`/budgets/${resolveBudgetId(budgetId)}/category_groups/${categoryGroupId}`, {
@@ -436,10 +444,9 @@ server.tool(
 
 // ==================== Payees ====================
 
-server.tool(
+server.registerTool(
   "list_payees",
-  "List all payees",
-  { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") },
+  { description: "List all payees", inputSchema: { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") } },
   ({ budgetId }) =>
     run(async () => {
       const { data } = await api.payees.getPayees(resolveBudgetId(budgetId));
@@ -447,13 +454,12 @@ server.tool(
     })
 );
 
-server.tool(
+server.registerTool(
   "get_payee",
-  "Get a specific payee",
-  {
+  { description: "Get a specific payee", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     payeeId: z.string().describe("Payee ID"),
-  },
+  } },
   ({ budgetId, payeeId }) =>
     run(async () => {
       const { data } = await api.payees.getPayeeById(resolveBudgetId(budgetId), payeeId);
@@ -461,14 +467,13 @@ server.tool(
     })
 );
 
-server.tool(
+server.registerTool(
   "update_payee",
-  "Rename a payee",
-  {
+  { description: "Rename a payee", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     payeeId: z.string().describe("Payee ID"),
     name: z.string().describe("New payee name"),
-  },
+  } },
   ({ budgetId, payeeId, name }) =>
     run(async () => {
       const { data } = await api.payees.updatePayee(resolveBudgetId(budgetId), payeeId, {
@@ -478,12 +483,27 @@ server.tool(
     })
 );
 
+server.registerTool(
+  "create_payee",
+  { description: "Create a new payee", inputSchema: {
+    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+    name: z.string().max(500).describe("Payee name (max 500 characters)"),
+  } },
+  ({ budgetId, name }) =>
+    run(async () => {
+      const data = await ynabFetch(`/budgets/${resolveBudgetId(budgetId)}/payees`, {
+        method: "POST",
+        body: { payee: { name } },
+      });
+      return ok(data.payee);
+    })
+);
+
 // ==================== Payee Locations ====================
 
-server.tool(
+server.registerTool(
   "list_payee_locations",
-  "List all payee locations (GPS coordinates where transactions occurred)",
-  { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") },
+  { description: "List all payee locations (GPS coordinates where transactions occurred)", inputSchema: { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") } },
   ({ budgetId }) =>
     run(async () => {
       const { data } = await api.payeeLocations.getPayeeLocations(resolveBudgetId(budgetId));
@@ -491,13 +511,12 @@ server.tool(
     })
 );
 
-server.tool(
+server.registerTool(
   "get_payee_location",
-  "Get a specific payee location",
-  {
+  { description: "Get a specific payee location", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     payeeLocationId: z.string().describe("Payee location ID"),
-  },
+  } },
   ({ budgetId, payeeLocationId }) =>
     run(async () => {
       const { data } = await api.payeeLocations.getPayeeLocationById(resolveBudgetId(budgetId), payeeLocationId);
@@ -505,13 +524,12 @@ server.tool(
     })
 );
 
-server.tool(
+server.registerTool(
   "get_payee_locations_by_payee",
-  "Get all locations for a specific payee",
-  {
+  { description: "Get all locations for a specific payee", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     payeeId: z.string().describe("Payee ID"),
-  },
+  } },
   ({ budgetId, payeeId }) =>
     run(async () => {
       const { data } = await api.payeeLocations.getPayeeLocationsByPayee(resolveBudgetId(budgetId), payeeId);
@@ -521,10 +539,9 @@ server.tool(
 
 // ==================== Months ====================
 
-server.tool(
+server.registerTool(
   "list_months",
-  "List all budget months",
-  { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") },
+  { description: "List all budget months", inputSchema: { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") } },
   ({ budgetId }) =>
     run(async () => {
       const { data } = await api.months.getBudgetMonths(resolveBudgetId(budgetId));
@@ -543,13 +560,12 @@ server.tool(
     })
 );
 
-server.tool(
+server.registerTool(
   "get_month",
-  "Get budget month detail with per-category breakdown",
-  {
+  { description: "Get budget month detail with per-category breakdown", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     month: z.string().describe("Month in YYYY-MM-DD format (first of month)"),
-  },
+  } },
   ({ budgetId, month }) =>
     run(async () => {
       const { data } = await api.months.getBudgetMonth(resolveBudgetId(budgetId), month);
@@ -597,10 +613,9 @@ function formatMoneyMovement(m) {
   };
 }
 
-server.tool(
+server.registerTool(
   "list_money_movements",
-  "List all money movements (budget re-allocations between categories)",
-  { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") },
+  { description: "List all money movements (budget re-allocations between categories)", inputSchema: { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") } },
   ({ budgetId }) =>
     run(async () => {
       const data = await ynabFetch(`/budgets/${resolveBudgetId(budgetId)}/money_movements`);
@@ -608,13 +623,12 @@ server.tool(
     })
 );
 
-server.tool(
+server.registerTool(
   "get_money_movements_by_month",
-  "Get money movements for a specific month",
-  {
+  { description: "Get money movements for a specific month", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     month: z.string().describe("Month in YYYY-MM-DD format (first of month), or 'current'"),
-  },
+  } },
   ({ budgetId, month }) =>
     run(async () => {
       const data = await ynabFetch(`/budgets/${resolveBudgetId(budgetId)}/months/${month}/money_movements`);
@@ -622,10 +636,9 @@ server.tool(
     })
 );
 
-server.tool(
+server.registerTool(
   "list_money_movement_groups",
-  "List all money movement groups (batches of related money movements)",
-  { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") },
+  { description: "List all money movement groups (batches of related money movements)", inputSchema: { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") } },
   ({ budgetId }) =>
     run(async () => {
       const data = await ynabFetch(`/budgets/${resolveBudgetId(budgetId)}/money_movement_groups`);
@@ -633,13 +646,12 @@ server.tool(
     })
 );
 
-server.tool(
+server.registerTool(
   "get_money_movement_groups_by_month",
-  "Get money movement groups for a specific month",
-  {
+  { description: "Get money movement groups for a specific month", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     month: z.string().describe("Month in YYYY-MM-DD format (first of month), or 'current'"),
-  },
+  } },
   ({ budgetId, month }) =>
     run(async () => {
       const data = await ynabFetch(`/budgets/${resolveBudgetId(budgetId)}/months/${month}/money_movement_groups`);
@@ -689,10 +701,9 @@ function formatTransaction(t) {
   };
 }
 
-server.tool(
+server.registerTool(
   "get_transactions",
-  "Get transactions with optional filters. Use type='unapproved' or type='uncategorized' to filter. Optionally filter by account, category, payee, or month.",
-  {
+  { description: "Get transactions with optional filters. Use type='unapproved' or type='uncategorized' to filter. Optionally filter by account, category, payee, or month.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     sinceDate: z.string().optional().describe("Only return transactions on or after this date (YYYY-MM-DD)"),
     type: z.enum(["unapproved", "uncategorized"]).optional().describe("Filter by approval/categorization status"),
@@ -700,7 +711,7 @@ server.tool(
     categoryId: z.string().optional().describe("Filter by category ID"),
     payeeId: z.string().optional().describe("Filter by payee ID"),
     month: z.string().optional().describe("Filter by month (YYYY-MM-DD, first of month)"),
-  },
+  } },
   ({ budgetId, sinceDate, type, accountId, categoryId, payeeId, month }) =>
     run(async () => {
       const bid = resolveBudgetId(budgetId);
@@ -727,13 +738,12 @@ server.tool(
     })
 );
 
-server.tool(
+server.registerTool(
   "get_transaction",
-  "Get a single transaction by ID",
-  {
+  { description: "Get a single transaction by ID", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     transactionId: z.string().describe("Transaction ID"),
-  },
+  } },
   ({ budgetId, transactionId }) =>
     run(async () => {
       const { data } = await api.transactions.getTransactionById(resolveBudgetId(budgetId), transactionId);
@@ -741,10 +751,9 @@ server.tool(
     })
 );
 
-server.tool(
+server.registerTool(
   "create_transaction",
-  "Create a new transaction. Amounts are in dollars (positive for inflows, negative for outflows). Note: future-dated transactions cannot be created here — use create_scheduled_transaction instead.",
-  {
+  { description: "Create a new transaction. Amounts are in dollars (positive for inflows, negative for outflows). Note: future-dated transactions cannot be created here — use create_scheduled_transaction instead.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     accountId: z.string().describe("Account ID"),
     date: z.string().describe("Transaction date (YYYY-MM-DD)"),
@@ -764,7 +773,7 @@ server.tool(
       payeeName: z.string().optional().describe("Payee name"),
       memo: z.string().optional().describe("Memo"),
     })).optional().describe("Split transaction into subtransactions. The subtransaction amounts must sum to the total transaction amount."),
-  },
+  } },
   ({ budgetId, ...txnFields }) =>
     run(async () => {
       const { data } = await api.transactions.createTransaction(resolveBudgetId(budgetId), {
@@ -774,10 +783,9 @@ server.tool(
     })
 );
 
-server.tool(
+server.registerTool(
   "create_transactions",
-  "Create multiple transactions at once. Amounts are in dollars. Returns created transactions and any duplicate import IDs. Future-dated transactions are not supported — use create_scheduled_transaction instead.",
-  {
+  { description: "Create multiple transactions at once. Amounts are in dollars. Returns created transactions and any duplicate import IDs. Future-dated transactions are not supported — use create_scheduled_transaction instead.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     transactions: z.array(z.object({
       accountId: z.string().describe("Account ID"),
@@ -799,7 +807,7 @@ server.tool(
         memo: z.string().optional().describe("Memo"),
       })).optional().describe("Split transaction into subtransactions"),
     })).describe("Array of transactions to create"),
-  },
+  } },
   ({ budgetId, transactions: txns }) =>
     run(async () => {
       const { data } = await api.transactions.createTransactions(resolveBudgetId(budgetId), {
@@ -812,10 +820,9 @@ server.tool(
     })
 );
 
-server.tool(
+server.registerTool(
   "update_transaction",
-  "Update an existing transaction. Only provided fields are changed. Amounts in dollars.",
-  {
+  { description: "Update an existing transaction. Only provided fields are changed. Amounts in dollars.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     transactionId: z.string().describe("Transaction ID"),
     accountId: z.string().optional().describe("Account ID"),
@@ -828,35 +835,22 @@ server.tool(
     cleared: z.enum(["cleared", "uncleared", "reconciled"]).optional().describe("Cleared status"),
     approved: z.boolean().optional().describe("Whether transaction is approved"),
     flagColor: z.enum(["red", "orange", "yellow", "green", "blue", "purple"]).nullable().optional().describe("Flag color (null to remove)"),
-  },
+  } },
   ({ budgetId, transactionId, accountId, date, amount, payeeId, payeeName, categoryId, memo, cleared, approved, flagColor }) =>
     run(async () => {
-      const txn = {};
-      if (accountId !== undefined) txn.account_id = accountId;
-      if (date !== undefined) txn.date = date;
-      if (amount !== undefined) txn.amount = milliunits(amount);
-      if (payeeId !== undefined) txn.payee_id = payeeId;
-      if (payeeName !== undefined) txn.payee_name = payeeName;
-      if (categoryId !== undefined) txn.category_id = categoryId;
-      if (memo !== undefined) txn.memo = memo;
-      if (cleared !== undefined) txn.cleared = cleared;
-      if (approved !== undefined) txn.approved = approved;
-      if (flagColor !== undefined) txn.flag_color = flagColor;
-
       const { data } = await api.transactions.updateTransaction(resolveBudgetId(budgetId), transactionId, {
-        transaction: txn,
+        transaction: mapTransactionUpdate({ accountId, date, amount, payeeId, payeeName, categoryId, memo, cleared, approved, flagColor }),
       });
       return ok(formatTransaction(data.transaction));
     })
 );
 
-server.tool(
+server.registerTool(
   "delete_transaction",
-  "Delete a transaction",
-  {
+  { description: "Delete a transaction", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     transactionId: z.string().describe("Transaction ID"),
-  },
+  } },
   ({ budgetId, transactionId }) =>
     run(async () => {
       const { data } = await api.transactions.deleteTransaction(resolveBudgetId(budgetId), transactionId);
@@ -864,10 +858,9 @@ server.tool(
     })
 );
 
-server.tool(
+server.registerTool(
   "update_transactions",
-  "Batch update multiple transactions. Each transaction object must include its id and the fields to update.",
-  {
+  { description: "Batch update multiple transactions. Each transaction object must include its id and the fields to update.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     transactions: z
       .array(
@@ -886,23 +879,10 @@ server.tool(
         })
       )
       .describe("Array of transaction updates"),
-  },
+  } },
   ({ budgetId, transactions: txns }) =>
     run(async () => {
-      const mapped = txns.map((t) => {
-        const out = { id: t.id };
-        if (t.accountId !== undefined) out.account_id = t.accountId;
-        if (t.date !== undefined) out.date = t.date;
-        if (t.amount !== undefined) out.amount = milliunits(t.amount);
-        if (t.payeeId !== undefined) out.payee_id = t.payeeId;
-        if (t.payeeName !== undefined) out.payee_name = t.payeeName;
-        if (t.categoryId !== undefined) out.category_id = t.categoryId;
-        if (t.memo !== undefined) out.memo = t.memo;
-        if (t.cleared !== undefined) out.cleared = t.cleared;
-        if (t.approved !== undefined) out.approved = t.approved;
-        if (t.flagColor !== undefined) out.flag_color = t.flagColor;
-        return out;
-      });
+      const mapped = txns.map((t) => ({ id: t.id, ...mapTransactionUpdate(t) }));
       const { data } = await api.transactions.updateTransactions(resolveBudgetId(budgetId), {
         transactions: mapped,
       });
@@ -913,10 +893,9 @@ server.tool(
     })
 );
 
-server.tool(
+server.registerTool(
   "import_transactions",
-  "Trigger import of linked account transactions",
-  { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") },
+  { description: "Trigger import of linked account transactions", inputSchema: { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") } },
   ({ budgetId }) =>
     run(async () => {
       const { data } = await api.transactions.importTransactions(resolveBudgetId(budgetId));
@@ -959,10 +938,9 @@ function formatScheduledTransaction(t) {
   };
 }
 
-server.tool(
+server.registerTool(
   "list_scheduled_transactions",
-  "List all scheduled (recurring) transactions",
-  { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") },
+  { description: "List all scheduled (recurring) transactions", inputSchema: { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") } },
   ({ budgetId }) =>
     run(async () => {
       const { data } = await api.scheduledTransactions.getScheduledTransactions(resolveBudgetId(budgetId));
@@ -970,13 +948,12 @@ server.tool(
     })
 );
 
-server.tool(
+server.registerTool(
   "get_scheduled_transaction",
-  "Get a specific scheduled transaction",
-  {
+  { description: "Get a specific scheduled transaction", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     scheduledTransactionId: z.string().describe("Scheduled transaction ID"),
-  },
+  } },
   ({ budgetId, scheduledTransactionId }) =>
     run(async () => {
       const { data } = await api.scheduledTransactions.getScheduledTransactionById(resolveBudgetId(budgetId), scheduledTransactionId);
@@ -984,10 +961,9 @@ server.tool(
     })
 );
 
-server.tool(
+server.registerTool(
   "create_scheduled_transaction",
-  "Create a new scheduled (recurring) transaction",
-  {
+  { description: "Create a new scheduled (recurring) transaction", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     accountId: z.string().describe("Account ID"),
     dateFirst: z.string().describe("First occurrence date (YYYY-MM-DD)"),
@@ -998,7 +974,7 @@ server.tool(
     categoryId: z.string().optional().describe("Category ID"),
     memo: z.string().optional().describe("Memo"),
     flagColor: z.enum(["red", "orange", "yellow", "green", "blue", "purple"]).optional().describe("Flag color"),
-  },
+  } },
   ({ budgetId, accountId, dateFirst, frequency, amount, payeeId, payeeName, categoryId, memo, flagColor }) =>
     run(async () => {
       const { data } = await api.scheduledTransactions.createScheduledTransaction(resolveBudgetId(budgetId), {
@@ -1018,10 +994,9 @@ server.tool(
     })
 );
 
-server.tool(
+server.registerTool(
   "update_scheduled_transaction",
-  "Update an existing scheduled transaction. Only provided fields are changed. Amounts in dollars.",
-  {
+  { description: "Update an existing scheduled transaction. Only provided fields are changed. Amounts in dollars.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     scheduledTransactionId: z.string().describe("Scheduled transaction ID"),
     accountId: z.string().optional().describe("Account ID"),
@@ -1033,7 +1008,7 @@ server.tool(
     categoryId: z.string().nullable().optional().describe("Category ID"),
     memo: z.string().nullable().optional().describe("Memo"),
     flagColor: z.enum(["red", "orange", "yellow", "green", "blue", "purple"]).nullable().optional().describe("Flag color"),
-  },
+  } },
   ({ budgetId, scheduledTransactionId, accountId, date, frequency, amount, payeeId, payeeName, categoryId, memo, flagColor }) =>
     run(async () => {
       const bid = resolveBudgetId(budgetId);
@@ -1062,13 +1037,12 @@ server.tool(
     })
 );
 
-server.tool(
+server.registerTool(
   "delete_scheduled_transaction",
-  "Delete a scheduled transaction",
-  {
+  { description: "Delete a scheduled transaction", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     scheduledTransactionId: z.string().describe("Scheduled transaction ID"),
-  },
+  } },
   ({ budgetId, scheduledTransactionId }) =>
     run(async () => {
       const { data } = await api.scheduledTransactions.deleteScheduledTransaction(resolveBudgetId(budgetId), scheduledTransactionId);
@@ -1078,13 +1052,12 @@ server.tool(
 
 // ==================== Convenience Tools ====================
 
-server.tool(
+server.registerTool(
   "search_categories",
-  "Search categories by partial name match (case-insensitive). Useful for finding category IDs when you only know part of the name.",
-  {
+  { description: "Search categories by partial name match (case-insensitive). Useful for finding category IDs when you only know part of the name.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     query: z.string().describe("Partial category name to search for (e.g. 'work' matches '💻 Work Expenses (Oliver LLC)')"),
-  },
+  } },
   ({ budgetId, query }) =>
     run(async () => {
       const { data } = await api.categories.getCategories(resolveBudgetId(budgetId));
@@ -1111,13 +1084,12 @@ server.tool(
     })
 );
 
-server.tool(
+server.registerTool(
   "search_payees",
-  "Search payees by partial name match (case-insensitive). Useful for finding payee IDs.",
-  {
+  { description: "Search payees by partial name match (case-insensitive). Useful for finding payee IDs.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     query: z.string().describe("Partial payee name to search for"),
-  },
+  } },
   ({ budgetId, query }) =>
     run(async () => {
       const { data } = await api.payees.getPayees(resolveBudgetId(budgetId));
@@ -1130,10 +1102,9 @@ server.tool(
     })
 );
 
-server.tool(
+server.registerTool(
   "review_unapproved",
-  "Get all unapproved transactions grouped by status: those already categorized (ready to approve) and those still uncategorized (need category first). Never approve uncategorized transactions without explicit user instruction.",
-  { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") },
+  { description: "Get all unapproved transactions grouped by status: those already categorized (ready to approve) and those still uncategorized (need category first). Never approve uncategorized transactions without explicit user instruction.", inputSchema: { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") } },
   ({ budgetId }) =>
     run(async () => {
       const { data } = await api.transactions.getTransactions(resolveBudgetId(budgetId), undefined, "unapproved");
@@ -1141,8 +1112,8 @@ server.tool(
       const isCategorized = (t) => (t.category_id && t.category_name !== "Uncategorized")
         || (t.subtransactions && t.subtransactions.length > 0) // split transactions are categorized via subtransactions
         || t.transfer_account_id; // transfers don't need categories
-      const categorized = txns.filter(isCategorized);
-      const uncategorized = txns.filter((t) => !isCategorized(t));
+      const categorized = [], uncategorized = [];
+      for (const t of txns) (isCategorized(t) ? categorized : uncategorized).push(t);
       return ok({
         total: txns.length,
         ready_to_approve: {

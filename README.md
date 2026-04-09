@@ -10,9 +10,9 @@
 </p>
 
 <p align="center">
-  <code>43 tools</code> &bull;
+  <code>44 tools</code> &bull;
   <code>100% API coverage</code> &bull;
-  <code>YNAB API v1.79</code>
+  <code>YNAB API v1.82</code>
 </p>
 
 <p align="center">
@@ -121,14 +121,14 @@ That's it. Your AI can now talk to YNAB.
 
 ## Features
 
-**Complete YNAB API v1.79 coverage** with 43 tools:
+**Complete YNAB API v1.82 coverage** with 44 tools:
 
 | Resource | Tools | Capabilities |
 |----------|-------|-------------|
 | **Budgets** | 4 | List, view details, settings |
 | **Accounts** | 3 | List, view, create |
 | **Categories** | 9 | Full CRUD, groups, search, goals, monthly budgets |
-| **Payees** | 4 | List, view, rename, search |
+| **Payees** | 5 | List, view, create, rename, search |
 | **Payee Locations** | 3 | GPS coordinates for mobile transactions |
 | **Months** | 2 | Monthly summaries with per-category breakdown |
 | **Money Movements** | 4 | Budget re-allocation tracking |
@@ -191,6 +191,7 @@ That's it. Your AI can now talk to YNAB.
 |------|-------------|
 | `list_payees` | List all payees with transfer account mappings |
 | `get_payee` | Get payee details |
+| `create_payee` | Create a new payee |
 | `update_payee` | Rename a payee |
 | `search_payees` | Case-insensitive partial name search |
 
