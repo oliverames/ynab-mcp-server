@@ -12,3 +12,10 @@
 [INFO] 2026-04-09T18:35:25.288Z [session=a9e4bca8-fabf-4774-a877-7198ac88144c] Resolved stateDir: /Users/oliverames/.a5c/state
 [INFO] 2026-04-09T18:35:25.288Z [session=a9e4bca8-fabf-4774-a877-7198ac88144c] Checking session file at: /Users/oliverames/.a5c/state/a9e4bca8-fabf-4774-a877-7198ac88144c.md
 [INFO] 2026-04-09T18:35:25.289Z [session=a9e4bca8-fabf-4774-a877-7198ac88144c] No active loop found for session a9e4bca8-fabf-4774-a877-7198ac88144c — allowing exit
+[INFO] 2026-04-09T18:38:44.402Z handleHookRunStop started
+[INFO] 2026-04-09T18:38:44.405Z Hook input received
+[INFO] 2026-04-09T18:38:44.405Z [session=a9e4bca8-fabf-4774-a877-7198ac88144c] Session ID: a9e4bca8-fabf-4774-a877-7198ac88144c
+[INFO] 2026-04-09T18:38:44.405Z [session=a9e4bca8-fabf-4774-a877-7198ac88144c] Resolved pluginRoot: /Users/oliverames/.claude/plugins/cache/a5c-ai/babysitter/4.0.157
+[INFO] 2026-04-09T18:38:44.405Z [session=a9e4bca8-fabf-4774-a877-7198ac88144c] Resolved stateDir: /Users/oliverames/.a5c/state
+[INFO] 2026-04-09T18:38:44.405Z [session=a9e4bca8-fabf-4774-a877-7198ac88144c] Checking session file at: /Users/oliverames/.a5c/state/a9e4bca8-fabf-4774-a877-7198ac88144c.md
+[INFO] 2026-04-09T18:38:44.405Z [session=a9e4bca8-fabf-4774-a877-7198ac88144c] No active loop found for session a9e4bca8-fabf-4774-a877-7198ac88144c — allowing exit
