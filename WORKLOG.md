@@ -1,5 +1,17 @@
 # Worklog
 
+## 2026-04-09 — v1.3.0: Generalize for public use, migrate to registerTool, add create_payee
+
+**What changed**: Overhauled the server for general public distribution. Made the 1Password fallback configurable via `YNAB_OP_PATH` env var (previously hardcoded to `op://Development/YNAB API Token/credential`). Migrated all 43 `server.tool()` calls to `server.registerTool()` — the new non-deprecated API that supports `outputSchema` and future MCP features. Added `create_payee` tool to cover `POST /budgets/:id/payees` from YNAB API v1.82 (was missing from the v1.79 local spec). Updated local OpenAPI spec to v1.82 from live api.ynab.com. Code quality: extracted `mapTransactionUpdate()` helper (removed duplication between `update_transaction` and `update_transactions`), single-pass partition in `review_unapproved`, simplified `resolveBudgetId`. Published as 1.3.0.
+
+**Decisions made**: Made `YNAB_OP_PATH` opt-in (1Password fallback only activates if the env var is set) rather than keeping a hardcoded default path — this avoids confusing errors for users who don't use 1Password. Bumped to 1.3.0 (minor) rather than patch because `create_payee` is a new tool and the `registerTool` migration changes the observable MCP protocol metadata shape. Left `server.tool` comment ("frozen as of protocol version 2025-03-26") in the SDK as justification for the migration. Did not migrate `test.js` category/date fixes since they were already in HEAD.
+
+**Left off at**: Published 1.3.0 to npm and pushed. Server is at 100% YNAB API v1.82 coverage (44 tools). Next steps if continuing: (1) add a `create_payee` test to test.js, (2) consider adding `outputSchema` to tools now that `registerTool` supports it — would give clients structured data access. Still open: 1Password items for Meta, Threads, Sprout, UniFi credentials (carried from previous session).
+
+**Open questions**: Should we add `outputSchema` to tool definitions for structured MCP responses? The `registerTool` API supports it but it's extra work per-tool.
+
+---
+
 ## 2026-04-06 — 1Password CLI fallback for credential resolution
 
 **What changed**: Added automatic 1Password CLI fallback to credential resolution at startup. When environment variables are not set, the server attempts to resolve them via `op read` from the Development vault before failing. Uses `execFileSync` (Node) or `exec.Command` (Go) for shell-safe execution with a 10s timeout. Silent no-op if 1Password CLI is unavailable. Updated README to document the integration with `op://` reference paths. Part of a broader session that also touched ynab-mcp-server, imagerelay-mcp-server, meta-mcp-server, sprout-mcp-server, and ames-unifi-mcp.
