@@ -12,7 +12,7 @@
 <p align="center">
   <code>44 tools</code> &bull;
   <code>100% API coverage</code> &bull;
-  <code>YNAB API v1.82</code>
+  <code>YNAB API v1.83</code>
 </p>
 
 <p align="center">
@@ -24,7 +24,7 @@
 <p align="center">
   <a href="#quick-start">Quick Start</a> &bull;
   <a href="#what-you-can-do">What You Can Do</a> &bull;
-  <a href="#tools-reference">All 43 Tools</a> &bull;
+  <a href="#tools-reference">All 44 Tools</a> &bull;
   <a href="#environment-variables">Configuration</a>
 </p>
 
@@ -32,7 +32,7 @@
 
 ## Why This Exists
 
-YNAB's budgeting philosophy works best when you interact with your budget frequently — but the app interface isn't designed for quick queries or bulk operations. "How much did I spend on groceries this month?" shouldn't require navigating three screens. "Categorize all my Amazon orders from this week" shouldn't be a manual, one-by-one process.
+YNAB's budgeting philosophy works best when you interact with your budget frequently - but the app interface isn't designed for quick queries or bulk operations. "How much did I spend on groceries this month?" shouldn't require navigating three screens. "Categorize all my Amazon orders from this week" shouldn't be a manual, one-by-one process.
 
 This server gives your AI assistant full access to YNAB's API, turning natural language into budget operations. All monetary values are automatically converted between dollars and YNAB's internal milliunits format so the AI never has to think about it. Built on the [official YNAB JavaScript SDK](https://github.com/ynab/ynab-sdk-js) with direct API calls for the newest endpoints (category creation, category groups, money movements) that the SDK hasn't caught up with yet.
 
@@ -121,7 +121,7 @@ That's it. Your AI can now talk to YNAB.
 
 ## Features
 
-**Complete YNAB API v1.82 coverage** with 44 tools:
+**Complete YNAB API v1.83 coverage** with 44 tools:
 
 | Resource | Tools | Capabilities |
 |----------|-------|-------------|
@@ -138,15 +138,17 @@ That's it. Your AI can now talk to YNAB.
 
 ### Design Decisions
 
-- **Dollar amounts everywhere** — inputs and outputs are in dollars (`-12.34`), never milliunits (`-12340`). Conversion is automatic and transparent.
-- **Smart budget resolution** — set `YNAB_BUDGET_ID` for a default, or omit it to auto-resolve to your last-used budget. Every tool accepts an optional `budgetId` override.
-- **Split transactions** — first-class support for subtransactions in create, read, and format operations.
-- **Bulk operations** — `create_transactions` and `update_transactions` handle arrays in a single API call.
-- **Fetch-then-merge updates** — scheduled transaction updates (which use PUT semantics) automatically fetch the current state and merge your changes, so you only specify what changed.
-- **Fuzzy search** — `search_categories` and `search_payees` do case-insensitive partial matching across all entries.
-- **Approval workflow** — `review_unapproved` groups transactions into "ready to approve" (categorized, split, or transfer) and "needs attention" (uncategorized), with a built-in warning against approving uncategorized entries.
-- **Nullable updates** — update tools accept `null` for clearable fields (`memo`, `payeeName`, `categoryId`, `flagColor`) to distinguish "don't change" (omit) from "clear this field" (`null`).
-- **Debt account support** — loan and debt accounts include `debt_original_balance`, `debt_interest_rates`, `debt_minimum_payments`, and `debt_escrow_amounts` with correct unit conversion (rates stay as percentages, payments convert from milliunits).
+- **Dollar amounts everywhere** - inputs and outputs are in dollars (`-12.34`), never milliunits (`-12340`). Conversion is automatic and transparent.
+- **Smart budget resolution** - set `YNAB_BUDGET_ID` for a default, or omit it to auto-resolve to your last-used budget. Every tool accepts an optional `budgetId` override.
+- **Split transactions** - first-class support for subtransactions in create, read, and format operations.
+- **Bulk operations** - `create_transactions` and `update_transactions` handle arrays in a single API call.
+- **Fetch-then-merge updates** - scheduled transaction updates (which use PUT semantics) automatically fetch the current state and merge your changes, so you only specify what changed.
+- **Fuzzy search** - `search_categories` and `search_payees` do case-insensitive partial matching across all entries.
+- **Approval workflow** - `review_unapproved` groups transactions into "ready to approve" (categorized, split, or transfer) and "needs attention" (uncategorized), with a built-in warning against approving uncategorized entries.
+- **Nullable updates** - update tools accept `null` for clearable fields (`memo`, `payeeName`, `categoryId`, `flagColor`) to distinguish "don't change" (omit) from "clear this field" (`null`).
+- **Target behavior support** - category create/update tools expose `goalNeedsWholeAmount` for YNAB's "Set aside another" vs. "Refill up to" goal behavior.
+- **Delta request support** - high-volume list tools accept `lastKnowledgeOfServer` and return `server_knowledge` when that parameter is provided.
+- **Debt account support** - loan and debt accounts include `debt_original_balance`, `debt_interest_rates`, `debt_minimum_payments`, and `debt_escrow_amounts` with correct unit conversion (rates stay as percentages, payments convert from milliunits).
 
 ---
 
@@ -227,7 +229,7 @@ That's it. Your AI can now talk to YNAB.
 | `get_transaction` | Get a single transaction by ID (includes subtransactions) |
 | `create_transaction` | Create a transaction with optional split (subtransactions must sum to total) |
 | `create_transactions` | Bulk create multiple transactions in a single API call (supports split transactions) |
-| `update_transaction` | Partial update — only specified fields change |
+| `update_transaction` | Partial update - only specified fields change |
 | `update_transactions` | Batch update multiple transactions at once |
 | `delete_transaction` | Delete a transaction |
 | `import_transactions` | Trigger import from linked bank accounts |
@@ -299,7 +301,7 @@ All amounts in tool inputs and outputs are in **dollars** (e.g., `-12.34` for a 
 
 ## Rate Limiting
 
-The YNAB API allows **200 requests per hour** per access token, enforced on a rolling window. Each tool call typically uses one API request (except `update_scheduled_transaction` which uses two — a GET to fetch current state, then a PUT to merge changes). The server surfaces rate limit errors as standard MCP error responses.
+The YNAB API allows **200 requests per hour** per access token, enforced on a rolling window. Each tool call typically uses one API request (except `update_scheduled_transaction` which uses two - a GET to fetch current state, then a PUT to merge changes). The server surfaces rate limit errors as standard MCP error responses.
 
 ---
 
@@ -323,13 +325,15 @@ The YNAB API allows **200 requests per hour** per access token, enforced on a ro
 
 ## Testing
 
-The test suite (43 tests) runs against a live YNAB budget. It creates test data and cleans up after itself:
+The integration test suite runs against a live YNAB budget. Most write tests create temporary transactions and delete or restore them, but category and category group creation is not reversible through the public API and is skipped unless explicitly enabled.
 
 ```bash
 YNAB_API_TOKEN=your-token YNAB_BUDGET_ID=your-budget-id npm test
 ```
 
-Tests cover all tool categories: reads, writes, bulk operations, search, split transactions, scheduled transaction CRUD with fetch-then-merge verification, category/group creation, money movements, and payee locations.
+Use `YNAB_TEST_BUDGET_ID` to target a dedicated test budget without changing your server default. To include category and category group creation coverage, run with `YNAB_RUN_NONREVERSIBLE_TESTS=1`.
+
+Tests cover all tool categories: reads, reversible writes, bulk operations, search, split transactions, scheduled transaction CRUD with fetch-then-merge verification, money movements, and payee locations.
 
 ---
 
@@ -344,8 +348,8 @@ YNAB_API_TOKEN=your-token npm start
 
 ### Dependencies
 
-- [`@modelcontextprotocol/sdk`](https://www.npmjs.com/package/@modelcontextprotocol/sdk) — MCP server framework
-- [`ynab`](https://www.npmjs.com/package/ynab) — Official YNAB JavaScript client
+- [`@modelcontextprotocol/sdk`](https://www.npmjs.com/package/@modelcontextprotocol/sdk) - MCP server framework
+- [`ynab`](https://www.npmjs.com/package/ynab) - Official YNAB JavaScript client
 
 Zero additional dependencies. No build step. Pure ESM.
 

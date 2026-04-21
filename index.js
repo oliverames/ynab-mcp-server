@@ -9,18 +9,22 @@ import * as ynab from "ynab";
 // --- Init ---
 
 let API_TOKEN = process.env.YNAB_API_TOKEN;
+let opLookupError;
 if (!API_TOKEN && process.env.YNAB_OP_PATH) {
   try {
     API_TOKEN = execFileSync(
       "op", ["read", process.env.YNAB_OP_PATH],
       { encoding: "utf-8", timeout: 10000, stdio: ["pipe", "pipe", "pipe"] }
     ).trim();
-  } catch {
-    // 1Password CLI unavailable or item not found at YNAB_OP_PATH
+  } catch (e) {
+    opLookupError = e.stderr?.toString().trim() || e.message || "unknown 1Password CLI error";
   }
 }
 if (!API_TOKEN) {
-  console.error("YNAB_API_TOKEN environment variable is required. Set YNAB_OP_PATH to enable 1Password CLI fallback (e.g. op://Vault/Item/credential).");
+  const opMessage = process.env.YNAB_OP_PATH
+    ? ` Could not read YNAB_OP_PATH via 1Password CLI: ${opLookupError}.`
+    : " Set YNAB_OP_PATH to enable 1Password CLI fallback (e.g. op://Vault/Item/credential).";
+  console.error(`YNAB_API_TOKEN environment variable is required.${opMessage}`);
   process.exit(1);
 }
 
@@ -43,6 +47,16 @@ function milliunits(dollars) {
 
 function dollarsMap(obj) {
   return obj ? Object.fromEntries(Object.entries(obj).map(([k, v]) => [k, dollars(v)])) : obj;
+}
+
+function withCurrencyFields(out, source, fields) {
+  for (const field of fields) {
+    const formatted = `${field}_formatted`;
+    const currency = `${field}_currency`;
+    if (formatted in source) out[formatted] = source[formatted];
+    if (currency in source) out[currency] = source[currency];
+  }
+  return out;
 }
 
 function mapTransactionInput(t) {
@@ -71,7 +85,7 @@ function mapTransactionInput(t) {
   return out;
 }
 
-// Sparse patch mapper for update_transaction / update_transactions — only includes fields that were explicitly provided
+// Sparse patch mapper for update_transaction / update_transactions - only includes fields that were explicitly provided
 function mapTransactionUpdate(t) {
   const out = {};
   if (t.accountId  !== undefined) out.account_id  = t.accountId;
@@ -91,6 +105,12 @@ function ok(data) {
   return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
 }
 
+function collection(data, key, items, lastKnowledgeOfServer) {
+  return lastKnowledgeOfServer === undefined
+    ? items
+    : { [key]: items, server_knowledge: data.server_knowledge };
+}
+
 async function run(fn) {
   try {
     return await fn();
@@ -106,14 +126,19 @@ async function run(fn) {
 
 // Direct API helper for endpoints not yet in the ynab SDK
 const BASE_URL = "https://api.ynab.com/v1";
-async function ynabFetch(path, { method = "GET", body } = {}) {
+async function ynabFetch(path, { method = "GET", body, query } = {}) {
+  const url = new URL(`${BASE_URL}${path}`);
+  for (const [key, value] of Object.entries(query || {})) {
+    if (value !== undefined && value !== null) url.searchParams.set(key, String(value));
+  }
   const opts = {
     method,
     headers: { Authorization: `Bearer ${API_TOKEN}`, "Content-Type": "application/json" },
   };
   if (body) opts.body = JSON.stringify(body);
-  const res = await fetch(`${BASE_URL}${path}`, opts);
-  const json = await res.json();
+  const res = await fetch(url, opts);
+  const text = await res.text();
+  const json = text ? JSON.parse(text) : {};
   if (!res.ok) {
     const err = new Error(json?.error?.detail || `HTTP ${res.status}`);
     err.error = json?.error;
@@ -212,16 +237,20 @@ function formatAccount(a) {
     deleted: a.deleted,
   };
   if ("note" in a) out.note = a.note;
-  return out;
+  return withCurrencyFields(out, a, ["balance", "cleared_balance", "uncleared_balance"]);
 }
 
 server.registerTool(
   "list_accounts",
-  { description: "List all accounts in a budget", inputSchema: { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") } },
-  ({ budgetId }) =>
+  { description: "List all accounts in a budget", inputSchema: {
+    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+    lastKnowledgeOfServer: z.number().int().nonnegative().optional().describe("Delta request server knowledge. When provided, returns { accounts, server_knowledge }."),
+  } },
+  ({ budgetId, lastKnowledgeOfServer }) =>
     run(async () => {
-      const { data } = await api.accounts.getAccounts(resolveBudgetId(budgetId));
-      return ok(data.accounts.map(formatAccount));
+      const { data } = await api.accounts.getAccounts(resolveBudgetId(budgetId), lastKnowledgeOfServer);
+      const accounts = data.accounts.map(formatAccount);
+      return ok(collection(data, "accounts", accounts, lastKnowledgeOfServer));
     })
 );
 
@@ -258,7 +287,7 @@ server.registerTool(
 // ==================== Categories ====================
 
 function formatCategory(c) {
-  return {
+  const out = {
     id: c.id,
     category_group_id: c.category_group_id,
     category_group_name: c.category_group_name,
@@ -275,6 +304,7 @@ function formatCategory(c) {
     goal_cadence_frequency: c.goal_cadence_frequency,
     goal_creation_month: c.goal_creation_month,
     goal_target: dollars(c.goal_target),
+    goal_target_month: c.goal_target_month,
     goal_target_date: c.goal_target_date,
     goal_percentage_complete: c.goal_percentage_complete,
     goal_months_to_budget: c.goal_months_to_budget,
@@ -282,34 +312,53 @@ function formatCategory(c) {
     goal_overall_funded: dollars(c.goal_overall_funded),
     goal_overall_left: dollars(c.goal_overall_left),
     goal_needs_whole_amount: c.goal_needs_whole_amount,
+    goal_snoozed_at: c.goal_snoozed_at,
     deleted: c.deleted,
   };
+  return withCurrencyFields(out, c, [
+    "budgeted",
+    "activity",
+    "balance",
+    "goal_target",
+    "goal_under_funded",
+    "goal_overall_funded",
+    "goal_overall_left",
+  ]);
 }
 
 server.registerTool(
   "list_categories",
-  { description: "List all category groups and their categories", inputSchema: { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") } },
-  ({ budgetId }) =>
+  { description: "List all category groups and their categories", inputSchema: {
+    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+    lastKnowledgeOfServer: z.number().int().nonnegative().optional().describe("Delta request server knowledge. When provided, returns { category_groups, server_knowledge }."),
+  } },
+  ({ budgetId, lastKnowledgeOfServer }) =>
     run(async () => {
-      const { data } = await api.categories.getCategories(resolveBudgetId(budgetId));
-      return ok(
-        data.category_groups.map((g) => ({
+      const { data } = await api.categories.getCategories(resolveBudgetId(budgetId), lastKnowledgeOfServer);
+      const categoryGroups = data.category_groups.map((g) => ({
           id: g.id,
           name: g.name,
           hidden: g.hidden,
           deleted: g.deleted,
-          categories: g.categories.map((c) => ({
-            id: c.id,
-            name: c.name,
-            hidden: c.hidden,
-            budgeted: dollars(c.budgeted),
-            activity: dollars(c.activity),
-            balance: dollars(c.balance),
-            goal_type: c.goal_type,
-            deleted: c.deleted,
-          })),
-        }))
-      );
+          categories: g.categories.map((c) =>
+            withCurrencyFields(
+              {
+                id: c.id,
+                name: c.name,
+                hidden: c.hidden,
+                budgeted: dollars(c.budgeted),
+                activity: dollars(c.activity),
+                balance: dollars(c.balance),
+                goal_type: c.goal_type,
+                goal_needs_whole_amount: c.goal_needs_whole_amount,
+                deleted: c.deleted,
+              },
+              c,
+              ["budgeted", "activity", "balance"]
+            )
+          ),
+        }));
+      return ok(collection(data, "category_groups", categoryGroups, lastKnowledgeOfServer));
     })
 );
 
@@ -367,8 +416,9 @@ server.registerTool(
     categoryGroupId: z.string().optional().describe("Move to a different category group"),
     goalTarget: z.number().nullable().optional().describe("Goal target amount in dollars (only if category already has a goal)"),
     goalTargetDate: z.string().nullable().optional().describe("Goal target date in ISO format (e.g. 2026-12-01, null to clear)"),
+    goalNeedsWholeAmount: z.boolean().nullable().optional().describe("For NEED goals, true uses 'Set aside another' behavior and false uses 'Refill up to' behavior"),
   } },
-  ({ budgetId, categoryId, name, note, categoryGroupId, goalTarget, goalTargetDate }) =>
+  ({ budgetId, categoryId, name, note, categoryGroupId, goalTarget, goalTargetDate, goalNeedsWholeAmount }) =>
     run(async () => {
       const cat = {};
       if (name !== undefined) cat.name = name;
@@ -376,9 +426,11 @@ server.registerTool(
       if (categoryGroupId !== undefined) cat.category_group_id = categoryGroupId;
       if (goalTarget !== undefined) cat.goal_target = goalTarget != null ? milliunits(goalTarget) : null;
       if (goalTargetDate !== undefined) cat.goal_target_date = goalTargetDate;
+      if (goalNeedsWholeAmount !== undefined) cat.goal_needs_whole_amount = goalNeedsWholeAmount;
 
-      const { data } = await api.categories.updateCategory(resolveBudgetId(budgetId), categoryId, {
-        category: cat,
+      const data = await ynabFetch(`/plans/${resolveBudgetId(budgetId)}/categories/${categoryId}`, {
+        method: "PATCH",
+        body: { category: cat },
       });
       return ok(formatCategory(data.category));
     })
@@ -393,15 +445,17 @@ server.registerTool(
     note: z.string().optional().describe("Category note"),
     goalTarget: z.number().optional().describe("Goal target amount in dollars (creates a 'Needed for Spending' goal)"),
     goalTargetDate: z.string().optional().describe("Goal target date in ISO format (e.g. 2026-12-01)"),
+    goalNeedsWholeAmount: z.boolean().optional().describe("For NEED goals, true uses 'Set aside another' behavior and false uses 'Refill up to' behavior"),
   } },
-  ({ budgetId, categoryGroupId, name, note, goalTarget, goalTargetDate }) =>
+  ({ budgetId, categoryGroupId, name, note, goalTarget, goalTargetDate, goalNeedsWholeAmount }) =>
     run(async () => {
       const bid = resolveBudgetId(budgetId);
       const cat = { category_group_id: categoryGroupId, name };
       if (note !== undefined) cat.note = note;
       if (goalTarget !== undefined) cat.goal_target = milliunits(goalTarget);
       if (goalTargetDate !== undefined) cat.goal_target_date = goalTargetDate;
-      const data = await ynabFetch(`/budgets/${bid}/categories`, {
+      if (goalNeedsWholeAmount !== undefined) cat.goal_needs_whole_amount = goalNeedsWholeAmount;
+      const data = await ynabFetch(`/plans/${bid}/categories`, {
         method: "POST",
         body: { category: cat },
       });
@@ -417,7 +471,7 @@ server.registerTool(
   } },
   ({ budgetId, name }) =>
     run(async () => {
-      const data = await ynabFetch(`/budgets/${resolveBudgetId(budgetId)}/category_groups`, {
+      const data = await ynabFetch(`/plans/${resolveBudgetId(budgetId)}/category_groups`, {
         method: "POST",
         body: { category_group: { name } },
       });
@@ -434,7 +488,7 @@ server.registerTool(
   } },
   ({ budgetId, categoryGroupId, name }) =>
     run(async () => {
-      const data = await ynabFetch(`/budgets/${resolveBudgetId(budgetId)}/category_groups/${categoryGroupId}`, {
+      const data = await ynabFetch(`/plans/${resolveBudgetId(budgetId)}/category_groups/${categoryGroupId}`, {
         method: "PATCH",
         body: { category_group: { name } },
       });
@@ -446,11 +500,15 @@ server.registerTool(
 
 server.registerTool(
   "list_payees",
-  { description: "List all payees", inputSchema: { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") } },
-  ({ budgetId }) =>
+  { description: "List all payees", inputSchema: {
+    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+    lastKnowledgeOfServer: z.number().int().nonnegative().optional().describe("Delta request server knowledge. When provided, returns { payees, server_knowledge }."),
+  } },
+  ({ budgetId, lastKnowledgeOfServer }) =>
     run(async () => {
-      const { data } = await api.payees.getPayees(resolveBudgetId(budgetId));
-      return ok(data.payees.map((p) => ({ id: p.id, name: p.name, transfer_account_id: p.transfer_account_id, deleted: p.deleted })));
+      const { data } = await api.payees.getPayees(resolveBudgetId(budgetId), lastKnowledgeOfServer);
+      const payees = data.payees.map((p) => ({ id: p.id, name: p.name, transfer_account_id: p.transfer_account_id, deleted: p.deleted }));
+      return ok(collection(data, "payees", payees, lastKnowledgeOfServer));
     })
 );
 
@@ -491,7 +549,7 @@ server.registerTool(
   } },
   ({ budgetId, name }) =>
     run(async () => {
-      const data = await ynabFetch(`/budgets/${resolveBudgetId(budgetId)}/payees`, {
+      const data = await ynabFetch(`/plans/${resolveBudgetId(budgetId)}/payees`, {
         method: "POST",
         body: { payee: { name } },
       });
@@ -541,22 +599,30 @@ server.registerTool(
 
 server.registerTool(
   "list_months",
-  { description: "List all budget months", inputSchema: { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") } },
-  ({ budgetId }) =>
+  { description: "List all budget months", inputSchema: {
+    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+    lastKnowledgeOfServer: z.number().int().nonnegative().optional().describe("Delta request server knowledge. When provided, returns { months, server_knowledge }."),
+  } },
+  ({ budgetId, lastKnowledgeOfServer }) =>
     run(async () => {
-      const { data } = await api.months.getBudgetMonths(resolveBudgetId(budgetId));
-      return ok(
-        data.months.map((m) => ({
-          month: m.month,
-          note: m.note,
-          income: dollars(m.income),
-          budgeted: dollars(m.budgeted),
-          activity: dollars(m.activity),
-          to_be_budgeted: dollars(m.to_be_budgeted),
-          age_of_money: m.age_of_money,
-          deleted: m.deleted,
-        }))
-      );
+      const { data } = await api.months.getBudgetMonths(resolveBudgetId(budgetId), lastKnowledgeOfServer);
+      const months = data.months.map((m) =>
+          withCurrencyFields(
+            {
+              month: m.month,
+              note: m.note,
+              income: dollars(m.income),
+              budgeted: dollars(m.budgeted),
+              activity: dollars(m.activity),
+              to_be_budgeted: dollars(m.to_be_budgeted),
+              age_of_money: m.age_of_money,
+              deleted: m.deleted,
+            },
+            m,
+            ["income", "budgeted", "activity", "to_be_budgeted"]
+          )
+        );
+      return ok(collection(data, "months", months, lastKnowledgeOfServer));
     })
 );
 
@@ -570,7 +636,7 @@ server.registerTool(
     run(async () => {
       const { data } = await api.months.getBudgetMonth(resolveBudgetId(budgetId), month);
       const m = data.month;
-      return ok({
+      const out = {
         month: m.month,
         note: m.note,
         income: dollars(m.income),
@@ -579,27 +645,38 @@ server.registerTool(
         to_be_budgeted: dollars(m.to_be_budgeted),
         age_of_money: m.age_of_money,
         deleted: m.deleted,
-        categories: m.categories?.map((c) => ({
-          id: c.id,
-          name: c.name,
-          hidden: c.hidden,
-          category_group_name: c.category_group_name,
-          budgeted: dollars(c.budgeted),
-          activity: dollars(c.activity),
-          balance: dollars(c.balance),
-          goal_type: c.goal_type,
-          goal_target: dollars(c.goal_target),
-          goal_under_funded: dollars(c.goal_under_funded),
-          deleted: c.deleted,
-        })),
-      });
+        categories: m.categories?.map((c) =>
+          withCurrencyFields(
+            {
+              id: c.id,
+              name: c.name,
+              hidden: c.hidden,
+              category_group_name: c.category_group_name,
+              budgeted: dollars(c.budgeted),
+              activity: dollars(c.activity),
+              balance: dollars(c.balance),
+              goal_type: c.goal_type,
+              goal_needs_whole_amount: c.goal_needs_whole_amount,
+              goal_target: dollars(c.goal_target),
+              goal_target_month: c.goal_target_month,
+              goal_target_date: c.goal_target_date,
+              goal_under_funded: dollars(c.goal_under_funded),
+              goal_snoozed_at: c.goal_snoozed_at,
+              deleted: c.deleted,
+            },
+            c,
+            ["budgeted", "activity", "balance", "goal_target", "goal_under_funded"]
+          )
+        ),
+      };
+      return ok(withCurrencyFields(out, m, ["income", "budgeted", "activity", "to_be_budgeted"]));
     })
 );
 
 // ==================== Money Movements ====================
 
 function formatMoneyMovement(m) {
-  return {
+  return withCurrencyFields({
     id: m.id,
     month: m.month,
     moved_at: m.moved_at,
@@ -610,7 +687,7 @@ function formatMoneyMovement(m) {
     to_category_id: m.to_category_id,
     amount: dollars(m.amount),
     deleted: m.deleted,
-  };
+  }, m, ["amount"]);
 }
 
 server.registerTool(
@@ -618,7 +695,7 @@ server.registerTool(
   { description: "List all money movements (budget re-allocations between categories)", inputSchema: { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") } },
   ({ budgetId }) =>
     run(async () => {
-      const data = await ynabFetch(`/budgets/${resolveBudgetId(budgetId)}/money_movements`);
+      const data = await ynabFetch(`/plans/${resolveBudgetId(budgetId)}/money_movements`);
       return ok(data.money_movements.map(formatMoneyMovement));
     })
 );
@@ -631,7 +708,7 @@ server.registerTool(
   } },
   ({ budgetId, month }) =>
     run(async () => {
-      const data = await ynabFetch(`/budgets/${resolveBudgetId(budgetId)}/months/${month}/money_movements`);
+      const data = await ynabFetch(`/plans/${resolveBudgetId(budgetId)}/months/${month}/money_movements`);
       return ok(data.money_movements.map(formatMoneyMovement));
     })
 );
@@ -641,7 +718,7 @@ server.registerTool(
   { description: "List all money movement groups (batches of related money movements)", inputSchema: { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") } },
   ({ budgetId }) =>
     run(async () => {
-      const data = await ynabFetch(`/budgets/${resolveBudgetId(budgetId)}/money_movement_groups`);
+      const data = await ynabFetch(`/plans/${resolveBudgetId(budgetId)}/money_movement_groups`);
       return ok(data.money_movement_groups);
     })
 );
@@ -654,7 +731,7 @@ server.registerTool(
   } },
   ({ budgetId, month }) =>
     run(async () => {
-      const data = await ynabFetch(`/budgets/${resolveBudgetId(budgetId)}/months/${month}/money_movement_groups`);
+      const data = await ynabFetch(`/plans/${resolveBudgetId(budgetId)}/months/${month}/money_movement_groups`);
       return ok(data.money_movement_groups);
     })
 );
@@ -662,43 +739,50 @@ server.registerTool(
 // ==================== Transactions ====================
 
 function formatTransaction(t) {
-  return {
+  const out = {
     id: t.id,
     date: t.date,
     amount: dollars(t.amount),
-    memo: t.memo,
+    memo: t.memo ?? null,
     cleared: t.cleared,
     approved: t.approved,
-    flag_color: t.flag_color,
-    flag_name: t.flag_name,
+    flag_color: t.flag_color ?? null,
+    flag_name: t.flag_name ?? null,
     account_id: t.account_id,
     account_name: t.account_name,
-    payee_id: t.payee_id,
-    payee_name: t.payee_name,
-    category_id: t.category_id,
-    category_name: t.category_name,
-    transfer_account_id: t.transfer_account_id,
-    transfer_transaction_id: t.transfer_transaction_id,
-    matched_transaction_id: t.matched_transaction_id,
-    import_id: t.import_id,
-    import_payee_name: t.import_payee_name,
-    import_payee_name_original: t.import_payee_name_original,
-    debt_transaction_type: t.debt_transaction_type,
+    payee_id: t.payee_id ?? null,
+    payee_name: t.payee_name ?? null,
+    category_id: t.category_id ?? null,
+    category_name: t.category_name ?? null,
+    transfer_account_id: t.transfer_account_id ?? null,
+    transfer_transaction_id: t.transfer_transaction_id ?? null,
+    matched_transaction_id: t.matched_transaction_id ?? null,
+    import_id: t.import_id ?? null,
+    import_payee_name: t.import_payee_name ?? null,
+    import_payee_name_original: t.import_payee_name_original ?? null,
+    debt_transaction_type: t.debt_transaction_type ?? null,
     deleted: t.deleted,
-    subtransactions: t.subtransactions?.map((s) => ({
-      id: s.id,
-      transaction_id: s.transaction_id,
-      amount: dollars(s.amount),
-      memo: s.memo,
-      payee_id: s.payee_id,
-      payee_name: s.payee_name,
-      category_id: s.category_id,
-      category_name: s.category_name,
-      transfer_account_id: s.transfer_account_id,
-      transfer_transaction_id: s.transfer_transaction_id,
-      deleted: s.deleted,
-    })),
+    subtransactions: t.subtransactions?.map((s) =>
+      withCurrencyFields(
+        {
+          id: s.id,
+          transaction_id: s.transaction_id,
+          amount: dollars(s.amount),
+          memo: s.memo ?? null,
+          payee_id: s.payee_id ?? null,
+          payee_name: s.payee_name ?? null,
+          category_id: s.category_id ?? null,
+          category_name: s.category_name ?? null,
+          transfer_account_id: s.transfer_account_id ?? null,
+          transfer_transaction_id: s.transfer_transaction_id ?? null,
+          deleted: s.deleted,
+        },
+        s,
+        ["amount"]
+      )
+    ),
   };
+  return withCurrencyFields(out, t, ["amount"]);
 }
 
 server.registerTool(
@@ -711,30 +795,36 @@ server.registerTool(
     categoryId: z.string().optional().describe("Filter by category ID"),
     payeeId: z.string().optional().describe("Filter by payee ID"),
     month: z.string().optional().describe("Filter by month (YYYY-MM-DD, first of month)"),
+    lastKnowledgeOfServer: z.number().int().nonnegative().optional().describe("Delta request server knowledge. When provided, returns { transactions, server_knowledge }."),
   } },
-  ({ budgetId, sinceDate, type, accountId, categoryId, payeeId, month }) =>
+  ({ budgetId, sinceDate, type, accountId, categoryId, payeeId, month, lastKnowledgeOfServer }) =>
     run(async () => {
       const bid = resolveBudgetId(budgetId);
       let transactions;
+      let data;
+      const resourceFilters = [accountId, categoryId, payeeId, month].filter((value) => value !== undefined && value !== null && value !== "");
+      if (resourceFilters.length > 1) {
+        throw new Error("Provide only one of accountId, categoryId, payeeId, or month.");
+      }
 
       if (accountId) {
-        const { data } = await api.transactions.getTransactionsByAccount(bid, accountId, sinceDate, type);
+        ({ data } = await api.transactions.getTransactionsByAccount(bid, accountId, sinceDate, type, lastKnowledgeOfServer));
         transactions = data.transactions;
       } else if (categoryId) {
-        const { data } = await api.transactions.getTransactionsByCategory(bid, categoryId, sinceDate, type);
+        ({ data } = await api.transactions.getTransactionsByCategory(bid, categoryId, sinceDate, type, lastKnowledgeOfServer));
         transactions = data.transactions;
       } else if (payeeId) {
-        const { data } = await api.transactions.getTransactionsByPayee(bid, payeeId, sinceDate, type);
+        ({ data } = await api.transactions.getTransactionsByPayee(bid, payeeId, sinceDate, type, lastKnowledgeOfServer));
         transactions = data.transactions;
       } else if (month) {
-        const { data } = await api.transactions.getTransactionsByMonth(bid, month, sinceDate, type);
+        ({ data } = await api.transactions.getTransactionsByMonth(bid, month, sinceDate, type, lastKnowledgeOfServer));
         transactions = data.transactions;
       } else {
-        const { data } = await api.transactions.getTransactions(bid, sinceDate, type);
+        ({ data } = await api.transactions.getTransactions(bid, sinceDate, type, lastKnowledgeOfServer));
         transactions = data.transactions;
       }
 
-      return ok(transactions.map(formatTransaction));
+      return ok(collection(data, "transactions", transactions.map(formatTransaction), lastKnowledgeOfServer));
     })
 );
 
@@ -753,7 +843,7 @@ server.registerTool(
 
 server.registerTool(
   "create_transaction",
-  { description: "Create a new transaction. Amounts are in dollars (positive for inflows, negative for outflows). Note: future-dated transactions cannot be created here — use create_scheduled_transaction instead.", inputSchema: {
+  { description: "Create a new transaction. Amounts are in dollars (positive for inflows, negative for outflows). Note: future-dated transactions cannot be created here - use create_scheduled_transaction instead.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     accountId: z.string().describe("Account ID"),
     date: z.string().describe("Transaction date (YYYY-MM-DD)"),
@@ -785,7 +875,7 @@ server.registerTool(
 
 server.registerTool(
   "create_transactions",
-  { description: "Create multiple transactions at once. Amounts are in dollars. Returns created transactions and any duplicate import IDs. Future-dated transactions are not supported — use create_scheduled_transaction instead.", inputSchema: {
+  { description: "Create multiple transactions at once. Amounts are in dollars. Returns created transactions and any duplicate import IDs. Future-dated transactions are not supported - use create_scheduled_transaction instead.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     transactions: z.array(z.object({
       accountId: z.string().describe("Account ID"),
@@ -906,45 +996,56 @@ server.registerTool(
 // ==================== Scheduled Transactions ====================
 
 function formatScheduledTransaction(t) {
-  return {
+  const out = {
     id: t.id,
     date_first: t.date_first,
     date_next: t.date_next,
     frequency: t.frequency,
     amount: dollars(t.amount),
-    memo: t.memo,
-    flag_color: t.flag_color,
-    flag_name: t.flag_name,
+    memo: t.memo ?? null,
+    flag_color: t.flag_color ?? null,
+    flag_name: t.flag_name ?? null,
     account_id: t.account_id,
     account_name: t.account_name,
-    payee_id: t.payee_id,
-    payee_name: t.payee_name,
-    category_id: t.category_id,
-    category_name: t.category_name,
-    transfer_account_id: t.transfer_account_id,
+    payee_id: t.payee_id ?? null,
+    payee_name: t.payee_name ?? null,
+    category_id: t.category_id ?? null,
+    category_name: t.category_name ?? null,
+    transfer_account_id: t.transfer_account_id ?? null,
     deleted: t.deleted,
-    subtransactions: t.subtransactions?.map((s) => ({
-      id: s.id,
-      scheduled_transaction_id: s.scheduled_transaction_id,
-      amount: dollars(s.amount),
-      memo: s.memo,
-      payee_id: s.payee_id,
-      payee_name: s.payee_name,
-      category_id: s.category_id,
-      category_name: s.category_name,
-      transfer_account_id: s.transfer_account_id,
-      deleted: s.deleted,
-    })),
+    subtransactions: t.subtransactions?.map((s) =>
+      withCurrencyFields(
+        {
+          id: s.id,
+          scheduled_transaction_id: s.scheduled_transaction_id,
+          amount: dollars(s.amount),
+          memo: s.memo ?? null,
+          payee_id: s.payee_id ?? null,
+          payee_name: s.payee_name ?? null,
+          category_id: s.category_id ?? null,
+          category_name: s.category_name ?? null,
+          transfer_account_id: s.transfer_account_id ?? null,
+          deleted: s.deleted,
+        },
+        s,
+        ["amount"]
+      )
+    ),
   };
+  return withCurrencyFields(out, t, ["amount"]);
 }
 
 server.registerTool(
   "list_scheduled_transactions",
-  { description: "List all scheduled (recurring) transactions", inputSchema: { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") } },
-  ({ budgetId }) =>
+  { description: "List all scheduled (recurring) transactions", inputSchema: {
+    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+    lastKnowledgeOfServer: z.number().int().nonnegative().optional().describe("Delta request server knowledge. When provided, returns { scheduled_transactions, server_knowledge }."),
+  } },
+  ({ budgetId, lastKnowledgeOfServer }) =>
     run(async () => {
-      const { data } = await api.scheduledTransactions.getScheduledTransactions(resolveBudgetId(budgetId));
-      return ok(data.scheduled_transactions.map(formatScheduledTransaction));
+      const { data } = await api.scheduledTransactions.getScheduledTransactions(resolveBudgetId(budgetId), lastKnowledgeOfServer);
+      const scheduledTransactions = data.scheduled_transactions.map(formatScheduledTransaction);
+      return ok(collection(data, "scheduled_transactions", scheduledTransactions, lastKnowledgeOfServer));
     })
 );
 
@@ -1012,7 +1113,7 @@ server.registerTool(
   ({ budgetId, scheduledTransactionId, accountId, date, frequency, amount, payeeId, payeeName, categoryId, memo, flagColor }) =>
     run(async () => {
       const bid = resolveBudgetId(budgetId);
-      // PUT replaces the full resource — fetch current values to merge with updates
+      // PUT replaces the full resource - fetch current values to merge with updates
       const { data: current } = await api.scheduledTransactions.getScheduledTransactionById(bid, scheduledTransactionId);
       const existing = current.scheduled_transaction;
 
@@ -1068,14 +1169,14 @@ server.registerTool(
         for (const c of g.categories) {
           if (c.hidden) continue;
           if (c.name.toLowerCase().includes(q)) {
-            matches.push({
+            matches.push(withCurrencyFields({
               id: c.id,
               name: c.name,
               group: g.name,
               budgeted: dollars(c.budgeted),
               activity: dollars(c.activity),
               balance: dollars(c.balance),
-            });
+            }, c, ["budgeted", "activity", "balance"]));
           }
         }
       }

@@ -20,13 +20,25 @@ NEW_VERSION=$(node -e "
                                   \`\${maj}.\${min}.\${pat+1}\`;
   console.log(v);
 ")
-echo "Bumping $BUMP → $NEW_VERSION"
+echo "Bumping $BUMP -> $NEW_VERSION"
 
 node -e "
   const fs = require('fs');
   const pkg = JSON.parse(fs.readFileSync('package.json','utf8'));
   pkg.version = '$NEW_VERSION';
   fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+
+  const lockPath = 'package-lock.json';
+  if (fs.existsSync(lockPath)) {
+    const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+    lock.name = pkg.name;
+    lock.version = pkg.version;
+    if (lock.packages && lock.packages['']) {
+      lock.packages[''].name = pkg.name;
+      lock.packages[''].version = pkg.version;
+    }
+    fs.writeFileSync(lockPath, JSON.stringify(lock, null, 2) + '\n');
+  }
 "
 
 # Verify publish contents

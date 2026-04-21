@@ -15,7 +15,11 @@
     "test": "node test.js"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.12.1",
-    "ynab": "^2.5.0"
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "ynab": "^2.5.0",
+    "zod": "^4.3.6"
+  },
+  "engines": {
+    "node": ">=18"
   }
 }
