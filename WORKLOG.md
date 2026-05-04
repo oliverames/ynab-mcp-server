@@ -1,5 +1,17 @@
 # Worklog
 
+## 2026-05-04 — v1.5.0: review_unapproved grouped by payee, get_overspent_categories
+
+**What changed**: Two connector improvements discovered during a live YNAB review session. (1) `review_unapproved` now groups `ready_to_approve` transactions by payee with per-group count and running total — makes it practical to confirm/approve per-payee group rather than sifting a flat 20-item list. (2) New `get_overspent_categories(month)` convenience tool returns only negative-balance categories sorted by severity with a total overspent amount — replaces the pattern of calling `get_month` and filtering 60+ categories manually. (3) Fixed `list_scheduled_transactions` description to clearly state that auto-imported recurring charges don't appear there.
+
+**Decisions made**: Kept `review_unapproved` response shape backward-compatible — `ready_to_approve.transactions` flat array replaced by `ready_to_approve.by_payee` groups. Skills and prompts that iterated the flat array will need to update, but this was the right call since per-payee review is the correct workflow. `get_overspent_categories` excludes "Internal Master Category" (Uncategorized, Ready to Assign) since those aren't real overspends.
+
+**Left off at**: Pushed v1.5.0. Plugin still needs to be republished (`./publish.sh`) to update the npm package — local connector is updated, installed cache is not yet bumped.
+
+**Open questions**: Should `review_unapproved` also surface unapproved positive transactions (income deposits not yet approved)? Currently only negative amounts are caught.
+
+---
+
 ## 2026-04-09 — v1.3.0: Generalize for public use, migrate to registerTool, add create_payee
 
 **What changed**: Overhauled the server for general public distribution. Made the 1Password fallback configurable via `YNAB_OP_PATH` env var (previously hardcoded to `op://Development/YNAB API Token/credential`). Migrated all 43 `server.tool()` calls to `server.registerTool()` — the new non-deprecated API that supports `outputSchema` and future MCP features. Added `create_payee` tool to cover `POST /budgets/:id/payees` from YNAB API v1.82 (was missing from the v1.79 local spec). Updated local OpenAPI spec to v1.82 from live api.ynab.com. Code quality: extracted `mapTransactionUpdate()` helper (removed duplication between `update_transaction` and `update_transactions`), single-pass partition in `review_unapproved`, simplified `resolveBudgetId`. Published as 1.3.0.
