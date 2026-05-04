@@ -151,7 +151,7 @@ async function ynabFetch(path, { method = "GET", body, query } = {}) {
 
 const server = new McpServer({
   name: "ynab-mcp-server",
-  version: "1.4.0",
+  version: "1.5.0",
 });
 
 // ==================== User & Budgets ====================
@@ -1037,7 +1037,7 @@ function formatScheduledTransaction(t) {
 
 server.registerTool(
   "list_scheduled_transactions",
-  { description: "List all scheduled (recurring) transactions", inputSchema: {
+  { description: "List all scheduled (recurring) transactions. NOTE: only manually-created recurring entries appear here — auto-imported recurring charges (subscriptions, utilities, insurance) are NOT included. Use prior-month transaction history to identify recurring charge timing instead.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     lastKnowledgeOfServer: z.number().int().nonnegative().optional().describe("Delta request server knowledge. When provided, returns { scheduled_transactions, server_knowledge }."),
   } },
@@ -1205,27 +1205,70 @@ server.registerTool(
 
 server.registerTool(
   "review_unapproved",
-  { description: "Get all unapproved transactions grouped by status: those already categorized (ready to approve) and those still uncategorized (need category first). Never approve uncategorized transactions without explicit user instruction.", inputSchema: { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") } },
+  { description: "Get all unapproved transactions grouped by payee so they can be confirmed and approved per group. Also separates uncategorized transactions (need category first) from categorized ones. Never approve uncategorized transactions without explicit user instruction.", inputSchema: { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") } },
   ({ budgetId }) =>
     run(async () => {
       const { data } = await api.transactions.getTransactions(resolveBudgetId(budgetId), undefined, "unapproved");
       const txns = data.transactions.map(formatTransaction);
       const isCategorized = (t) => (t.category_id && t.category_name !== "Uncategorized")
-        || (t.subtransactions && t.subtransactions.length > 0) // split transactions are categorized via subtransactions
-        || t.transfer_account_id; // transfers don't need categories
+        || (t.subtransactions && t.subtransactions.length > 0)
+        || t.transfer_account_id;
       const categorized = [], uncategorized = [];
       for (const t of txns) (isCategorized(t) ? categorized : uncategorized).push(t);
+
+      // Group categorized transactions by payee for easier per-group review
+      const byPayee = {};
+      for (const t of categorized) {
+        const key = t.payee_name || "Unknown Payee";
+        if (!byPayee[key]) byPayee[key] = { payee: key, category_name: t.category_name, transactions: [] };
+        byPayee[key].transactions.push(t);
+      }
+      const groups = Object.values(byPayee).map((g) => ({
+        ...g,
+        count: g.transactions.length,
+        total: g.transactions.reduce((sum, t) => sum + t.amount, 0),
+      }));
+
       return ok({
         total: txns.length,
         ready_to_approve: {
           count: categorized.length,
-          transactions: categorized,
+          by_payee: groups,
         },
         needs_category_first: {
           count: uncategorized.length,
           warning: "Do NOT approve these without assigning a category first",
           transactions: uncategorized,
         },
+      });
+    })
+);
+
+server.registerTool(
+  "get_overspent_categories",
+  { description: "Get all categories with a negative balance for a given month. Use this to find prior-month overspends that are silently reducing the current month's Ready to Assign.", inputSchema: {
+    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+    month: z.string().describe("Month in YYYY-MM-DD format (first of month)"),
+  } },
+  ({ budgetId, month }) =>
+    run(async () => {
+      const { data } = await api.months.getBudgetMonth(resolveBudgetId(budgetId), month);
+      const overspent = (data.month.categories || [])
+        .filter((c) => !c.deleted && c.balance < 0 && c.category_group_name !== "Internal Master Category")
+        .map((c) => ({
+          id: c.id,
+          name: c.name,
+          category_group_name: c.category_group_name,
+          budgeted: dollars(c.budgeted),
+          activity: dollars(c.activity),
+          balance: dollars(c.balance),
+        }))
+        .sort((a, b) => a.balance - b.balance);
+      return ok({
+        month,
+        overspent_count: overspent.length,
+        total_overspent: overspent.reduce((sum, c) => sum + c.balance, 0),
+        categories: overspent,
       });
     })
 );
