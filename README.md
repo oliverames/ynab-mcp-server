@@ -154,7 +154,7 @@ That's it. Your AI can now talk to YNAB.
 - **Bulk operations** - `create_transactions` and `update_transactions` handle arrays in a single API call.
 - **Fetch-then-merge updates** - scheduled transaction updates (which use PUT semantics) automatically fetch the current state and merge your changes, so you only specify what changed.
 - **Fuzzy search** - `search_categories` and `search_payees` do case-insensitive partial matching across all entries.
-- **Approval workflow** - `review_unapproved` groups transactions into "ready to approve" (categorized, split, or transfer) and "needs attention" (uncategorized), with a built-in warning against approving uncategorized entries.
+- **Approval workflow with anomaly flags** - `review_unapproved` groups transactions into "ready to approve" (categorized, split, or transfer) and "needs attention" (uncategorized), and attaches a `flags` array to each transaction surfacing anomalies: `manually_entered` (not bank-imported), `match_broken` (stale match reference), `scheduled_transaction_realized`, `new_payee`, `no_prior_amount_match` (novel amount for this payee), and `category_drift:was_X` (payee categorized differently in the prior 60 days). Group-level flags aggregate the union of all transaction flags.
 - **Nullable updates** - update tools accept `null` for clearable fields (`memo`, `payeeName`, `categoryId`, `flagColor`) to distinguish "don't change" (omit) from "clear this field" (`null`).
 - **Target behavior support** - category create/update tools expose `goalNeedsWholeAmount` for YNAB's "Set aside another" vs. "Refill up to" goal behavior.
 - **Delta request support** - high-volume list tools accept `lastKnowledgeOfServer` and return `server_knowledge` when that parameter is provided.
@@ -236,7 +236,7 @@ That's it. Your AI can now talk to YNAB.
 | Tool | Description |
 |------|-------------|
 | `get_transactions` | Get transactions with filters: by account, category, payee, month, or status (`unapproved`/`uncategorized`) |
-| `get_transaction` | Get a single transaction by ID (includes subtransactions) |
+| `get_transaction` | Get a single transaction by ID (includes subtransactions). Auto-handles composite scheduled-transaction IDs like `uuid_YYYY-MM-DD`. |
 | `create_transaction` | Create a transaction with optional split (subtransactions must sum to total) |
 | `create_transactions` | Bulk create multiple transactions in a single API call (supports split transactions) |
 | `update_transaction` | Partial update - only specified fields change |
@@ -260,7 +260,7 @@ That's it. Your AI can now talk to YNAB.
 
 | Tool | Description |
 |------|-------------|
-| `review_unapproved` | Get unapproved transactions grouped by readiness: "ready to approve" (categorized, split, or transfer) vs. "needs category first" (uncategorized). Includes a warning against blind approval. |
+| `review_unapproved` | Get unapproved transactions grouped by readiness: "ready to approve" (categorized, split, or transfer) vs. "needs category first" (uncategorized). Each transaction includes a `flags` array highlighting anomalies (manually_entered, match_broken, no_prior_amount_match, category_drift, new_payee, scheduled_transaction_realized) computed against 60 days of payee history. Includes a warning against blind approval. |
 
 ---
 

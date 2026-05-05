@@ -101,6 +101,12 @@ function mapTransactionUpdate(t) {
   return out;
 }
 
+// YNAB scheduled transactions that realize get composite IDs like `uuid_YYYY-MM-DD`.
+// Strip the date suffix so API lookups work correctly.
+function normalizeTransactionId(id) {
+  return id.replace(/_\d{4}-\d{2}-\d{2}$/, "");
+}
+
 function ok(data) {
   return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
 }
@@ -151,7 +157,7 @@ async function ynabFetch(path, { method = "GET", body, query } = {}) {
 
 const server = new McpServer({
   name: "ynab-mcp-server",
-  version: "1.5.0",
+  version: "1.6.0",
 });
 
 // ==================== User & Budgets ====================
@@ -830,13 +836,13 @@ server.registerTool(
 
 server.registerTool(
   "get_transaction",
-  { description: "Get a single transaction by ID", inputSchema: {
+  { description: "Get a single transaction by ID. Automatically handles composite scheduled-transaction IDs (e.g. uuid_YYYY-MM-DD).", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     transactionId: z.string().describe("Transaction ID"),
   } },
   ({ budgetId, transactionId }) =>
     run(async () => {
-      const { data } = await api.transactions.getTransactionById(resolveBudgetId(budgetId), transactionId);
+      const { data } = await api.transactions.getTransactionById(resolveBudgetId(budgetId), normalizeTransactionId(transactionId));
       return ok(formatTransaction(data.transaction));
     })
 );
@@ -1205,16 +1211,67 @@ server.registerTool(
 
 server.registerTool(
   "review_unapproved",
-  { description: "Get all unapproved transactions grouped by payee so they can be confirmed and approved per group. Also separates uncategorized transactions (need category first) from categorized ones. Never approve uncategorized transactions without explicit user instruction.", inputSchema: { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") } },
+  { description: "Get all unapproved transactions grouped by status: those already categorized (ready to approve) and those still uncategorized (need category first). Each transaction includes a 'flags' array: manually_entered (not bank-imported), match_broken (matched reference may be stale), scheduled_transaction_realized, new_payee (no transaction history for this payee), no_prior_amount_match (novel amount for this payee), category_drift:was_X (payee categorized differently before). Never approve uncategorized transactions without explicit user instruction.", inputSchema: { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") } },
   ({ budgetId }) =>
     run(async () => {
-      const { data } = await api.transactions.getTransactions(resolveBudgetId(budgetId), undefined, "unapproved");
-      const txns = data.transactions.map(formatTransaction);
+      const bid = resolveBudgetId(budgetId);
+
+      // Fetch unapproved transactions
+      const { data: unapprovedData } = await api.transactions.getTransactions(bid, undefined, "unapproved");
+      const txns = unapprovedData.transactions.map(formatTransaction);
+      const unapprovedIds = new Set(txns.map((t) => t.id));
+
+      // Fetch 60 days of approved history for context
+      const since60 = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const { data: histData } = await api.transactions.getTransactions(bid, since60);
+      const histTxns = histData.transactions.filter((t) => t.approved && !unapprovedIds.has(t.id));
+
+      // Build payee history lookups (using raw milliunits for history, convert to dollars for the set)
+      const payeeAmounts = {}; // payeeId -> Set of dollar amounts seen
+      const payeeCategories = {}; // payeeId -> Map of categoryId -> categoryName
+      for (const h of histTxns) {
+        if (!h.payee_id) continue;
+        const pid = h.payee_id;
+        const amt = dollars(h.amount);
+        const cid = h.category_id;
+        const cname = h.category_name;
+        if (!payeeAmounts[pid]) payeeAmounts[pid] = new Set();
+        payeeAmounts[pid].add(amt);
+        if (cid) {
+          if (!payeeCategories[pid]) payeeCategories[pid] = new Map();
+          payeeCategories[pid].set(cid, cname);
+        }
+      }
+
+      // Attach flags to each unapproved transaction
+      function flagTransaction(t) {
+        const flags = [];
+        const isTransfer = !!t.transfer_account_id;
+        if (!t.import_id && !isTransfer) flags.push("manually_entered");
+        if (t.matched_transaction_id && !t.import_id) flags.push("match_broken");
+        if (/_\d{4}-\d{2}-\d{2}$/.test(t.id)) flags.push("scheduled_transaction_realized");
+        if (t.payee_id) {
+          const hasHistory = !!payeeAmounts[t.payee_id];
+          if (!hasHistory) {
+            flags.push("new_payee");
+          } else {
+            if (!payeeAmounts[t.payee_id].has(t.amount)) flags.push("no_prior_amount_match");
+            if (t.category_id && payeeCategories[t.payee_id] && !payeeCategories[t.payee_id].has(t.category_id)) {
+              const priorNames = [...payeeCategories[t.payee_id].values()].join(", ");
+              flags.push(`category_drift:was_${priorNames}`);
+            }
+          }
+        }
+        return { ...t, flags };
+      }
+
+      const flaggedTxns = txns.map(flagTransaction);
+
       const isCategorized = (t) => (t.category_id && t.category_name !== "Uncategorized")
         || (t.subtransactions && t.subtransactions.length > 0)
         || t.transfer_account_id;
       const categorized = [], uncategorized = [];
-      for (const t of txns) (isCategorized(t) ? categorized : uncategorized).push(t);
+      for (const t of flaggedTxns) (isCategorized(t) ? categorized : uncategorized).push(t);
 
       // Group categorized transactions by payee for easier per-group review
       const byPayee = {};
@@ -1223,14 +1280,19 @@ server.registerTool(
         if (!byPayee[key]) byPayee[key] = { payee: key, category_name: t.category_name, transactions: [] };
         byPayee[key].transactions.push(t);
       }
-      const groups = Object.values(byPayee).map((g) => ({
-        ...g,
-        count: g.transactions.length,
-        total: g.transactions.reduce((sum, t) => sum + t.amount, 0),
-      }));
+      const groups = Object.values(byPayee).map((g) => {
+        // Aggregate flags across all transactions in the group (deduplicated)
+        const allFlags = [...new Set(g.transactions.flatMap((t) => t.flags))];
+        return {
+          ...g,
+          count: g.transactions.length,
+          total: g.transactions.reduce((sum, t) => sum + t.amount, 0),
+          flags: allFlags,
+        };
+      });
 
       return ok({
-        total: txns.length,
+        total: flaggedTxns.length,
         ready_to_approve: {
           count: categorized.length,
           by_payee: groups,
