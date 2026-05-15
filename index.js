@@ -793,7 +793,7 @@ function formatTransaction(t) {
 
 server.registerTool(
   "get_transactions",
-  { description: "Get transactions with optional filters. Use type='unapproved' or type='uncategorized' to filter. Optionally filter by account, category, payee, or month.", inputSchema: {
+  { description: "Get transactions with optional filters. Use type='unapproved' or type='uncategorized' to filter. Optionally filter by account, category, payee, or month. Each returned transaction includes 'import_payee_name_original' — the raw merchant string from the bank import (e.g. 'AplPay LS ONION RIVEMONTPELIER VT') — which encodes processor flag, merchant name (often longer than the cleaned payee_name), and city+state. This is the primary disambiguation field when payee_name is truncated or ambiguous. Note: large date ranges (6+ months on a busy budget) can return 50KB+ of data; narrow with categoryId/payeeId/month filters when possible.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     sinceDate: z.string().optional().describe("Only return transactions on or after this date (YYYY-MM-DD)"),
     type: z.enum(["unapproved", "uncategorized"]).optional().describe("Filter by approval/categorization status"),
@@ -956,7 +956,7 @@ server.registerTool(
 
 server.registerTool(
   "update_transactions",
-  { description: "Batch update multiple transactions. Each transaction object must include its id and the fields to update.", inputSchema: {
+  { description: "Batch update multiple transactions. Each transaction object must include its id and the fields to update. IMPORTANT: only use transaction IDs extracted from get_transactions / review_unapproved results — never compose IDs by hand (fabricated IDs return 'transaction does not exist in this budget' errors). For combined category+approval changes in one round trip, include both 'categoryId' and 'approved: true' in the same entry. The response returns the full updated transaction objects, which can exceed 50KB for batches over ~50 transactions; if the response overflows, the update still succeeded — verify by counting 'approved: true' occurrences in the saved result file.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     transactions: z
       .array(
@@ -1211,8 +1211,11 @@ server.registerTool(
 
 server.registerTool(
   "review_unapproved",
-  { description: "Get all unapproved transactions grouped by status: those already categorized (ready to approve) and those still uncategorized (need category first). Each transaction includes a 'flags' array: manually_entered (not bank-imported), match_broken (matched reference may be stale), scheduled_transaction_realized, new_payee (no transaction history for this payee), no_prior_amount_match (novel amount for this payee), category_drift:was_X (payee categorized differently before). Never approve uncategorized transactions without explicit user instruction.", inputSchema: { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") } },
-  ({ budgetId }) =>
+  { description: "Get all unapproved transactions grouped by status: those already categorized (ready to approve) and those still uncategorized (need category first). Each transaction includes a 'flags' array: manually_entered (not bank-imported), match_broken (matched reference is stale — CANNOT be fixed via this API, requires YNAB web/iOS UI), scheduled_transaction_realized, new_payee (no transaction history for this payee), no_prior_amount_match (novel amount for this payee), category_drift:was_X (payee categorized differently before). Never approve uncategorized transactions without explicit user instruction. For large budgets the full response can exceed 100KB; pass summary:true to get counts + by-payee aggregates without per-transaction detail.", inputSchema: {
+    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+    summary: z.boolean().optional().describe("If true, omit per-transaction details from the response and return only counts + by-payee aggregates (for both ready_to_approve and needs_category_first). Use this when the full unapproved queue is large; drill into specifics with get_transactions afterwards."),
+  } },
+  ({ budgetId, summary }) =>
     run(async () => {
       const bid = resolveBudgetId(budgetId);
 
@@ -1283,25 +1286,53 @@ server.registerTool(
       const groups = Object.values(byPayee).map((g) => {
         // Aggregate flags across all transactions in the group (deduplicated)
         const allFlags = [...new Set(g.transactions.flatMap((t) => t.flags))];
-        return {
-          ...g,
+        const base = {
+          payee: g.payee,
+          category_name: g.category_name,
           count: g.transactions.length,
           total: g.transactions.reduce((sum, t) => sum + t.amount, 0),
           flags: allFlags,
         };
+        return summary ? base : { ...base, transactions: g.transactions };
       });
+
+      // Build uncategorized payload — full transactions by default, by-payee aggregates when summary:true
+      const uncategorizedPayload = (() => {
+        if (!summary) return uncategorized;
+        const byPayeeUncat = {};
+        for (const t of uncategorized) {
+          const key = t.payee_name || "Unknown Payee";
+          if (!byPayeeUncat[key]) byPayeeUncat[key] = { payee_name: key, count: 0, total: 0, flags: new Set() };
+          byPayeeUncat[key].count += 1;
+          byPayeeUncat[key].total += t.amount;
+          for (const f of t.flags) byPayeeUncat[key].flags.add(f);
+        }
+        return Object.values(byPayeeUncat).map((g) => ({
+          payee_name: g.payee_name,
+          count: g.count,
+          total: g.total,
+          flags: [...g.flags],
+        }));
+      })();
+
+      const needsCategoryFirst = {
+        count: uncategorized.length,
+        warning: "Do NOT approve these without assigning a category first",
+      };
+      if (summary) {
+        needsCategoryFirst.payees = uncategorizedPayload;
+      } else {
+        needsCategoryFirst.transactions = uncategorizedPayload;
+      }
 
       return ok({
         total: flaggedTxns.length,
+        summary: !!summary,
         ready_to_approve: {
           count: categorized.length,
           by_payee: groups,
         },
-        needs_category_first: {
-          count: uncategorized.length,
-          warning: "Do NOT approve these without assigning a category first",
-          transactions: uncategorized,
-        },
+        needs_category_first: needsCategoryFirst,
       });
     })
 );
