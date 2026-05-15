@@ -277,6 +277,30 @@ await test("get_transaction (single)", async () => {
   if (!("import_id" in t)) throw new Error("import_id field missing from response");
 });
 
+await test("get_transaction (composite ID)", async () => {
+  const candidates = unapproved.length > 0
+    ? unapproved
+    : await call("get_transactions", { budgetId: bid, accountId: testAccountId });
+  const composite = candidates.find((t) => /_\d{4}-\d{2}-\d{2}$/.test(t.id));
+  if (!composite) {
+    console.log("    (no composite scheduled-transaction IDs present — both happy path and fallback path untested in this run)");
+    return;
+  }
+  const t = await call("get_transaction", { budgetId: bid, transactionId: composite.id });
+  if (t.resource_type === "scheduled_transaction") {
+    // Fallback path: underlying matched transaction has been deleted.
+    if (t.reason !== "composite_id_with_no_matched_transaction") throw new Error(`unexpected reason: ${t.reason}`);
+    if (t.requested_id !== composite.id) throw new Error("requested_id does not echo input");
+    if (!t.scheduled_transaction?.id) throw new Error("missing scheduled_transaction.id in fallback shape");
+    console.log(`    ✓ composite ID with stale match falls back to scheduled_transaction (${t.scheduled_transaction.id})`);
+  } else {
+    // Happy path: matched transaction still exists, composite ID resolves to a real transaction.
+    if (!t.id) throw new Error("no id on transaction response");
+    if (!("import_id" in t)) throw new Error("import_id field missing from response");
+    console.log(`    ✓ composite ID with live match resolves to a real transaction (${t.id})`);
+  }
+});
+
 // --- Transaction writes (idempotent: creates own test data, cleans up after) ---
 console.log("\n=== Transaction Write Operations ===");
 

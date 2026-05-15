@@ -157,7 +157,7 @@ async function ynabFetch(path, { method = "GET", body, query } = {}) {
 
 const server = new McpServer({
   name: "ynab-mcp-server",
-  version: "1.6.0",
+  version: "1.8.0",
 });
 
 // ==================== User & Budgets ====================
@@ -836,14 +836,41 @@ server.registerTool(
 
 server.registerTool(
   "get_transaction",
-  { description: "Get a single transaction by ID. Automatically handles composite scheduled-transaction IDs (e.g. uuid_YYYY-MM-DD).", inputSchema: {
+  { description: "Get a single transaction by ID. Automatically handles composite scheduled-transaction IDs (e.g. uuid_YYYY-MM-DD): the date suffix is stripped before the lookup. If a composite ID's underlying matched transaction has been deleted, falls back to returning the active scheduled-transaction template wrapped in a marker shape { resource_type: 'scheduled_transaction', reason: 'composite_id_with_no_matched_transaction', scheduled_transaction, requested_id } so callers can distinguish the two return shapes. Non-composite IDs preserve strict behavior: a 404 still surfaces as resource_not_found.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     transactionId: z.string().describe("Transaction ID"),
   } },
   ({ budgetId, transactionId }) =>
     run(async () => {
-      const { data } = await api.transactions.getTransactionById(resolveBudgetId(budgetId), normalizeTransactionId(transactionId));
-      return ok(formatTransaction(data.transaction));
+      const bid = resolveBudgetId(budgetId);
+      const normalizedId = normalizeTransactionId(transactionId);
+      const isComposite = /_\d{4}-\d{2}-\d{2}$/.test(transactionId);
+      try {
+        const { data } = await api.transactions.getTransactionById(bid, normalizedId);
+        return ok(formatTransaction(data.transaction));
+      } catch (e) {
+        // Only fall back for composite IDs on resource_not_found. Other errors
+        // (auth, rate limit, network) and non-composite not-founds bubble up unchanged.
+        if (!isComposite || e?.error?.name !== "resource_not_found") throw e;
+        try {
+          const { data } = await api.scheduledTransactions.getScheduledTransactionById(bid, normalizedId);
+          return ok({
+            resource_type: "scheduled_transaction",
+            reason: "composite_id_with_no_matched_transaction",
+            scheduled_transaction: formatScheduledTransaction(data.scheduled_transaction),
+            requested_id: transactionId,
+          });
+        } catch (e2) {
+          if (e2?.error?.name !== "resource_not_found") throw e2;
+          throw {
+            error: {
+              id: "404",
+              name: "resource_not_found",
+              detail: `Resource not found (tried transaction ${normalizedId} and scheduled transaction ${normalizedId}; both returned not-found)`,
+            },
+          };
+        }
+      }
     })
 );
 
