@@ -12,6 +12,7 @@
   ],
   "scripts": {
     "start": "node index.js",
+    "pretest": "[ -d node_modules ] || npm ci --silent --no-audit --no-fund",
     "test": "node test.js"
   },
   "dependencies": {

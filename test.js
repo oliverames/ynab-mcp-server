@@ -267,8 +267,11 @@ await test("get_transaction (single)", async () => {
   const candidates = unapproved.length > 0
     ? unapproved
     : await call("get_transactions", { budgetId: bid, accountId: testAccountId });
-  if (candidates.length === 0) throw new Error("no transactions to test");
-  const t = await call("get_transaction", { budgetId: bid, transactionId: candidates[0].id });
+  // Skip composite scheduled-transaction IDs (uuid_YYYY-MM-DD); their underlying
+  // matched transaction may have been deleted, leaving the entry unfetchable.
+  const target = candidates.find((t) => !/_\d{4}-\d{2}-\d{2}$/.test(t.id));
+  if (!target) throw new Error("no real transactions to test");
+  const t = await call("get_transaction", { budgetId: bid, transactionId: target.id });
   if (!t.id) throw new Error("no id");
   // Verify import_id field is present (even if null)
   if (!("import_id" in t)) throw new Error("import_id field missing from response");
