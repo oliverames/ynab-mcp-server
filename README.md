@@ -236,7 +236,7 @@ That's it. Your AI can now talk to YNAB.
 | Tool | Description |
 |------|-------------|
 | `get_transactions` | Get transactions with filters: by account, category, payee, month, or status (`unapproved`/`uncategorized`) |
-| `get_transaction` | Get a single transaction by ID (includes subtransactions). Auto-handles composite scheduled-transaction IDs like `uuid_YYYY-MM-DD`. |
+| `get_transaction` | Get a single transaction by ID (includes subtransactions). Auto-handles composite scheduled-transaction IDs like `uuid_YYYY-MM-DD`; if the underlying matched transaction has been deleted, falls back to returning the active scheduled template wrapped as `{ resource_type: "scheduled_transaction", ... }`. |
 | `create_transaction` | Create a transaction with optional split (subtransactions must sum to total) |
 | `create_transactions` | Bulk create multiple transactions in a single API call (supports split transactions) |
 | `update_transaction` | Partial update - only specified fields change |
