@@ -157,7 +157,7 @@ async function ynabFetch(path, { method = "GET", body, query } = {}) {
 
 const server = new McpServer({
   name: "ynab-mcp-server",
-  version: "1.8.0",
+  version: "1.8.1",
 });
 
 // ==================== User & Budgets ====================
@@ -1238,7 +1238,7 @@ server.registerTool(
 
 server.registerTool(
   "review_unapproved",
-  { description: "Get all unapproved transactions grouped by status: those already categorized (ready to approve) and those still uncategorized (need category first). Each transaction includes a 'flags' array: manually_entered (not bank-imported), match_broken (matched reference is stale — CANNOT be fixed via this API, requires YNAB web/iOS UI), scheduled_transaction_realized, new_payee (no transaction history for this payee), no_prior_amount_match (novel amount for this payee), category_drift:was_X (payee categorized differently before). Never approve uncategorized transactions without explicit user instruction. For large budgets the full response can exceed 100KB; pass summary:true to get counts + by-payee aggregates without per-transaction detail.", inputSchema: {
+  { description: "Get all unapproved transactions grouped by status: those already categorized (ready to approve) and those still uncategorized (need category first). Each transaction includes a 'flags' array: manually_entered (not bank-imported), match_broken (matched reference is stale — the `matched_transaction_id` field is read-only via this API; YNAB web/iOS UI is required to clear that link. The transaction itself remains fully mutable: you CAN approve, recategorize, and edit memo via update_transaction. The broken match persists as a cosmetic flag until the user resolves it in the UI.), scheduled_transaction_realized, new_payee (no transaction history for this payee), no_prior_amount_match (novel amount for this payee), category_drift:was_X (payee categorized differently before). Never approve uncategorized transactions without explicit user instruction. For large budgets the full response can exceed 100KB; pass summary:true to get counts + by-payee aggregates without per-transaction detail.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     summary: z.boolean().optional().describe("If true, omit per-transaction details from the response and return only counts + by-payee aggregates (for both ready_to_approve and needs_category_first). Use this when the full unapproved queue is large; drill into specifics with get_transactions afterwards."),
   } },
