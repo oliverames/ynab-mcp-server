@@ -1,5 +1,17 @@
 # Worklog
 
+## 2026-05-21 - Repair dependency bootstrap and mutable category test fixtures
+
+**What changed**: Fixed the `npm test` startup failure where Node could not resolve `ajv/dist/ajv.js` through `@modelcontextprotocol/sdk`. The local `node_modules/ajv` tree had been partially corrupted, with expected entry files landing outside the real `dist/` directory, and the old `pretest` guard skipped reinstalling because `node_modules/` existed. `package.json` now probes the MCP SDK import and falls back to `npm ci --silent --no-audit --no-fund` when dependencies are missing or broken. `package-lock.json` now matches the already-shipped `1.8.1` root version. The live YNAB tests also now select only visible non-internal categories for mutable category and transaction-write fixtures, and the category note round-trip restores the original note instead of clearing it unconditionally.
+
+**Decisions made**: Kept the bootstrap check targeted to the actual MCP SDK import rather than reinstalling on every test run. That catches the observed AJV resolution failure while keeping normal test runs faster. Did not bump the package version because this is a test/release-infrastructure repair for the existing `1.8.1` source state, not a server runtime behavior change.
+
+**Left off at**: `npm test` passed locally against the live budget with 40 passed, 0 failed, and 4 skipped. The composite scheduled-transaction fallback branch was not exercised in this run because no composite scheduled-transaction IDs were present in the current unapproved queue.
+
+**Open questions**: Still open from prior entries: consider an audit pass over tool descriptions for split-transaction limitations and any future YNAB SDK support for clearing matched-transaction links. Still open from v1.8.0: decide whether `get_transaction` should try `matched_transaction_id` as a third lookup for composite scheduled-transaction edge cases.
+
+---
+
 ## 2026-05-18 — v1.8.1: review_unapproved description correction for match_broken
 
 **What changed**: Corrected the `review_unapproved` tool description's `match_broken` flag explanation in index.js:1241. Prior wording — "CANNOT be fixed via this API, requires YNAB web/iOS UI" — conflated two distinct operations: clearing the stale `matched_transaction_id` field (which IS API-immutable — there's no schema input for it on `update_transaction`/`update_transactions`) versus approving, recategorizing, or editing the transaction (which is FULLY API-supported). The wording led at least one audit session to defer match_broken approvals to the web UI unnecessarily; surfaced 2026-05-18 during the May audit when an Apple Watch installment payment ($45.33) was held back from the approval batch despite the user having decoded what the charge was. Live API test confirmed `update_transaction({ approved: true })` succeeds on a match_broken transaction — only the `matched_transaction_id` link persists as a cosmetic flag. New description states: matched_transaction_id is the read-only field; the transaction itself remains fully mutable; broken match persists as cosmetic state until user resolves in UI.

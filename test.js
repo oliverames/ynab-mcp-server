@@ -97,17 +97,23 @@ for (const g of categories) {
   }
 }
 
-// Pick any visible, non-deleted category dynamically. No assumptions about budget structure.
+// Pick a visible, non-deleted user category dynamically. YNAB internal categories
+// can be read but reject update requests.
 let testCatId;
 let testCatName;
+let testCatOriginalNote;
 await test("get_category", async () => {
-  const found = categories.flatMap(g => g.categories).find(c => !c.hidden && !c.deleted);
-  if (!found) throw new Error("no visible category found in budget");
+  const found = categories
+    .filter(g => !g.hidden && !g.deleted && g.name !== "Internal Master Category")
+    .flatMap(g => g.categories)
+    .find(c => !c.hidden && !c.deleted);
+  if (!found) throw new Error("no visible mutable category found in budget");
   testCatId = found.id;
   testCatName = found.name;
   const c = await call("get_category", { budgetId: bid, categoryId: testCatId });
   if (!c.name) throw new Error("no category name");
   if (typeof c.budgeted !== "number") throw new Error("budgeted not converted to dollars");
+  testCatOriginalNote = c.note ?? null;
   // Verify no raw milliunits leak. Goal fields should be dollars or null.
   if (c.goal_target !== null && c.goal_target !== undefined && Math.abs(c.goal_target) > 100000) {
     throw new Error("goal_target appears to be in milliunits, not dollars");
@@ -125,7 +131,7 @@ await test("update_category (update note, verify round-trip)", async () => {
     const updated = await call("update_category", { budgetId: bid, categoryId: testCatId, note: marker });
     if (updated.note !== marker) throw new Error("note not updated");
   } finally {
-    await call("update_category", { budgetId: bid, categoryId: testCatId, note: null });
+    await call("update_category", { budgetId: bid, categoryId: testCatId, note: testCatOriginalNote });
   }
 });
 
@@ -304,9 +310,12 @@ await test("get_transaction (composite ID)", async () => {
 // --- Transaction writes (idempotent: creates own test data, cleans up after) ---
 console.log("\n=== Transaction Write Operations ===");
 
-// Pick any active category for testing
-const testCatForWrite = categories.flatMap(g => g.categories).find(c => !c.hidden);
-if (!testCatForWrite) throw new Error("no visible category for write tests");
+// Pick any active user category for testing.
+const testCatForWrite = categories
+  .filter(g => !g.hidden && !g.deleted && g.name !== "Internal Master Category")
+  .flatMap(g => g.categories)
+  .find(c => !c.hidden && !c.deleted);
+if (!testCatForWrite) throw new Error("no visible mutable category for write tests");
 
 let createdTxnId;
 await test("create_transaction", async () => {
@@ -357,7 +366,10 @@ await test("delete_transaction", async () => {
 });
 
 // Find a second category for split test
-const secondCat = categories.flatMap(g => g.categories).find(c => !c.hidden && c.id !== testCatForWrite.id);
+const secondCat = categories
+  .filter(g => !g.hidden && !g.deleted && g.name !== "Internal Master Category")
+  .flatMap(g => g.categories)
+  .find(c => !c.hidden && !c.deleted && c.id !== testCatForWrite.id);
 let splitTxnId;
 await test("create_transaction (split)", async () => {
   if (!secondCat) throw new Error("need 2 categories for split test");
