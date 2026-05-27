@@ -1,5 +1,15 @@
 # Worklog
 
+## 2026-05-27 - v1.8.2: smoke tests, release consistency, and MCPB release hygiene
+
+**What changed**: Added first-class MCP smoke-test scripts for listing tools and calling `review_unapproved` in summary mode through the official MCP SDK `StdioClientTransport`. Added a release consistency checker that verifies `package.json`, `package-lock.json`, `index.js`, README release links, README MCPB artifact references, and optionally npm `latest` all agree. Added an MCPB build script that stages a clean production bundle, installs runtime dependencies, writes a versioned MCPB manifest, and refuses to overwrite an existing artifact unless `--force` is passed. README now documents the smoke-test/debug path and release checks, and release references point at v1.8.2.
+
+**Decisions made**: Shipped this as patch v1.8.2 because the runtime API surface is unchanged; the fix is release/debug ergonomics and metadata consistency. Kept smoke output privacy-conscious by printing aggregate counts only for `review_unapproved`, not transaction details. Included `scripts/` and `assets/icon.png` in the npm package so published tarballs contain the documented debug helpers and MCPB asset source.
+
+**Left off at**: package metadata, server metadata, README links, and MCPB manifest all target 1.8.2. The release validation path is `npm run release:check`, `npm run smoke:list-tools`, `npm run smoke:review-unapproved`, `npm run build:mcpb`, `npm pack --dry-run`, publish, then `npm run release:check:registry`.
+
+---
+
 ## 2026-05-21 - Repair dependency bootstrap and mutable category test fixtures
 
 **What changed**: Fixed the `npm test` startup failure where Node could not resolve `ajv/dist/ajv.js` through `@modelcontextprotocol/sdk`. The local `node_modules/ajv` tree had been partially corrupted, with expected entry files landing outside the real `dist/` directory, and the old `pretest` guard skipped reinstalling because `node_modules/` existed. `package.json` now probes the MCP SDK import and falls back to `npm ci --silent --no-audit --no-fund` when dependencies are missing or broken. `package-lock.json` now matches the already-shipped `1.8.1` root version. The live YNAB tests also now select only visible non-internal categories for mutable category and transaction-write fixtures, and the category note round-trip restores the original note instead of clearing it unconditionally.

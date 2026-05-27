@@ -1,4 +1,5 @@
 node_modules/
+dist/
 .DS_Store
 open_api_spec.yaml
 .claude/

@@ -10,14 +10,14 @@
 </p>
 
 <p align="center">
-  <code>44 tools</code> &bull;
+  <code>45 tools</code> &bull;
   <code>100% API coverage</code> &bull;
   <code>YNAB API v1.83</code>
 </p>
 
 <p align="center">
   <a href="https://www.npmjs.com/package/@oliverames/ynab-mcp-server"><img src="https://img.shields.io/npm/v/%40oliverames%2Fynab-mcp-server?style=flat-square&color=f5a542" alt="npm"></a>
-  <a href="https://github.com/oliverames/ynab-mcp-server/releases/tag/v1.4.0"><img src="https://img.shields.io/github/v/release/oliverames/ynab-mcp-server?style=flat-square&color=f5a542&label=MCPB" alt="MCPB release"></a>
+  <a href="https://github.com/oliverames/ynab-mcp-server/releases/tag/v1.8.2"><img src="https://img.shields.io/github/v/release/oliverames/ynab-mcp-server?style=flat-square&color=f5a542&label=MCPB" alt="MCPB release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-f5a542?style=flat-square" alt="License"></a>
   <a href="https://www.buymeacoffee.com/oliverames"><img src="https://img.shields.io/badge/Buy_Me_a_Coffee-support-f5a542?style=flat-square&logo=buy-me-a-coffee&logoColor=white" alt="Buy Me a Coffee"></a>
 </p>
@@ -26,7 +26,7 @@
   <a href="#quick-start">Quick Start</a> &bull;
   <a href="#install-with-mcpb">MCPB Download</a> &bull;
   <a href="#what-you-can-do">What You Can Do</a> &bull;
-  <a href="#tools-reference">All 44 Tools</a> &bull;
+  <a href="#tools-reference">All 45 Tools</a> &bull;
   <a href="#environment-variables">Configuration</a>
 </p>
 
@@ -44,9 +44,9 @@ This server gives your AI assistant full access to YNAB's API, turning natural l
 
 ### Install with MCPB
 
-For Claude Desktop and other MCPB-compatible clients, download the local bundle from the [v1.4.0 release](https://github.com/oliverames/ynab-mcp-server/releases/tag/v1.4.0):
+For Claude Desktop and other MCPB-compatible clients, download the local bundle from the [v1.8.2 release](https://github.com/oliverames/ynab-mcp-server/releases/tag/v1.8.2):
 
-[Download `ynab-mcp-server-1.4.0.mcpb`](https://github.com/oliverames/ynab-mcp-server/releases/download/v1.4.0/ynab-mcp-server-1.4.0.mcpb)
+[Download `ynab-mcp-server-1.8.2.mcpb`](https://github.com/oliverames/ynab-mcp-server/releases/download/v1.8.2/ynab-mcp-server-1.8.2.mcpb)
 
 The bundle includes the YNAB favicon, production runtime dependencies, and setup prompts for your personal access token and optional default budget ID.
 
@@ -131,7 +131,7 @@ That's it. Your AI can now talk to YNAB.
 
 ## Features
 
-**Complete YNAB API v1.83 coverage** with 44 tools:
+**Complete YNAB API v1.83 coverage** with 45 tools:
 
 | Resource | Tools | Capabilities |
 |----------|-------|-------------|
@@ -144,7 +144,7 @@ That's it. Your AI can now talk to YNAB.
 | **Money Movements** | 4 | Budget re-allocation tracking |
 | **Transactions** | 8 | Full CRUD, bulk ops, split transactions, multi-filter |
 | **Scheduled Transactions** | 5 | Full CRUD for recurring transactions |
-| **Convenience** | 1 | Unapproved transaction review workflow |
+| **Convenience** | 2 | Unapproved transaction review and overspending checks |
 
 ### Design Decisions
 
@@ -261,6 +261,7 @@ That's it. Your AI can now talk to YNAB.
 | Tool | Description |
 |------|-------------|
 | `review_unapproved` | Get unapproved transactions grouped by readiness: "ready to approve" (categorized, split, or transfer) vs. "needs category first" (uncategorized). Each transaction includes a `flags` array highlighting anomalies (manually_entered, match_broken, no_prior_amount_match, category_drift, new_payee, scheduled_transaction_realized) computed against 60 days of payee history. Includes a warning against blind approval. |
+| `get_overspent_categories` | Get categories with negative balances for a month, useful for finding prior-month overspending that reduces the current month's Ready to Assign. |
 
 ---
 
@@ -345,6 +346,24 @@ Use `YNAB_TEST_BUDGET_ID` to target a dedicated test budget without changing you
 
 Tests cover all tool categories: reads, reversible writes, bulk operations, search, split transactions, scheduled transaction CRUD with fetch-then-merge verification, money movements, and payee locations.
 
+### MCP Smoke Tests
+
+Use the smoke tests when you need to prove the server is reachable over stdio without reconstructing a custom MCP client. These commands use the official MCP SDK client, the same transport shape used by normal MCP hosts, and require `YNAB_API_TOKEN` because this server validates credentials at startup.
+
+```bash
+YNAB_API_TOKEN=your-token YNAB_BUDGET_ID=your-budget-id npm run smoke:list-tools
+YNAB_API_TOKEN=your-token YNAB_BUDGET_ID=your-budget-id npm run smoke:review-unapproved
+```
+
+To test the package currently published to npm instead of the local checkout:
+
+```bash
+YNAB_API_TOKEN=your-token YNAB_BUDGET_ID=your-budget-id npm run smoke:list-tools -- --published
+YNAB_API_TOKEN=your-token YNAB_BUDGET_ID=your-budget-id npm run smoke:review-unapproved -- --published
+```
+
+`smoke:list-tools` verifies that high-value tools such as `review_unapproved`, `get_transactions`, `update_transactions`, `search_categories`, and `search_payees` are present. `smoke:review-unapproved` calls `review_unapproved` with `summary: true` and prints only aggregate counts.
+
 ---
 
 ## Development
@@ -362,6 +381,18 @@ YNAB_API_TOKEN=your-token npm start
 - [`ynab`](https://www.npmjs.com/package/ynab) - Official YNAB JavaScript client
 
 Zero additional dependencies. No build step. Pure ESM.
+
+### Release Checks
+
+Before publishing, run:
+
+```bash
+npm run release:check
+npm run build:mcpb
+npm pack --dry-run
+```
+
+After publishing, run `npm run release:check:registry` to verify the npm `latest` dist-tag, repo metadata, README release links, and MCPB artifact references all agree on the same version.
 
 ---
 

@@ -1,6 +1,6 @@
 {
   "name": "@oliverames/ynab-mcp-server",
-  "version": "1.8.1",
+  "version": "1.8.2",
   "description": "YNAB MCP server with full API coverage",
   "type": "module",
   "main": "index.js",
@@ -8,12 +8,19 @@
     "ynab-mcp-server": "index.js"
   },
   "files": [
-    "index.js"
+    "index.js",
+    "scripts/",
+    "assets/icon.png"
   ],
   "scripts": {
     "start": "node index.js",
     "pretest": "node --input-type=module -e \"await import('@modelcontextprotocol/sdk/client/index.js')\" >/dev/null 2>&1 || npm ci --silent --no-audit --no-fund",
-    "test": "node test.js"
+    "test": "node test.js",
+    "smoke:list-tools": "node scripts/smoke-list-tools.mjs",
+    "smoke:review-unapproved": "node scripts/smoke-review-unapproved.mjs",
+    "release:check": "node scripts/check-release-consistency.mjs",
+    "release:check:registry": "node scripts/check-release-consistency.mjs --registry",
+    "build:mcpb": "node scripts/build-mcpb.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

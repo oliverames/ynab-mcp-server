@@ -157,7 +157,7 @@ async function ynabFetch(path, { method = "GET", body, query } = {}) {
 
 const server = new McpServer({
   name: "ynab-mcp-server",
-  version: "1.8.1",
+  version: "1.8.2",
 });
 
 // ==================== User & Budgets ====================

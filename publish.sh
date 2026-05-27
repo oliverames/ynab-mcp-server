@@ -26,6 +26,7 @@ node -e "
   const fs = require('fs');
   const pkg = JSON.parse(fs.readFileSync('package.json','utf8'));
   pkg.version = '$NEW_VERSION';
+  pkg.files = [...new Set([...(pkg.files || []), 'scripts/', 'assets/icon.png'])];
   fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
 
   const lockPath = 'package-lock.json';
@@ -39,7 +40,24 @@ node -e "
     }
     fs.writeFileSync(lockPath, JSON.stringify(lock, null, 2) + '\n');
   }
+
+  const indexPath = 'index.js';
+  let index = fs.readFileSync(indexPath, 'utf8');
+  index = index.replace(/version: \"\\d+\\.\\d+\\.\\d+\"/, 'version: \"$NEW_VERSION\"');
+  fs.writeFileSync(indexPath, index);
+
+  const readmePath = 'README.md';
+  let readme = fs.readFileSync(readmePath, 'utf8');
+  readme = readme
+    .replace(/releases\\/tag\\/v\\d+\\.\\d+\\.\\d+/g, 'releases/tag/v$NEW_VERSION')
+    .replace(/releases\\/download\\/v\\d+\\.\\d+\\.\\d+/g, 'releases/download/v$NEW_VERSION')
+    .replace(/ynab-mcp-server-\\d+\\.\\d+\\.\\d+\\.mcpb/g, 'ynab-mcp-server-$NEW_VERSION.mcpb')
+    .replace(/\\[v\\d+\\.\\d+\\.\\d+ release\\]/g, '[v$NEW_VERSION release]');
+  fs.writeFileSync(readmePath, readme);
 "
+
+npm run release:check
+npm run build:mcpb
 
 # Verify publish contents
 echo "Verifying publish contents..."
@@ -49,6 +67,7 @@ npm pack --dry-run 2>&1
 echo ""
 echo "Publishing @oliverames/ynab-mcp-server@$NEW_VERSION..."
 npm publish --access public
+npm run release:check:registry
 
 echo ""
 echo "Done! Published @oliverames/ynab-mcp-server@$NEW_VERSION"
