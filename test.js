@@ -358,6 +358,45 @@ await test("update_transactions (batch update)", async () => {
   console.log(`    ✓ Batch updated ${result.updated.length} transaction(s)`);
 });
 
+await test("update_transactions (batch category + approve verifies persisted fields)", async () => {
+  let regressionTxnId;
+  try {
+    const created = await call("create_transaction", {
+      budgetId: bid,
+      accountId: testAccountId,
+      date: new Date().toISOString().slice(0, 10),
+      amount: -6.78,
+      payeeName: "MCP Batch Verify Test",
+      memo: "MCP batch category+approve regression - safe to delete",
+      approved: false,
+    });
+    regressionTxnId = created.id;
+
+    const result = await call("update_transactions", {
+      budgetId: bid,
+      transactions: [{
+        id: regressionTxnId,
+        categoryId: testCatForWrite.id,
+        approved: true,
+      }],
+    });
+    if (!result.verification) throw new Error("missing post-write verification metadata");
+    if (result.verification.checked !== 1) throw new Error(`expected 1 verified transaction, got ${result.verification.checked}`);
+    if (result.verification.failed?.length) throw new Error(`verification failures: ${JSON.stringify(result.verification.failed)}`);
+
+    const refetched = await call("get_transaction", { budgetId: bid, transactionId: regressionTxnId });
+    if (refetched.approved !== true) throw new Error("approval did not persist after batch update");
+    if (refetched.category_id !== testCatForWrite.id) {
+      throw new Error(`category did not persist after batch update: ${refetched.category_id}`);
+    }
+    console.log("    ✓ Batch category+approve verified by refetch");
+  } finally {
+    if (regressionTxnId) {
+      await call("delete_transaction", { budgetId: bid, transactionId: regressionTxnId });
+    }
+  }
+});
+
 await test("delete_transaction", async () => {
   if (!createdTxnId) throw new Error("no test transaction to delete");
   const t = await call("delete_transaction", { budgetId: bid, transactionId: createdTxnId });

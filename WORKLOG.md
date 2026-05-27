@@ -1,5 +1,15 @@
 # Worklog
 
+## 2026-05-27 - v1.8.3: verified bulk category+approval updates
+
+**What changed**: Hardened `update_transactions` against a live YNAB bulk API anomaly where `approved: true` persisted but `categoryId` did not. The tool now refetches every requested transaction after the bulk update, compares persisted fields against requested fields, retries mismatches once through `update_transaction`, and returns a `verification` block with `checked`, `retried`, and `failed` entries. If fields still do not match after retry, the tool returns an MCP error instead of silently reporting success. Added a live regression test that creates a temporary transaction, categorizes and approves it in a batch, refetches it, and asserts both fields persisted. Added `smoke:batch-verify` for the same stdio MCP path.
+
+**Decisions made**: Verification runs for every batch update, not only category+approval batches, because the safety cost of a few refetches is lower than the cost of silent financial data drift. The response still keeps the existing `updated` array, but it now contains verified/refetched transactions rather than trusting the initial bulk response. README guidance now states that `review_unapproved` counts are not a sufficient post-write check and documents transfer-pair ID churn after manual YNAB UI conversion.
+
+**Left off at**: package/server/README metadata target 1.8.3. The repo-side release can be cut after `npm test`, smoke scripts, MCPB build, and release checks pass. npm publishing remains dependent on a valid token with publish rights for `@oliverames/ynab-mcp-server`.
+
+---
+
 ## 2026-05-27 - v1.8.2: smoke tests, release consistency, and MCPB release hygiene
 
 **What changed**: Added first-class MCP smoke-test scripts for listing tools and calling `review_unapproved` in summary mode through the official MCP SDK `StdioClientTransport`. Added a release consistency checker that verifies `package.json`, `package-lock.json`, `index.js`, README release links, README MCPB artifact references, and optionally npm `latest` all agree. Added an MCPB build script that stages a clean production bundle, installs runtime dependencies, writes a versioned MCPB manifest, and refuses to overwrite an existing artifact unless `--force` is passed. README now documents the smoke-test/debug path and release checks, and release references point at v1.8.2.

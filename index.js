@@ -101,6 +101,89 @@ function mapTransactionUpdate(t) {
   return out;
 }
 
+const TRANSACTION_UPDATE_VERIFICATION_FIELDS = [
+  ["accountId", "account_id"],
+  ["date", "date"],
+  ["amount", "amount"],
+  ["payeeId", "payee_id"],
+  ["payeeName", "payee_name"],
+  ["categoryId", "category_id"],
+  ["memo", "memo"],
+  ["cleared", "cleared"],
+  ["approved", "approved"],
+  ["flagColor", "flag_color"],
+];
+
+function hasOwn(obj, key) {
+  return Object.prototype.hasOwnProperty.call(obj, key);
+}
+
+function updateFieldMatches(expected, actual) {
+  if (typeof expected === "number" && typeof actual === "number") {
+    return Math.abs(expected - actual) < 0.0001;
+  }
+  return Object.is(expected, actual);
+}
+
+function transactionUpdateMismatches(requested, actual) {
+  const mismatches = [];
+  for (const [inputField, outputField] of TRANSACTION_UPDATE_VERIFICATION_FIELDS) {
+    if (!hasOwn(requested, inputField)) continue;
+    const expected = requested[inputField] ?? null;
+    const actualValue = actual[outputField] ?? null;
+    if (!updateFieldMatches(expected, actualValue)) {
+      mismatches.push({
+        field: inputField,
+        expected,
+        actual: actualValue,
+      });
+    }
+  }
+  return mismatches;
+}
+
+async function getFormattedTransaction(budgetId, transactionId) {
+  const { data } = await api.transactions.getTransactionById(budgetId, normalizeTransactionId(transactionId));
+  return formatTransaction(data.transaction);
+}
+
+async function verifyBulkTransactionUpdates(budgetId, requestedUpdates) {
+  const verification = {
+    checked: requestedUpdates.length,
+    retried: [],
+    failed: [],
+  };
+  const verified = [];
+
+  for (const requested of requestedUpdates) {
+    let refetched = await getFormattedTransaction(budgetId, requested.id);
+    let mismatches = transactionUpdateMismatches(requested, refetched);
+
+    if (mismatches.length > 0) {
+      verification.retried.push({
+        id: requested.id,
+        mismatches,
+      });
+      const { data } = await api.transactions.updateTransaction(budgetId, requested.id, {
+        transaction: mapTransactionUpdate(requested),
+      });
+      refetched = formatTransaction(data.transaction);
+      mismatches = transactionUpdateMismatches(requested, refetched);
+    }
+
+    if (mismatches.length > 0) {
+      verification.failed.push({
+        id: requested.id,
+        mismatches,
+      });
+    }
+
+    verified.push(refetched);
+  }
+
+  return { verification, verified };
+}
+
 // YNAB scheduled transactions that realize get composite IDs like `uuid_YYYY-MM-DD`.
 // Strip the date suffix so API lookups work correctly.
 function normalizeTransactionId(id) {
@@ -157,7 +240,7 @@ async function ynabFetch(path, { method = "GET", body, query } = {}) {
 
 const server = new McpServer({
   name: "ynab-mcp-server",
-  version: "1.8.2",
+  version: "1.8.3",
 });
 
 // ==================== User & Budgets ====================
@@ -983,7 +1066,7 @@ server.registerTool(
 
 server.registerTool(
   "update_transactions",
-  { description: "Batch update multiple transactions. Each transaction object must include its id and the fields to update. IMPORTANT: only use transaction IDs extracted from get_transactions / review_unapproved results — never compose IDs by hand (fabricated IDs return 'transaction does not exist in this budget' errors). For combined category+approval changes in one round trip, include both 'categoryId' and 'approved: true' in the same entry. The response returns the full updated transaction objects, which can exceed 50KB for batches over ~50 transactions; if the response overflows, the update still succeeded — verify by counting 'approved: true' occurrences in the saved result file.", inputSchema: {
+  { description: "Batch update multiple transactions. Each transaction object must include its id and the fields to update. IMPORTANT: only use transaction IDs extracted from get_transactions / review_unapproved results — never compose IDs by hand (fabricated IDs return 'transaction does not exist in this budget' errors). For combined category+approval changes, include both 'categoryId' and 'approved: true' in the same entry. This tool refetches each transaction after the bulk update, verifies requested fields actually persisted, and retries mismatches once through single-transaction updates. Never trust review_unapproved counts alone after approving transactions; use this response's verification block or get_transaction to confirm fields.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     transactions: z
       .array(
@@ -1005,13 +1088,25 @@ server.registerTool(
   } },
   ({ budgetId, transactions: txns }) =>
     run(async () => {
+      const bid = resolveBudgetId(budgetId);
       const mapped = txns.map((t) => ({ id: t.id, ...mapTransactionUpdate(t) }));
-      const { data } = await api.transactions.updateTransactions(resolveBudgetId(budgetId), {
+      const { data } = await api.transactions.updateTransactions(bid, {
         transactions: mapped,
       });
+      const { verification, verified } = await verifyBulkTransactionUpdates(bid, txns);
+      if (verification.failed.length > 0) {
+        return {
+          content: [{
+            type: "text",
+            text: `Error: Bulk transaction update verification failed after retry: ${JSON.stringify(verification.failed, null, 2)}`,
+          }],
+          isError: true,
+        };
+      }
       return ok({
-        updated: data.transactions?.map(formatTransaction),
+        updated: verified,
         duplicate_import_ids: data.duplicate_import_ids,
+        verification,
       });
     })
 );

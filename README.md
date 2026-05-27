@@ -17,7 +17,7 @@
 
 <p align="center">
   <a href="https://www.npmjs.com/package/@oliverames/ynab-mcp-server"><img src="https://img.shields.io/npm/v/%40oliverames%2Fynab-mcp-server?style=flat-square&color=f5a542" alt="npm"></a>
-  <a href="https://github.com/oliverames/ynab-mcp-server/releases/tag/v1.8.2"><img src="https://img.shields.io/github/v/release/oliverames/ynab-mcp-server?style=flat-square&color=f5a542&label=MCPB" alt="MCPB release"></a>
+  <a href="https://github.com/oliverames/ynab-mcp-server/releases/tag/v1.8.3"><img src="https://img.shields.io/github/v/release/oliverames/ynab-mcp-server?style=flat-square&color=f5a542&label=MCPB" alt="MCPB release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-f5a542?style=flat-square" alt="License"></a>
   <a href="https://www.buymeacoffee.com/oliverames"><img src="https://img.shields.io/badge/Buy_Me_a_Coffee-support-f5a542?style=flat-square&logo=buy-me-a-coffee&logoColor=white" alt="Buy Me a Coffee"></a>
 </p>
@@ -44,9 +44,9 @@ This server gives your AI assistant full access to YNAB's API, turning natural l
 
 ### Install with MCPB
 
-For Claude Desktop and other MCPB-compatible clients, download the local bundle from the [v1.8.2 release](https://github.com/oliverames/ynab-mcp-server/releases/tag/v1.8.2):
+For Claude Desktop and other MCPB-compatible clients, download the local bundle from the [v1.8.3 release](https://github.com/oliverames/ynab-mcp-server/releases/tag/v1.8.3):
 
-[Download `ynab-mcp-server-1.8.2.mcpb`](https://github.com/oliverames/ynab-mcp-server/releases/download/v1.8.2/ynab-mcp-server-1.8.2.mcpb)
+[Download `ynab-mcp-server-1.8.3.mcpb`](https://github.com/oliverames/ynab-mcp-server/releases/download/v1.8.3/ynab-mcp-server-1.8.3.mcpb)
 
 The bundle includes the YNAB favicon, production runtime dependencies, and setup prompts for your personal access token and optional default budget ID.
 
@@ -152,6 +152,7 @@ That's it. Your AI can now talk to YNAB.
 - **Smart budget resolution** - set `YNAB_BUDGET_ID` for a default, or omit it to auto-resolve to your last-used budget. Every tool accepts an optional `budgetId` override.
 - **Split transactions** - first-class support for subtransactions in create, read, and format operations.
 - **Bulk operations** - `create_transactions` and `update_transactions` handle arrays in a single API call.
+- **Verified batch updates** - `update_transactions` refetches every requested transaction after the bulk API call, retries mismatched fields once through `update_transaction`, and returns a `verification` block so approval counts cannot hide failed category writes.
 - **Fetch-then-merge updates** - scheduled transaction updates (which use PUT semantics) automatically fetch the current state and merge your changes, so you only specify what changed.
 - **Fuzzy search** - `search_categories` and `search_payees` do case-insensitive partial matching across all entries.
 - **Approval workflow with anomaly flags** - `review_unapproved` groups transactions into "ready to approve" (categorized, split, or transfer) and "needs attention" (uncategorized), and attaches a `flags` array to each transaction surfacing anomalies: `manually_entered` (not bank-imported), `match_broken` (stale match reference), `scheduled_transaction_realized`, `new_payee`, `no_prior_amount_match` (novel amount for this payee), and `category_drift:was_X` (payee categorized differently in the prior 60 days). Group-level flags aggregate the union of all transaction flags.
@@ -240,7 +241,7 @@ That's it. Your AI can now talk to YNAB.
 | `create_transaction` | Create a transaction with optional split (subtransactions must sum to total) |
 | `create_transactions` | Bulk create multiple transactions in a single API call (supports split transactions) |
 | `update_transaction` | Partial update - only specified fields change |
-| `update_transactions` | Batch update multiple transactions at once |
+| `update_transactions` | Batch update multiple transactions at once, then refetch and verify requested fields persisted |
 | `delete_transaction` | Delete a transaction |
 | `import_transactions` | Trigger import from linked bank accounts |
 
@@ -262,6 +263,34 @@ That's it. Your AI can now talk to YNAB.
 |------|-------------|
 | `review_unapproved` | Get unapproved transactions grouped by readiness: "ready to approve" (categorized, split, or transfer) vs. "needs category first" (uncategorized). Each transaction includes a `flags` array highlighting anomalies (manually_entered, match_broken, no_prior_amount_match, category_drift, new_payee, scheduled_transaction_realized) computed against 60 days of payee history. Includes a warning against blind approval. |
 | `get_overspent_categories` | Get categories with negative balances for a month, useful for finding prior-month overspending that reduces the current month's Ready to Assign. |
+
+---
+
+## Workflow Safety Notes
+
+### Batch Updates
+
+When a batch operation categorizes and approves transactions at the same time, do not use `review_unapproved` counts as the only success check. Approved transactions leave the review queue even if a category write failed, so queue counts can hide approved-but-still-uncategorized transactions.
+
+`update_transactions` now protects this path by refetching every requested transaction after the bulk API call and comparing the persisted fields with the requested fields. If anything differs, it retries that transaction once through `update_transaction`. The response includes:
+
+```json
+{
+  "verification": {
+    "checked": 1,
+    "retried": [],
+    "failed": []
+  }
+}
+```
+
+Treat any `failed` entry as a real write failure and inspect the named transaction with `get_transaction`.
+
+### Credit Card Payment Transfers
+
+If two unapproved transactions are clearly a credit card payment plus the matching checking-account outflow, convert them into a transfer before approval. Approving both sides as ordinary categorized transactions preserves the wrong structure and creates cleanup work.
+
+Manual YNAB transfer fixes can replace one side of the pair with a new transaction ID. Read-only verification should not assume both original IDs survive. If one old ID returns `resource_not_found`, inspect recent activity in both involved accounts and verify the pair by `transfer_transaction_id` cross-links.
 
 ---
 
@@ -353,6 +382,7 @@ Use the smoke tests when you need to prove the server is reachable over stdio wi
 ```bash
 YNAB_API_TOKEN=your-token YNAB_BUDGET_ID=your-budget-id npm run smoke:list-tools
 YNAB_API_TOKEN=your-token YNAB_BUDGET_ID=your-budget-id npm run smoke:review-unapproved
+YNAB_API_TOKEN=your-token YNAB_BUDGET_ID=your-budget-id npm run smoke:batch-verify
 ```
 
 To test the package currently published to npm instead of the local checkout:
@@ -360,9 +390,10 @@ To test the package currently published to npm instead of the local checkout:
 ```bash
 YNAB_API_TOKEN=your-token YNAB_BUDGET_ID=your-budget-id npm run smoke:list-tools -- --published
 YNAB_API_TOKEN=your-token YNAB_BUDGET_ID=your-budget-id npm run smoke:review-unapproved -- --published
+YNAB_API_TOKEN=your-token YNAB_BUDGET_ID=your-budget-id npm run smoke:batch-verify -- --published
 ```
 
-`smoke:list-tools` verifies that high-value tools such as `review_unapproved`, `get_transactions`, `update_transactions`, `search_categories`, and `search_payees` are present. `smoke:review-unapproved` calls `review_unapproved` with `summary: true` and prints only aggregate counts.
+`smoke:list-tools` verifies that high-value tools such as `review_unapproved`, `get_transactions`, `update_transactions`, `search_categories`, and `search_payees` are present. `smoke:review-unapproved` calls `review_unapproved` with `summary: true` and prints only aggregate counts. `smoke:batch-verify` creates a temporary transaction, uses `update_transactions` to categorize and approve it in one call, refetches it through the MCP server, and deletes it afterward.
 
 ---
 
