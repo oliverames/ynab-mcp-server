@@ -4,7 +4,11 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 const transport = new StdioClientTransport({
   command: "node",
   args: ["index.js"],
-  env: { ...process.env },
+  env: {
+    ...process.env,
+    YNAB_ALLOW_WRITES: "1",
+    YNAB_RATE_LIMIT_PER_HOUR: "0",
+  },
 });
 
 const client = new Client({ name: "test", version: "1.0.0" });

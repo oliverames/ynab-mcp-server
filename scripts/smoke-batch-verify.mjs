@@ -4,6 +4,10 @@ import { parseSmokeOptions, parseTextToolResult, withSmokeClient } from "./lib/s
 
 const options = parseSmokeOptions();
 
+if (process.env.YNAB_ALLOW_WRITES !== "1") {
+  throw new Error("smoke:batch-verify creates, updates, and deletes a transaction. Re-run with YNAB_ALLOW_WRITES=1.");
+}
+
 function today() {
   return new Date().toISOString().slice(0, 10);
 }

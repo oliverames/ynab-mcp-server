@@ -77,6 +77,7 @@ writeJson("manifest.json", {
       env: {
         YNAB_API_TOKEN: "${user_config.ynab_api_token}",
         YNAB_BUDGET_ID: "${user_config.ynab_budget_id}",
+        YNAB_ALLOW_WRITES: "${user_config.ynab_allow_writes}",
       },
     },
   },
@@ -103,6 +104,13 @@ writeJson("manifest.json", {
       title: "Default Budget ID",
       description: "Optional default budget ID. Leave blank to use YNAB's last-used budget.",
       required: false,
+    },
+    ynab_allow_writes: {
+      type: "string",
+      title: "Enable Write Tools",
+      description: "Set to 1 to expose tools that create, update, import, or delete YNAB data. Leave blank or set to 0 for read-only mode.",
+      required: false,
+      default: "0",
     },
   },
 });

@@ -5,17 +5,18 @@ import { parseSmokeOptions, withSmokeClient } from "./lib/smoke-client.mjs";
 const requiredTools = [
   "review_unapproved",
   "get_transactions",
-  "update_transactions",
   "search_categories",
   "search_payees",
 ];
 
 const options = parseSmokeOptions();
+const requiredWriteTools = process.env.YNAB_ALLOW_WRITES === "1" ? ["update_transactions"] : [];
 
 await withSmokeClient(options, async (client, params) => {
   const result = await client.listTools();
   const toolNames = result.tools.map((tool) => tool.name).sort();
-  const missing = requiredTools.filter((name) => !toolNames.includes(name));
+  const expectedTools = [...requiredTools, ...requiredWriteTools];
+  const missing = expectedTools.filter((name) => !toolNames.includes(name));
 
   if (missing.length > 0) {
     throw new Error(`Missing expected YNAB tools: ${missing.join(", ")}`);
@@ -23,5 +24,5 @@ await withSmokeClient(options, async (client, params) => {
 
   console.log(`Connected to ${params.label}`);
   console.log(`Listed ${toolNames.length} tools`);
-  console.log(`Required tools present: ${requiredTools.join(", ")}`);
+  console.log(`Required tools present: ${expectedTools.join(", ")}`);
 });

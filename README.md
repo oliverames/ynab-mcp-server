@@ -6,18 +6,18 @@
 
 <p align="center">
   <strong>The complete Model Context Protocol server for YNAB</strong><br>
-  <em>Give your AI assistant full access to your budget</em>
+  <em>Give your AI assistant read-only budget access by default, with explicit write opt-in</em>
 </p>
 
 <p align="center">
-  <code>45 tools</code> &bull;
+  <code>45 tools with writes enabled</code> &bull;
   <code>100% API coverage</code> &bull;
   <code>YNAB API v1.83</code>
 </p>
 
 <p align="center">
   <a href="https://www.npmjs.com/package/@oliverames/ynab-mcp-server"><img src="https://img.shields.io/npm/v/%40oliverames%2Fynab-mcp-server?style=flat-square&color=f5a542" alt="npm"></a>
-  <a href="https://github.com/oliverames/ynab-mcp-server/releases/tag/v1.8.3"><img src="https://img.shields.io/github/v/release/oliverames/ynab-mcp-server?style=flat-square&color=f5a542&label=MCPB" alt="MCPB release"></a>
+  <a href="https://github.com/oliverames/ynab-mcp-server/releases/tag/v2.0.0"><img src="https://img.shields.io/github/v/release/oliverames/ynab-mcp-server?style=flat-square&color=f5a542&label=MCPB" alt="MCPB release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-f5a542?style=flat-square" alt="License"></a>
   <a href="https://www.buymeacoffee.com/oliverames"><img src="https://img.shields.io/badge/Buy_Me_a_Coffee-support-f5a542?style=flat-square&logo=buy-me-a-coffee&logoColor=white" alt="Buy Me a Coffee"></a>
 </p>
@@ -26,7 +26,7 @@
   <a href="#quick-start">Quick Start</a> &bull;
   <a href="#install-with-mcpb">MCPB Download</a> &bull;
   <a href="#what-you-can-do">What You Can Do</a> &bull;
-  <a href="#tools-reference">All 45 Tools</a> &bull;
+  <a href="#tools-reference">Tools Reference</a> &bull;
   <a href="#environment-variables">Configuration</a>
 </p>
 
@@ -36,7 +36,7 @@
 
 YNAB's budgeting philosophy works best when you interact with your budget frequently - but the app interface isn't designed for quick queries or bulk operations. "How much did I spend on groceries this month?" shouldn't require navigating three screens. "Categorize all my Amazon orders from this week" shouldn't be a manual, one-by-one process.
 
-This server gives your AI assistant full access to YNAB's API, turning natural language into budget operations. All monetary values are automatically converted between dollars and YNAB's internal milliunits format so the AI never has to think about it. Built on the [official YNAB JavaScript SDK](https://github.com/ynab/ynab-sdk-js) with direct API calls for the newest endpoints (category creation, category groups, money movements) that the SDK hasn't caught up with yet.
+This server gives your AI assistant a safe interface to YNAB's API, turning natural language into budget review and, when explicitly enabled, budget operations. All monetary values are automatically converted between dollars and YNAB's internal milliunits format so the AI never has to think about it. Built on the [official YNAB JavaScript SDK](https://github.com/ynab/ynab-sdk-js) with direct API calls for the newest endpoints (category creation, category groups, money movements) that the SDK hasn't caught up with yet.
 
 ---
 
@@ -44,11 +44,11 @@ This server gives your AI assistant full access to YNAB's API, turning natural l
 
 ### Install with MCPB
 
-For Claude Desktop and other MCPB-compatible clients, download the local bundle from the [v1.8.3 release](https://github.com/oliverames/ynab-mcp-server/releases/tag/v1.8.3):
+For Claude Desktop and other MCPB-compatible clients, download the local bundle from the [v2.0.0 release](https://github.com/oliverames/ynab-mcp-server/releases/tag/v2.0.0):
 
-[Download `ynab-mcp-server-1.8.3.mcpb`](https://github.com/oliverames/ynab-mcp-server/releases/download/v1.8.3/ynab-mcp-server-1.8.3.mcpb)
+[Download `ynab-mcp-server-2.0.0.mcpb`](https://github.com/oliverames/ynab-mcp-server/releases/download/v2.0.0/ynab-mcp-server-2.0.0.mcpb)
 
-The bundle includes the YNAB favicon, production runtime dependencies, and setup prompts for your personal access token and optional default budget ID.
+The bundle includes the YNAB favicon, production runtime dependencies, and setup prompts for your personal access token, optional default budget ID, and optional write-tool opt-in.
 
 ### 1. Get a YNAB Personal Access Token
 
@@ -110,6 +110,23 @@ npm install -g @oliverames/ynab-mcp-server
 
 That's it. Your AI can now talk to YNAB.
 
+By default, the server registers read-only tools only. To expose tools that create, update, import, or delete YNAB data, add `YNAB_ALLOW_WRITES=1` to the MCP server environment:
+
+```json
+{
+  "mcpServers": {
+    "ynab": {
+      "command": "npx",
+      "args": ["-y", "@oliverames/ynab-mcp-server"],
+      "env": {
+        "YNAB_API_TOKEN": "your-token-here",
+        "YNAB_ALLOW_WRITES": "1"
+      }
+    }
+  }
+}
+```
+
 ---
 
 ## What You Can Do
@@ -131,7 +148,7 @@ That's it. Your AI can now talk to YNAB.
 
 ## Features
 
-**Complete YNAB API v1.83 coverage** with 45 tools:
+**Complete YNAB API v1.83 coverage** with 45 tools when writes are enabled:
 
 | Resource | Tools | Capabilities |
 |----------|-------|-------------|
@@ -148,8 +165,11 @@ That's it. Your AI can now talk to YNAB.
 
 ### Design Decisions
 
+- **Read-only by default** - write tools are not registered unless `YNAB_ALLOW_WRITES=1` is set. Read tools are annotated with `readOnlyHint: true`; write tools are annotated with `readOnlyHint: false`, idempotency hints, and destructive hints for delete operations.
 - **Dollar amounts everywhere** - inputs and outputs are in dollars (`-12.34`), never milliunits (`-12340`). Conversion is automatic and transparent.
 - **Smart budget resolution** - set `YNAB_BUDGET_ID` for a default, or omit it to auto-resolve to your last-used budget. Every tool accepts an optional `budgetId` override.
+- **Pinned YNAB host** - all HTTP requests are restricted to `https://api.ynab.com`, redirects are not followed, and API tokens are redacted from surfaced errors.
+- **Token fallback options** - use `YNAB_API_TOKEN`, a small token file via `YNAB_API_TOKEN_FILE`, or a 1Password CLI reference via `YNAB_OP_PATH`.
 - **Split transactions** - first-class support for subtransactions in create, read, and format operations.
 - **Bulk operations** - `create_transactions` and `update_transactions` handle arrays in a single API call.
 - **Verified batch updates** - `update_transactions` refetches every requested transaction after the bulk API call, retries mismatched fields once through `update_transaction`, and returns a `verification` block so approval counts cannot hide failed category writes.
@@ -164,6 +184,8 @@ That's it. Your AI can now talk to YNAB.
 ---
 
 ## Tools Reference
+
+Read tools are available by default. Tools that create, update, import, or delete YNAB data are marked as write tools and are registered only when `YNAB_ALLOW_WRITES=1`.
 
 ### User & Budgets
 
@@ -180,7 +202,7 @@ That's it. Your AI can now talk to YNAB.
 |------|-------------|
 | `list_accounts` | List all accounts with balances, debt details, and import status |
 | `get_account` | Get full account details including notes and debt fields |
-| `create_account` | Create a new account (checking, savings, creditCard, mortgage, etc.) |
+| `create_account` | Write tool: create a new account (checking, savings, creditCard, mortgage, etc.) |
 
 **Supported account types:** `checking`, `savings`, `cash`, `creditCard`, `lineOfCredit`, `otherAsset`, `otherLiability`, `mortgage`, `autoLoan`, `studentLoan`, `personalLoan`, `medicalDebt`, `otherDebt`
 
@@ -191,11 +213,11 @@ That's it. Your AI can now talk to YNAB.
 | `list_categories` | List all category groups and their categories with budgeted/activity/balance |
 | `get_category` | Get full category details including goal progress and cadence |
 | `get_month_category` | Get category budget for a specific month |
-| `update_month_category` | Set the budgeted amount for a category in a month |
-| `update_category` | Update name, note, goal target, goal target date, or move to a different group |
-| `create_category` | Create a new category in an existing group (with optional goal) |
-| `create_category_group` | Create a new category group |
-| `update_category_group` | Rename a category group |
+| `update_month_category` | Write tool: set the budgeted amount for a category in a month |
+| `update_category` | Write tool: update name, note, goal target, goal target date, or move to a different group |
+| `create_category` | Write tool: create a new category in an existing group (with optional goal) |
+| `create_category_group` | Write tool: create a new category group |
+| `update_category_group` | Write tool: rename a category group |
 | `search_categories` | Case-insensitive partial name search (e.g., "groc" finds "Groceries") |
 
 ### Payees
@@ -204,8 +226,8 @@ That's it. Your AI can now talk to YNAB.
 |------|-------------|
 | `list_payees` | List all payees with transfer account mappings |
 | `get_payee` | Get payee details |
-| `create_payee` | Create a new payee |
-| `update_payee` | Rename a payee |
+| `create_payee` | Write tool: create a new payee |
+| `update_payee` | Write tool: rename a payee |
 | `search_payees` | Case-insensitive partial name search |
 
 ### Payee Locations
@@ -238,12 +260,12 @@ That's it. Your AI can now talk to YNAB.
 |------|-------------|
 | `get_transactions` | Get transactions with filters: by account, category, payee, month, or status (`unapproved`/`uncategorized`) |
 | `get_transaction` | Get a single transaction by ID (includes subtransactions). Auto-handles composite scheduled-transaction IDs like `uuid_YYYY-MM-DD`; if the underlying matched transaction has been deleted, falls back to returning the active scheduled template wrapped as `{ resource_type: "scheduled_transaction", ... }`. |
-| `create_transaction` | Create a transaction with optional split (subtransactions must sum to total) |
-| `create_transactions` | Bulk create multiple transactions in a single API call (supports split transactions) |
-| `update_transaction` | Partial update - only specified fields change |
-| `update_transactions` | Batch update multiple transactions at once, then refetch and verify requested fields persisted |
-| `delete_transaction` | Delete a transaction |
-| `import_transactions` | Trigger import from linked bank accounts |
+| `create_transaction` | Write tool: create a transaction with optional split (subtransactions must sum to total) |
+| `create_transactions` | Write tool: bulk create multiple transactions in a single API call (supports split transactions) |
+| `update_transaction` | Write tool: partial update - only specified fields change |
+| `update_transactions` | Write tool: batch update multiple transactions at once, then refetch and verify requested fields persisted |
+| `delete_transaction` | Write tool: delete a transaction |
+| `import_transactions` | Write tool: trigger import from linked bank accounts |
 
 ### Scheduled Transactions
 
@@ -251,9 +273,9 @@ That's it. Your AI can now talk to YNAB.
 |------|-------------|
 | `list_scheduled_transactions` | List all recurring transactions |
 | `get_scheduled_transaction` | Get a specific scheduled transaction |
-| `create_scheduled_transaction` | Create a recurring transaction with frequency |
-| `update_scheduled_transaction` | Update (fetch-then-merge preserves unchanged fields) |
-| `delete_scheduled_transaction` | Delete a scheduled transaction |
+| `create_scheduled_transaction` | Write tool: create a recurring transaction with frequency |
+| `update_scheduled_transaction` | Write tool: update (fetch-then-merge preserves unchanged fields) |
+| `delete_scheduled_transaction` | Write tool: delete a scheduled transaction |
 
 **Supported frequencies:** `never`, `daily`, `weekly`, `everyOtherWeek`, `twiceAMonth`, `every4Weeks`, `monthly`, `everyOtherMonth`, `every3Months`, `every4Months`, `twiceAYear`, `yearly`, `everyOtherYear`
 
@@ -267,6 +289,12 @@ That's it. Your AI can now talk to YNAB.
 ---
 
 ## Workflow Safety Notes
+
+### Write Tool Opt-In
+
+The server starts in read-only mode. Write tools are not merely discouraged; they are absent from `listTools` unless `YNAB_ALLOW_WRITES=1` is present when the MCP process starts. This mirrors the safer hosted-connector pattern: the default permission set can inspect budgets, transactions, categories, payees, months, and scheduled transactions, but it cannot mutate financial data.
+
+If a client already has the process running, changing the environment is not enough. Restart the MCP server after setting or clearing `YNAB_ALLOW_WRITES`.
 
 ### Batch Updates
 
@@ -298,11 +326,17 @@ Manual YNAB transfer fixes can replace one side of the pair with a new transacti
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `YNAB_API_TOKEN` | Yes* | [Personal access token](https://app.ynab.com/settings/developer) from YNAB Developer Settings |
+| `YNAB_API_TOKEN` | Yes* | [Personal access token](https://app.ynab.com/settings/developer) from YNAB Developer Settings. |
+| `YNAB_API_TOKEN_FILE` | No | Path to a file containing the token. The file must be 4 KB or smaller. Used only when `YNAB_API_TOKEN` is unset. |
 | `YNAB_BUDGET_ID` | No | Default budget ID. If omitted, uses `"last-used"` (your most recently accessed budget). Run `list_budgets` to find IDs. |
+| `YNAB_ALLOW_WRITES` | No | Set to `1` to register write tools. Any other value keeps the server read-only. |
 | `YNAB_OP_PATH` | No | 1Password secret reference for your API token (see below). Required only if using the 1Password fallback instead of `YNAB_API_TOKEN`. |
+| `YNAB_RATE_LIMIT_PER_HOUR` | No | Client-side rate limiter. Defaults to `190`; set to `0` to disable for controlled tests. |
+| `YNAB_RATE_LIMIT_BURST` | No | Maximum burst size before rate limiting pauses requests. Defaults to `10`. |
+| `YNAB_HTTP_TIMEOUT_MS` | No | Per-request timeout. Defaults to `30000`. |
+| `YNAB_MAX_RESPONSE_BYTES` | No | Maximum direct-fetch response size for newer endpoints. Defaults to `8388608`. |
 
-*`YNAB_API_TOKEN` is required unless `YNAB_OP_PATH` is set.
+*`YNAB_API_TOKEN` is required unless `YNAB_API_TOKEN_FILE` or `YNAB_OP_PATH` is set.
 
 ### 1Password Integration
 
@@ -341,7 +375,9 @@ All amounts in tool inputs and outputs are in **dollars** (e.g., `-12.34` for a 
 
 ## Rate Limiting
 
-The YNAB API allows **200 requests per hour** per access token, enforced on a rolling window. Each tool call typically uses one API request (except `update_scheduled_transaction` which uses two - a GET to fetch current state, then a PUT to merge changes). The server surfaces rate limit errors as standard MCP error responses.
+The YNAB API allows **200 requests per hour** per access token, enforced on a rolling window. This server applies a client-side limiter at 190 requests per hour with a burst of 10 by default. Each tool call typically uses one API request, except tools that deliberately verify or merge writes (`update_transactions`, `update_scheduled_transaction`) which perform additional reads.
+
+Set `YNAB_RATE_LIMIT_PER_HOUR=0` only for controlled local tests or smoke checks where you know you will stay under YNAB's API limit.
 
 ---
 
@@ -356,10 +392,13 @@ The YNAB API allows **200 requests per hour** per access token, enforced on a ro
 ```
 
 - **Transport:** stdio (standard MCP server pattern)
-- **Auth:** Bearer token via `YNAB_API_TOKEN` environment variable
+- **Auth:** Bearer token via `YNAB_API_TOKEN`, `YNAB_API_TOKEN_FILE`, or `YNAB_OP_PATH`
 - **SDK:** Official [`ynab`](https://www.npmjs.com/package/ynab) v2.5+ for core endpoints, direct `fetch` for newer API features
+- **Safety:** read-only default, explicit write opt-in, host-pinned HTTPS requests to `api.ynab.com`, no redirect following, redacted token errors
 - **Validation:** All parameters validated with [Zod](https://zod.dev) schemas
 - **Error handling:** API errors are caught, formatted, and returned as MCP error responses with detail messages
+
+For a hosted OAuth connector design, see [docs/hosted-oauth-connector.md](docs/hosted-oauth-connector.md).
 
 ---
 
@@ -382,7 +421,7 @@ Use the smoke tests when you need to prove the server is reachable over stdio wi
 ```bash
 YNAB_API_TOKEN=your-token YNAB_BUDGET_ID=your-budget-id npm run smoke:list-tools
 YNAB_API_TOKEN=your-token YNAB_BUDGET_ID=your-budget-id npm run smoke:review-unapproved
-YNAB_API_TOKEN=your-token YNAB_BUDGET_ID=your-budget-id npm run smoke:batch-verify
+YNAB_API_TOKEN=your-token YNAB_BUDGET_ID=your-budget-id YNAB_ALLOW_WRITES=1 npm run smoke:batch-verify
 ```
 
 To test the package currently published to npm instead of the local checkout:
@@ -390,10 +429,10 @@ To test the package currently published to npm instead of the local checkout:
 ```bash
 YNAB_API_TOKEN=your-token YNAB_BUDGET_ID=your-budget-id npm run smoke:list-tools -- --published
 YNAB_API_TOKEN=your-token YNAB_BUDGET_ID=your-budget-id npm run smoke:review-unapproved -- --published
-YNAB_API_TOKEN=your-token YNAB_BUDGET_ID=your-budget-id npm run smoke:batch-verify -- --published
+YNAB_API_TOKEN=your-token YNAB_BUDGET_ID=your-budget-id YNAB_ALLOW_WRITES=1 npm run smoke:batch-verify -- --published
 ```
 
-`smoke:list-tools` verifies that high-value tools such as `review_unapproved`, `get_transactions`, `update_transactions`, `search_categories`, and `search_payees` are present. `smoke:review-unapproved` calls `review_unapproved` with `summary: true` and prints only aggregate counts. `smoke:batch-verify` creates a temporary transaction, uses `update_transactions` to categorize and approve it in one call, refetches it through the MCP server, and deletes it afterward.
+`smoke:list-tools` verifies that high-value read tools such as `review_unapproved`, `get_transactions`, `search_categories`, and `search_payees` are present. When `YNAB_ALLOW_WRITES=1` is set, it also verifies `update_transactions`. `smoke:review-unapproved` calls `review_unapproved` with `summary: true` and prints only aggregate counts. `smoke:batch-verify` creates a temporary transaction, uses `update_transactions` to categorize and approve it in one call, refetches it through the MCP server, and deletes it afterward.
 
 ---
 

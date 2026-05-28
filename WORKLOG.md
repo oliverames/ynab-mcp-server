@@ -1,5 +1,15 @@
 # Worklog
 
+## 2026-05-28 - v2.0.0: read-only default, safety hardening, hosted OAuth pattern
+
+**What changed**: Borrowed the core safety model from read-only-first YNAB MCP implementations. The server now registers only read tools by default; tools that create, update, import, or delete YNAB data are hidden unless `YNAB_ALLOW_WRITES=1` is set at process startup. Tool metadata now annotates reads with `readOnlyHint: true`, writes with `readOnlyHint: false`, and delete tools with `destructiveHint: true`. Added a safety regression test for the default/read-write tool surface. Added host-pinned YNAB fetches, no redirect following, request timeout, token redaction in surfaced errors, client-side rate limiting, and `YNAB_API_TOKEN_FILE` fallback with a small-file guard. Smoke scripts now distinguish read-only and write-enabled surfaces, and the batch verification smoke refuses to run unless writes are explicitly enabled.
+
+**Decisions made**: Bumped to v2.0.0 because hiding write tools by default is a breaking behavior change for existing write-heavy MCP configs. Kept the stdio package local-token based, but documented the hosted OAuth connector pattern separately: Cloudflare-style OAuth provider routes, PKCE, state-cookie binding, per-user YNAB token storage, refresh lifecycle, delete-data flow, and scope-aware write registration. A full hosted deployment still requires YNAB OAuth app credentials, a production hostname, and a token store.
+
+**Left off at**: Safety tests, full live `npm test`, local read/write smoke checks, MCPB build, package dry-run, release consistency check, token-file startup smoke, and ames-plugins skill selftest pass. The highest-risk batch category+approval anomaly is covered by the existing post-write refetch verification and a write-enabled smoke script. npm publishing is blocked until a valid npm token with publish rights replaces the unauthorized `.npmrc`/1Password tokens.
+
+---
+
 ## 2026-05-27 - v1.8.3: verified bulk category+approval updates
 
 **What changed**: Hardened `update_transactions` against a live YNAB bulk API anomaly where `approved: true` persisted but `categoryId` did not. The tool now refetches every requested transaction after the bulk update, compares persisted fields against requested fields, retries mismatches once through `update_transaction`, and returns a `verification` block with `checked`, `retried`, and `failed` entries. If fields still do not match after retry, the tool returns an MCP error instead of silently reporting success. Added a live regression test that creates a temporary transaction, categorizes and approves it in a batch, refetches it, and asserts both fields persisted. Added `smoke:batch-verify` for the same stdio MCP path.

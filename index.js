@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
@@ -8,8 +9,24 @@ import * as ynab from "ynab";
 
 // --- Init ---
 
+const BASE_URL = "https://api.ynab.com/v1";
+const YNAB_API_HOST = "api.ynab.com";
+const MAX_TOKEN_FILE_BYTES = 4096;
+const MAX_RESPONSE_BYTES = Number.parseInt(process.env.YNAB_MAX_RESPONSE_BYTES || "8388608", 10);
+
 let API_TOKEN = process.env.YNAB_API_TOKEN;
-let opLookupError;
+let tokenLookupError;
+if (!API_TOKEN && process.env.YNAB_API_TOKEN_FILE) {
+  try {
+    const tokenFileContents = readFileSync(process.env.YNAB_API_TOKEN_FILE, "utf8");
+    if (Buffer.byteLength(tokenFileContents, "utf8") > MAX_TOKEN_FILE_BYTES) {
+      throw new Error(`token file exceeds ${MAX_TOKEN_FILE_BYTES} bytes`);
+    }
+    API_TOKEN = tokenFileContents.trim();
+  } catch (e) {
+    tokenLookupError = `Could not read YNAB_API_TOKEN_FILE: ${e.message || String(e)}`;
+  }
+}
 if (!API_TOKEN && process.env.YNAB_OP_PATH) {
   try {
     API_TOKEN = execFileSync(
@@ -17,18 +34,20 @@ if (!API_TOKEN && process.env.YNAB_OP_PATH) {
       { encoding: "utf-8", timeout: 10000, stdio: ["pipe", "pipe", "pipe"] }
     ).trim();
   } catch (e) {
-    opLookupError = e.stderr?.toString().trim() || e.message || "unknown 1Password CLI error";
+    tokenLookupError = `Could not read YNAB_OP_PATH via 1Password CLI: ${e.stderr?.toString().trim() || e.message || "unknown 1Password CLI error"}`;
   }
 }
 if (!API_TOKEN) {
-  const opMessage = process.env.YNAB_OP_PATH
-    ? ` Could not read YNAB_OP_PATH via 1Password CLI: ${opLookupError}.`
-    : " Set YNAB_OP_PATH to enable 1Password CLI fallback (e.g. op://Vault/Item/credential).";
-  console.error(`YNAB_API_TOKEN environment variable is required.${opMessage}`);
+  const fallbackMessage = tokenLookupError
+    ? ` ${tokenLookupError}.`
+    : " Set YNAB_API_TOKEN_FILE or YNAB_OP_PATH to enable token fallback.";
+  console.error(`YNAB_API_TOKEN environment variable is required.${fallbackMessage}`);
   process.exit(1);
 }
 
-const api = new ynab.API(API_TOKEN);
+const ynabRateLimit = createYnabRateLimiter();
+const api = new ynab.API(API_TOKEN, BASE_URL);
+api._configuration.config = { accessToken: API_TOKEN, basePath: BASE_URL, fetchApi: secureFetch };
 const DEFAULT_BUDGET_ID = process.env.YNAB_BUDGET_ID;
 
 // --- Helpers ---
@@ -209,14 +228,87 @@ async function run(fn) {
     const msg = detail
       ? (name ? `${name}: ${detail}` : detail)
       : (e?.message || String(e));
-    return { content: [{ type: "text", text: `Error: ${msg}` }], isError: true };
+    return { content: [{ type: "text", text: `Error: ${sanitizeErrorMessage(msg)}` }], isError: true };
   }
 }
 
+function sanitizeErrorMessage(value) {
+  let message = String(value ?? "");
+  if (API_TOKEN) {
+    message = message.split(API_TOKEN).join("[REDACTED_TOKEN]");
+  }
+  return message
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [REDACTED_TOKEN]")
+    .replace(/Authorization:\s*[^\r\n]+/gi, "Authorization: [REDACTED_TOKEN]");
+}
+
+function createYnabRateLimiter() {
+  const requestsPerHour = Number.parseFloat(process.env.YNAB_RATE_LIMIT_PER_HOUR || "190");
+  if (!Number.isFinite(requestsPerHour) || requestsPerHour <= 0) {
+    return async () => {};
+  }
+
+  const burst = Math.max(1, Number.parseInt(process.env.YNAB_RATE_LIMIT_BURST || "10", 10));
+  const refillMs = 3600000 / requestsPerHour;
+  let tokens = burst;
+  let updatedAt = Date.now();
+
+  return async function waitForYnabRateLimit() {
+    while (true) {
+      const now = Date.now();
+      const elapsed = now - updatedAt;
+      tokens = Math.min(burst, tokens + elapsed / refillMs);
+      updatedAt = now;
+
+      if (tokens >= 1) {
+        tokens -= 1;
+        return;
+      }
+
+      const waitMs = Math.ceil((1 - tokens) * refillMs);
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
+    }
+  };
+}
+
+function assertYnabApiUrl(url) {
+  if (url.protocol !== "https:" || url.hostname.toLowerCase() !== YNAB_API_HOST || (url.port && url.port !== "443")) {
+    throw new Error(`Refusing YNAB API request to non-YNAB host: ${url.origin}`);
+  }
+}
+
+async function secureFetch(input, init = {}) {
+  const url = input instanceof URL ? input : new URL(typeof input === "string" ? input : input.url);
+  assertYnabApiUrl(url);
+  await ynabRateLimit();
+
+  const timeoutMs = Number.parseInt(process.env.YNAB_HTTP_TIMEOUT_MS || "30000", 10);
+  const controller = !init.signal && timeoutMs > 0 ? new AbortController() : null;
+  const timeout = controller
+    ? setTimeout(() => controller.abort(new Error(`YNAB request timed out after ${timeoutMs}ms`)), timeoutMs)
+    : null;
+
+  try {
+    return await fetch(url, {
+      ...init,
+      redirect: "manual",
+      signal: controller?.signal || init.signal,
+    });
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
+function buildYnabUrl(path) {
+  if (!path.startsWith("/") || path.startsWith("//") || /^[a-z][a-z0-9+.-]*:/i.test(path) || /[\r\n]/.test(path)) {
+    throw new Error("Refusing unsafe YNAB API path");
+  }
+  return new URL(`${BASE_URL}${path}`);
+}
+
 // Direct API helper for endpoints not yet in the ynab SDK
-const BASE_URL = "https://api.ynab.com/v1";
 async function ynabFetch(path, { method = "GET", body, query } = {}) {
-  const url = new URL(`${BASE_URL}${path}`);
+  const url = buildYnabUrl(path);
   for (const [key, value] of Object.entries(query || {})) {
     if (value !== undefined && value !== null) url.searchParams.set(key, String(value));
   }
@@ -225,12 +317,19 @@ async function ynabFetch(path, { method = "GET", body, query } = {}) {
     headers: { Authorization: `Bearer ${API_TOKEN}`, "Content-Type": "application/json" },
   };
   if (body) opts.body = JSON.stringify(body);
-  const res = await fetch(url, opts);
+  const res = await secureFetch(url, opts);
+  const contentLength = Number.parseInt(res.headers.get("content-length") || "0", 10);
+  if (Number.isFinite(contentLength) && contentLength > MAX_RESPONSE_BYTES) {
+    throw new Error(`YNAB response exceeded ${MAX_RESPONSE_BYTES} bytes`);
+  }
   const text = await res.text();
+  if (Buffer.byteLength(text, "utf8") > MAX_RESPONSE_BYTES) {
+    throw new Error(`YNAB response exceeded ${MAX_RESPONSE_BYTES} bytes`);
+  }
   const json = text ? JSON.parse(text) : {};
   if (!res.ok) {
-    const err = new Error(json?.error?.detail || `HTTP ${res.status}`);
-    err.error = json?.error;
+    const err = new Error(sanitizeErrorMessage(json?.error?.detail || `HTTP ${res.status}`));
+    err.error = json?.error ? { ...json.error, detail: sanitizeErrorMessage(json.error.detail) } : undefined;
     throw err;
   }
   return json.data;
@@ -240,8 +339,84 @@ async function ynabFetch(path, { method = "GET", body, query } = {}) {
 
 const server = new McpServer({
   name: "ynab-mcp-server",
-  version: "1.8.3",
+  version: "2.0.0",
 });
+
+const WRITE_TOOL_METADATA = {
+  create_account: { destructiveHint: false, idempotentHint: false },
+  update_month_category: { destructiveHint: false, idempotentHint: true },
+  update_category: { destructiveHint: false, idempotentHint: true },
+  create_category: { destructiveHint: false, idempotentHint: false },
+  create_category_group: { destructiveHint: false, idempotentHint: false },
+  update_category_group: { destructiveHint: false, idempotentHint: true },
+  update_payee: { destructiveHint: false, idempotentHint: true },
+  create_payee: { destructiveHint: false, idempotentHint: false },
+  create_transaction: { destructiveHint: false, idempotentHint: false },
+  create_transactions: { destructiveHint: false, idempotentHint: false },
+  update_transaction: { destructiveHint: false, idempotentHint: true },
+  delete_transaction: { destructiveHint: true, idempotentHint: true },
+  update_transactions: { destructiveHint: false, idempotentHint: true },
+  import_transactions: { destructiveHint: false, idempotentHint: false },
+  create_scheduled_transaction: { destructiveHint: false, idempotentHint: false },
+  update_scheduled_transaction: { destructiveHint: false, idempotentHint: true },
+  delete_scheduled_transaction: { destructiveHint: true, idempotentHint: true },
+};
+
+function writesEnabled() {
+  return process.env.YNAB_ALLOW_WRITES === "1";
+}
+
+function writeDisabledResult(name) {
+  return {
+    content: [{
+      type: "text",
+      text: `Error: ${name} is disabled. Restart the MCP server with YNAB_ALLOW_WRITES=1 to enable write tools.`,
+    }],
+    isError: true,
+  };
+}
+
+function withWriteGateDescription(description = "") {
+  if (description.includes("YNAB_ALLOW_WRITES=1")) return description;
+  return `${description} Requires YNAB_ALLOW_WRITES=1; write tools are not registered by default.`;
+}
+
+const registerRawTool = server.registerTool.bind(server);
+server.registerTool = (name, config, handler) => {
+  const writeMetadata = WRITE_TOOL_METADATA[name];
+  if (!writeMetadata) {
+    return registerRawTool(name, {
+      ...config,
+      annotations: {
+        ...config.annotations,
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: true,
+      },
+    }, handler);
+  }
+
+  if (!writesEnabled()) {
+    return undefined;
+  }
+
+  return registerRawTool(name, {
+    ...config,
+    description: withWriteGateDescription(config.description),
+    annotations: {
+      ...config.annotations,
+      readOnlyHint: false,
+      destructiveHint: writeMetadata.destructiveHint,
+      idempotentHint: writeMetadata.idempotentHint,
+      openWorldHint: true,
+    },
+  }, (args, extra) => {
+    if (!writesEnabled()) {
+      return writeDisabledResult(name);
+    }
+    return handler(args, extra);
+  });
+};
 
 // ==================== User & Budgets ====================
 

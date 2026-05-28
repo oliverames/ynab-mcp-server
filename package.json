@@ -1,6 +1,6 @@
 {
   "name": "@oliverames/ynab-mcp-server",
-  "version": "1.8.3",
+  "version": "2.0.0",
   "description": "YNAB MCP server with full API coverage",
   "type": "module",
   "main": "index.js",
@@ -10,7 +10,8 @@
   "files": [
     "index.js",
     "scripts/",
-    "assets/icon.png"
+    "assets/icon.png",
+    "docs/hosted-oauth-connector.md"
   ],
   "scripts": {
     "start": "node index.js",
@@ -21,7 +22,8 @@
     "smoke:batch-verify": "node scripts/smoke-batch-verify.mjs",
     "release:check": "node scripts/check-release-consistency.mjs",
     "release:check:registry": "node scripts/check-release-consistency.mjs --registry",
-    "build:mcpb": "node scripts/build-mcpb.mjs"
+    "build:mcpb": "node scripts/build-mcpb.mjs",
+    "test:safety": "node scripts/test-safety-model.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

@@ -1,0 +1,128 @@
+import assert from "node:assert/strict";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+
+const __filename = fileURLToPath(import.meta.url);
+const projectRoot = path.resolve(path.dirname(__filename), "..");
+
+const writeTools = [
+  "create_account",
+  "update_month_category",
+  "update_category",
+  "create_category",
+  "create_category_group",
+  "update_category_group",
+  "update_payee",
+  "create_payee",
+  "create_transaction",
+  "create_transactions",
+  "update_transaction",
+  "delete_transaction",
+  "update_transactions",
+  "import_transactions",
+  "create_scheduled_transaction",
+  "update_scheduled_transaction",
+  "delete_scheduled_transaction",
+];
+
+const requiredReadTools = [
+  "get_user",
+  "list_budgets",
+  "get_budget",
+  "list_accounts",
+  "get_transactions",
+  "review_unapproved",
+  "search_categories",
+  "search_payees",
+];
+
+function buildEnv(overrides = {}) {
+  const env = Object.fromEntries(
+    Object.entries(process.env).filter(([, value]) => typeof value === "string"),
+  );
+  env.YNAB_API_TOKEN = "test-token-for-list-tools";
+  env.YNAB_RATE_LIMIT_PER_HOUR = "0";
+
+  for (const [key, value] of Object.entries(overrides)) {
+    if (value === undefined) {
+      delete env[key];
+    } else {
+      env[key] = value;
+    }
+  }
+
+  return env;
+}
+
+async function listTools(overrides = {}) {
+  const client = new Client({
+    name: "ynab-safety-model-test",
+    version: "1.0.0",
+  });
+
+  const transport = new StdioClientTransport({
+    command: "node",
+    args: ["index.js"],
+    cwd: projectRoot,
+    env: buildEnv(overrides),
+    stderr: "pipe",
+  });
+
+  try {
+    await client.connect(transport);
+    const response = await client.listTools();
+    return response.tools;
+  } finally {
+    await client.close();
+  }
+}
+
+const readOnlyTools = await listTools({ YNAB_ALLOW_WRITES: undefined });
+const readOnlyNames = new Set(readOnlyTools.map((tool) => tool.name));
+
+for (const name of requiredReadTools) {
+  assert.ok(readOnlyNames.has(name), `expected read tool ${name} to be available by default`);
+}
+
+for (const name of writeTools) {
+  assert.ok(!readOnlyNames.has(name), `expected write tool ${name} to be hidden by default`);
+}
+
+for (const tool of readOnlyTools) {
+  assert.equal(
+    tool.annotations?.readOnlyHint,
+    true,
+    `expected ${tool.name} to be annotated read-only`,
+  );
+}
+
+const writableTools = await listTools({ YNAB_ALLOW_WRITES: "1" });
+const writableNames = new Set(writableTools.map((tool) => tool.name));
+
+for (const name of writeTools) {
+  assert.ok(writableNames.has(name), `expected write tool ${name} when writes are enabled`);
+}
+
+for (const tool of writableTools.filter((tool) => writeTools.includes(tool.name))) {
+  assert.equal(
+    tool.annotations?.readOnlyHint,
+    false,
+    `expected ${tool.name} to be annotated writable`,
+  );
+}
+
+const destructiveTools = new Map(writableTools.map((tool) => [tool.name, tool]));
+assert.equal(
+  destructiveTools.get("delete_transaction")?.annotations?.destructiveHint,
+  true,
+  "expected delete_transaction to be annotated destructive",
+);
+assert.equal(
+  destructiveTools.get("delete_scheduled_transaction")?.annotations?.destructiveHint,
+  true,
+  "expected delete_scheduled_transaction to be annotated destructive",
+);
+
+console.log("Safety model checks passed");
