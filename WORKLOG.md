@@ -1,5 +1,19 @@
 # Worklog
 
+## 2026-05-28 - v2.0.0 publish attempt: release verified, blocked on npm auth
+
+**What changed**: No repo code changes. Ran the full v2.0.0 release verification on top of the morning's safety-hardening prep (entry below): `npm run release:check` PASS (lockfile, in-file McpServer version, README 45-tool count + v2.0.0 links + MCPB refs all consistent); `npm test` 41 passed / 0 failed / 4 skipped against the live budget; `npm run test:safety` passed; `npm publish --dry-run` clean (13 files, 808 kB, dominated by the 777 kB `assets/icon.png`). Confirmed registry state: 2.0.0 is unpublished, npm `latest` is 1.7.1, and 1.8.0–1.8.3 were tagged in git but never published (npm is 4 releases behind). Confirmed git: local `main` == `origin/main`, and the annotated `v2.0.0` tag is already pushed pointing at HEAD `48a3651` (the `git ls-remote` SHA `c37be21` is the annotated-tag object, which dereferences to `48a3651` — not a divergence).
+
+**Diagnosed the blocker**: `npm whoami` returns 401 both via `~/.npmrc` and via the vaulted "npm Registry Auth Token (npmrc)" token tested in isolation — so the publish token is genuinely expired/revoked, not an `.npmrc` resolution glitch. The on-disk and vaulted tokens are identical and both dead, confirming the morning entry's note.
+
+**Decisions made**: Did NOT publish (no valid auth). Did NOT modify the repo source — v2.0.0 is already correct and committed. Cross-repo credential hygiene this session (not ynab files): vaulted the second active AssemblyAI key as a new 1Password item and re-synced the stale Google Workspace OAuth secret in `~/.codex/config.toml` from the vault; both verified. Relevant here only because the npm-token diagnosis came out of that audit.
+
+**Left off at**: v2.0.0 is fully verified and release-ready; the only blocker is npm auth. To resume: (1) `npm login` (writes a fresh token to `~/.npmrc`); (2) `npm whoami` to confirm; (3) `npm publish` (→ latest, public); (4) `npm view @oliverames/ynab-mcp-server@2.0.0` to verify; (5) mirror the new `~/.npmrc` token into the 1Password item `rtpscmu723e6ccmdj37e2qcthu` so the vault stops being stale. No git tag step needed — `v2.0.0` is already on the remote.
+
+**Open questions**: NEW — consider a granular npm automation token stored in 1Password (vs an `npm login` web token) so future publishes can run non-interactively; the stale-vault-token failure mode argues for a pre-release `npm whoami` check in the release flow. Carried forward (still open): split-transaction tool-description audit; whether `get_transaction` should try `matched_transaction_id` as a third lookup; verify YNAB SDK v2.6+ for a clear-match endpoint.
+
+---
+
 ## 2026-05-28 - v2.0.0: read-only default, safety hardening, hosted OAuth pattern
 
 **What changed**: Borrowed the core safety model from read-only-first YNAB MCP implementations. The server now registers only read tools by default; tools that create, update, import, or delete YNAB data are hidden unless `YNAB_ALLOW_WRITES=1` is set at process startup. Tool metadata now annotates reads with `readOnlyHint: true`, writes with `readOnlyHint: false`, and delete tools with `destructiveHint: true`. Added a safety regression test for the default/read-write tool surface. Added host-pinned YNAB fetches, no redirect following, request timeout, token redaction in surfaced errors, client-side rate limiting, and `YNAB_API_TOKEN_FILE` fallback with a small-file guard. Smoke scripts now distinguish read-only and write-enabled surfaces, and the batch verification smoke refuses to run unless writes are explicitly enabled.
