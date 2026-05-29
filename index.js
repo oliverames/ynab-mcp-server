@@ -356,6 +356,8 @@ const WRITE_TOOL_METADATA = {
   update_transaction: { destructiveHint: false, idempotentHint: true },
   delete_transaction: { destructiveHint: true, idempotentHint: true },
   update_transactions: { destructiveHint: false, idempotentHint: true },
+  approve_transactions: { destructiveHint: false, idempotentHint: true },
+  reassign_payee_transactions: { destructiveHint: false, idempotentHint: true },
   import_transactions: { destructiveHint: false, idempotentHint: false },
   create_scheduled_transaction: { destructiveHint: false, idempotentHint: false },
   update_scheduled_transaction: { destructiveHint: false, idempotentHint: true },
@@ -1260,8 +1262,9 @@ server.registerTool(
         })
       )
       .describe("Array of transaction updates"),
+    returnSummary: z.boolean().optional().describe("If true, return compact counts (updated_count, approved_count, and verification counts) instead of the full updated-transaction objects. Use for large batches (~50+) whose full response would exceed the inline tool-result limit; the write is performed identically either way."),
   } },
-  ({ budgetId, transactions: txns }) =>
+  ({ budgetId, transactions: txns, returnSummary }) =>
     run(async () => {
       const bid = resolveBudgetId(budgetId);
       const mapped = txns.map((t) => ({ id: t.id, ...mapTransactionUpdate(t) }));
@@ -1278,10 +1281,102 @@ server.registerTool(
           isError: true,
         };
       }
+      if (returnSummary) {
+        return ok({
+          updated_count: verified.length,
+          approved_count: verified.filter((t) => t.approved).length,
+          duplicate_import_ids: data.duplicate_import_ids,
+          verification: {
+            checked: verification.checked,
+            retried: verification.retried.length,
+            failed: verification.failed.length,
+          },
+        });
+      }
       return ok({
         updated: verified,
         duplicate_import_ids: data.duplicate_import_ids,
         verification,
+      });
+    })
+);
+
+server.registerTool(
+  "approve_transactions",
+  { description: "Approve unapproved transactions in bulk by filter, without hand-listing IDs. Fetches the current unapproved queue, optionally narrows by payeeId / categoryId / accountId, and sets approved:true on the matches. By default SKIPS uncategorized transactions (no category and not a transfer) so nothing is approved without a category; set includeUncategorized:true to override. Returns a compact summary (approved_count + verification counts), never full objects, so it is safe on large batches. The CALLER is responsible for getting user confirmation before invoking — this tool does not prompt.", inputSchema: {
+    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+    payeeId: z.string().optional().describe("Only approve unapproved transactions for this payee"),
+    categoryId: z.string().optional().describe("Only approve unapproved transactions in this category"),
+    accountId: z.string().optional().describe("Only approve unapproved transactions in this account"),
+    includeUncategorized: z.boolean().optional().describe("If true, also approve transactions with no category (default false — uncategorized are skipped for safety)"),
+  } },
+  ({ budgetId, payeeId, categoryId, accountId, includeUncategorized }) =>
+    run(async () => {
+      const bid = resolveBudgetId(budgetId);
+      const { data } = await api.transactions.getTransactions(bid, undefined, "unapproved");
+      let txns = data.transactions.filter((t) => !t.deleted);
+      if (payeeId) txns = txns.filter((t) => t.payee_id === payeeId);
+      if (categoryId) txns = txns.filter((t) => t.category_id === categoryId);
+      if (accountId) txns = txns.filter((t) => t.account_id === accountId);
+      if (!includeUncategorized) {
+        txns = txns.filter((t) => (t.category_id && t.category_name !== "Uncategorized") || t.transfer_account_id);
+      }
+      if (txns.length === 0) {
+        return ok({ approved_count: 0, matched: 0, message: "No matching unapproved transactions to approve." });
+      }
+      const updates = txns.map((t) => ({ id: t.id, approved: true }));
+      const mapped = updates.map((t) => ({ id: t.id, ...mapTransactionUpdate(t) }));
+      const { data: updData } = await api.transactions.updateTransactions(bid, { transactions: mapped });
+      const { verification, verified } = await verifyBulkTransactionUpdates(bid, updates);
+      if (verification.failed.length > 0) {
+        return {
+          content: [{ type: "text", text: `Error: approval verification failed after retry: ${JSON.stringify(verification.failed, null, 2)}` }],
+          isError: true,
+        };
+      }
+      return ok({
+        matched: txns.length,
+        approved_count: verified.filter((t) => t.approved).length,
+        filters: { payeeId: payeeId || null, categoryId: categoryId || null, accountId: accountId || null, includeUncategorized: !!includeUncategorized },
+        duplicate_import_ids: updData.duplicate_import_ids,
+        verification: { checked: verification.checked, retried: verification.retried.length, failed: verification.failed.length },
+      });
+    })
+);
+
+server.registerTool(
+  "reassign_payee_transactions",
+  { description: "Move all transactions from one payee to another. The YNAB API has no payee-merge or payee-delete endpoint, so this is the merge workaround: refetch every transaction for fromPayeeId and set payee_id = toPayeeId. Use to consolidate a duplicate payee that a slightly different bank-import string created (e.g. fold 'Myles Court Barber' into the existing 'Myles Court Barbershop'). The emptied source payee still exists afterward and must be deleted manually in the YNAB UI (Settings → Manage Payees) if wanted. Returns a compact summary.", inputSchema: {
+    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+    fromPayeeId: z.string().describe("Payee whose transactions will be moved"),
+    toPayeeId: z.string().describe("Destination payee that transactions will be reassigned to"),
+    sinceDate: z.string().optional().describe("Only move transactions on or after this date (YYYY-MM-DD); omit to move all history"),
+  } },
+  ({ budgetId, fromPayeeId, toPayeeId, sinceDate }) =>
+    run(async () => {
+      const bid = resolveBudgetId(budgetId);
+      const { data } = await api.transactions.getTransactionsByPayee(bid, fromPayeeId, sinceDate);
+      const txns = data.transactions.filter((t) => !t.deleted);
+      if (txns.length === 0) {
+        return ok({ reassigned_count: 0, message: "No transactions found for fromPayeeId in the given range." });
+      }
+      const updates = txns.map((t) => ({ id: t.id, payeeId: toPayeeId }));
+      const mapped = updates.map((t) => ({ id: t.id, ...mapTransactionUpdate(t) }));
+      const { data: updData } = await api.transactions.updateTransactions(bid, { transactions: mapped });
+      const { verification, verified } = await verifyBulkTransactionUpdates(bid, updates);
+      if (verification.failed.length > 0) {
+        return {
+          content: [{ type: "text", text: `Error: payee reassignment verification failed after retry: ${JSON.stringify(verification.failed, null, 2)}` }],
+          isError: true,
+        };
+      }
+      return ok({
+        reassigned_count: verified.length,
+        from_payee_id: fromPayeeId,
+        to_payee_id: toPayeeId,
+        duplicate_import_ids: updData.duplicate_import_ids,
+        note: "Source payee is now empty but still exists; delete it in the YNAB UI (Settings → Manage Payees) if desired.",
+        verification: { checked: verification.checked, retried: verification.retried.length, failed: verification.failed.length },
       });
     })
 );
@@ -1508,11 +1603,12 @@ server.registerTool(
 
 server.registerTool(
   "review_unapproved",
-  { description: "Get all unapproved transactions grouped by status: those already categorized (ready to approve) and those still uncategorized (need category first). Each transaction includes a 'flags' array: manually_entered (not bank-imported), match_broken (matched reference is stale — the `matched_transaction_id` field is read-only via this API; YNAB web/iOS UI is required to clear that link. The transaction itself remains fully mutable: you CAN approve, recategorize, and edit memo via update_transaction. The broken match persists as a cosmetic flag until the user resolves it in the UI.), scheduled_transaction_realized, new_payee (no transaction history for this payee), no_prior_amount_match (novel amount for this payee), category_drift:was_X (payee categorized differently before). Never approve uncategorized transactions without explicit user instruction. For large budgets the full response can exceed 100KB; pass summary:true to get counts + by-payee aggregates without per-transaction detail.", inputSchema: {
+  { description: "Get all unapproved transactions grouped by status: those already categorized (ready to approve) and those still uncategorized (need category first). Each transaction includes a 'flags' array: manually_entered (not bank-imported), match_broken (matched reference is stale — the `matched_transaction_id` field is read-only via this API; YNAB web/iOS UI is required to clear that link. The transaction itself remains fully mutable: you CAN approve, recategorize, and edit memo via update_transaction. The broken match persists as a cosmetic flag until the user resolves it in the UI.), scheduled_transaction_realized, new_payee (no transaction history for this payee), no_prior_amount_match (novel amount for this payee), category_drift:was_X (payee categorized differently before). Never approve uncategorized transactions without explicit user instruction. For large budgets the full response can exceed 100KB; pass summary:true for counts + by-payee aggregates only, or compact:true to keep per-transaction rows (with IDs) while dropping bulky fields so the response fits inline.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     summary: z.boolean().optional().describe("If true, omit per-transaction details from the response and return only counts + by-payee aggregates (for both ready_to_approve and needs_category_first). Use this when the full unapproved queue is large; drill into specifics with get_transactions afterwards."),
+    compact: z.boolean().optional().describe("If true (and summary is not set), keep per-transaction detail but return only the fields needed to act — id, date, payee_name, amount, category_name, account_name, flags — dropping bulky fields (import strings, subtransactions, matched/import ids) that push the full response past the inline size limit. Use when you need transaction IDs to approve or recategorize but the full queue would overflow."),
   } },
-  ({ budgetId, summary }) =>
+  ({ budgetId, summary, compact }) =>
     run(async () => {
       const bid = resolveBudgetId(budgetId);
 
@@ -1573,6 +1669,17 @@ server.registerTool(
       const categorized = [], uncategorized = [];
       for (const t of flaggedTxns) (isCategorized(t) ? categorized : uncategorized).push(t);
 
+      // Compact projection: only the fields needed to act on a transaction
+      const slimTx = (t) => ({
+        id: t.id,
+        date: t.date,
+        payee_name: t.payee_name,
+        amount: t.amount,
+        category_name: t.category_name,
+        account_name: t.account_name,
+        flags: t.flags,
+      });
+
       // Group categorized transactions by payee for easier per-group review
       const byPayee = {};
       for (const t of categorized) {
@@ -1590,12 +1697,12 @@ server.registerTool(
           total: g.transactions.reduce((sum, t) => sum + t.amount, 0),
           flags: allFlags,
         };
-        return summary ? base : { ...base, transactions: g.transactions };
+        return summary ? base : { ...base, transactions: compact ? g.transactions.map(slimTx) : g.transactions };
       });
 
       // Build uncategorized payload — full transactions by default, by-payee aggregates when summary:true
       const uncategorizedPayload = (() => {
-        if (!summary) return uncategorized;
+        if (!summary) return compact ? uncategorized.map(slimTx) : uncategorized;
         const byPayeeUncat = {};
         for (const t of uncategorized) {
           const key = t.payee_name || "Unknown Payee";

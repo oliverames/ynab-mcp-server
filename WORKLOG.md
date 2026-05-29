@@ -1,5 +1,23 @@
 # Worklog
 
+## 2026-05-29 - Categorization-session ergonomics: compact queue, summary writes, bulk-approve, payee reassign
+
+**What changed**: Four source additions to `index.js`, all driven by friction observed during a live ~90-transaction YNAB categorization + approval session run through the hosted connector:
+- `review_unapproved` gains `compact: true` — keeps per-transaction rows (id, date, payee_name, amount, category_name, account_name, flags) but drops bulky fields (import strings, subtransactions, matched/import ids). The full (non-summary) response reliably overflowed the client's inline result limit (84KB at 69 txns, 111KB at 89), forcing save-to-file + Python parsing every call. `summary` lacked IDs; this is the missing middle gear.
+- `update_transactions` gains `returnSummary: true` — returns `{updated_count, approved_count, verification: {checked, retried, failed}}` instead of full objects. A 64-transaction approval returned 57KB and overflowed; callers usually only need confirmation counts.
+- `approve_transactions` (new write tool) — approve unapproved transactions in bulk by filter (`payeeId`/`categoryId`/`accountId`) without hand-listing IDs. Skips uncategorized by default. Eliminates the build-a-64-ID-batch-in-Python step (which the skill itself warns against: "never type IDs by hand").
+- `reassign_payee_transactions` (new write tool) — moves all transactions from payee A to B. This is the *merge workaround*: the YNAB API has **no** payee delete or merge endpoint (only `PATCH …/payees/{id}` rename), so duplicate payees from slightly different import strings (e.g. "Myles Court Barber" vs existing "Myles Court Barbershop") otherwise require manual UI cleanup.
+
+**Decisions made**: Chose a reassign helper over a "merge_payees" tool because the YNAB API cannot delete/merge payees — the source payee stays and must be removed in the UI. Did NOT touch the `get_month` Inflow-category balance (it reported $94K alongside a $4K `to_be_budgeted` and read as misleading) — root cause was never diagnosed this session, so suppressing it risked hiding real data; left as an open question. Both new write tools are registered in `WRITE_TOOL_METADATA` so they stay hidden unless `YNAB_ALLOW_WRITES=1`, consistent with the v2.0.0 safety model.
+
+**Verification**: `node --check index.js` clean. Booted the edited server over stdio with `YNAB_ALLOW_WRITES=1` and `listTools()` — 47 tools (was 45), both new tools present, and `review_unapproved.compact` / `update_transactions.returnSummary` params confirmed in the schemas. Did NOT run `npm test` — it performs live writes against the real budget (`YNAB_ALLOW_WRITES=1`), inappropriate to run unprompted on the owner's actual financial data. The matching skill-doc fixes shipped separately in the ames-plugins repo.
+
+**Left off at**: Source committed to `main` (no version bump). These features sit on top of the still-unpublished v2.0.0, so the `v2.0.0` git tag no longer matches the tree — the next release must be **> 2.0.0** (suggest 2.1.0). Pending owner go-ahead: bump version, refresh README tool count (45→47) + `release:check`, rebuild the `.mcpb`, run `npm test` against a test budget, then publish (still blocked on the npm-auth issue from the prior entry). None of these propagate to the live connector until republish + client reinstall.
+
+**Open questions**: Why does `get_month` report a ~$94K Inflow balance vs a $4K `to_be_budgeted` — data artifact, or a real accumulated RTA the field is surfacing? Diagnose before any relabel. Carried forward: npm auth for publishing; split-transaction tool-description audit.
+
+---
+
 ## 2026-05-28 - v2.0.0 publish attempt: release verified, blocked on npm auth
 
 **What changed**: No repo code changes. Ran the full v2.0.0 release verification on top of the morning's safety-hardening prep (entry below): `npm run release:check` PASS (lockfile, in-file McpServer version, README 45-tool count + v2.0.0 links + MCPB refs all consistent); `npm test` 41 passed / 0 failed / 4 skipped against the live budget; `npm run test:safety` passed; `npm publish --dry-run` clean (13 files, 808 kB, dominated by the 777 kB `assets/icon.png`). Confirmed registry state: 2.0.0 is unpublished, npm `latest` is 1.7.1, and 1.8.0–1.8.3 were tagged in git but never published (npm is 4 releases behind). Confirmed git: local `main` == `origin/main`, and the annotated `v2.0.0` tag is already pushed pointing at HEAD `48a3651` (the `git ls-remote` SHA `c37be21` is the annotated-tag object, which dereferences to `48a3651` — not a divergence).

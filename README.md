@@ -263,7 +263,9 @@ Read tools are available by default. Tools that create, update, import, or delet
 | `create_transaction` | Write tool: create a transaction with optional split (subtransactions must sum to total) |
 | `create_transactions` | Write tool: bulk create multiple transactions in a single API call (supports split transactions) |
 | `update_transaction` | Write tool: partial update - only specified fields change |
-| `update_transactions` | Write tool: batch update multiple transactions at once, then refetch and verify requested fields persisted |
+| `update_transactions` | Write tool: batch update multiple transactions at once, then refetch and verify requested fields persisted. Pass `returnSummary: true` for compact counts instead of full objects on large batches (avoids overflowing the tool-result size limit). |
+| `approve_transactions` | Write tool: approve unapproved transactions in bulk by filter (`payeeId` / `categoryId` / `accountId`) without hand-listing IDs. Skips uncategorized transactions by default; returns a compact summary. |
+| `reassign_payee_transactions` | Write tool: move all transactions from one payee to another — the merge workaround, since the YNAB API has no payee delete/merge endpoint. |
 | `delete_transaction` | Write tool: delete a transaction |
 | `import_transactions` | Write tool: trigger import from linked bank accounts |
 
@@ -283,7 +285,7 @@ Read tools are available by default. Tools that create, update, import, or delet
 
 | Tool | Description |
 |------|-------------|
-| `review_unapproved` | Get unapproved transactions grouped by readiness: "ready to approve" (categorized, split, or transfer) vs. "needs category first" (uncategorized). Each transaction includes a `flags` array highlighting anomalies (manually_entered, match_broken, no_prior_amount_match, category_drift, new_payee, scheduled_transaction_realized) computed against 60 days of payee history. Includes a warning against blind approval. |
+| `review_unapproved` | Get unapproved transactions grouped by readiness: "ready to approve" (categorized, split, or transfer) vs. "needs category first" (uncategorized). Each transaction includes a `flags` array highlighting anomalies (manually_entered, match_broken, no_prior_amount_match, category_drift, new_payee, scheduled_transaction_realized) computed against 60 days of payee history. Includes a warning against blind approval. Pass `summary: true` for counts + by-payee aggregates only, or `compact: true` to keep per-transaction rows (with IDs) while dropping bulky fields so the response fits inline. |
 | `get_overspent_categories` | Get categories with negative balances for a month, useful for finding prior-month overspending that reduces the current month's Ready to Assign. |
 
 ---
