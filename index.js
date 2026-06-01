@@ -64,6 +64,12 @@ function milliunits(dollars) {
   return Math.round(dollars * 1000);
 }
 
+// Round a dollar sum to cents, killing IEEE-754 artifacts from summing floats
+// (e.g. a group total like -53.730000000000004 produced by reduce/+= over amounts).
+function round2(n) {
+  return n == null ? n : Math.round(n * 100) / 100;
+}
+
 function dollarsMap(obj) {
   return obj ? Object.fromEntries(Object.entries(obj).map(([k, v]) => [k, dollars(v)])) : obj;
 }
@@ -1694,7 +1700,7 @@ server.registerTool(
           payee: g.payee,
           category_name: g.category_name,
           count: g.transactions.length,
-          total: g.transactions.reduce((sum, t) => sum + t.amount, 0),
+          total: round2(g.transactions.reduce((sum, t) => sum + t.amount, 0)),
           flags: allFlags,
         };
         return summary ? base : { ...base, transactions: compact ? g.transactions.map(slimTx) : g.transactions };
@@ -1714,7 +1720,7 @@ server.registerTool(
         return Object.values(byPayeeUncat).map((g) => ({
           payee_name: g.payee_name,
           count: g.count,
-          total: g.total,
+          total: round2(g.total),
           flags: [...g.flags],
         }));
       })();
@@ -1764,7 +1770,7 @@ server.registerTool(
       return ok({
         month,
         overspent_count: overspent.length,
-        total_overspent: overspent.reduce((sum, c) => sum + c.balance, 0),
+        total_overspent: round2(overspent.reduce((sum, c) => sum + c.balance, 0)),
         categories: overspent,
       });
     })
