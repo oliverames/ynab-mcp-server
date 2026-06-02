@@ -1,5 +1,19 @@
 # Worklog
 
+## 2026-06-01 - v2.1.0 released to GitHub (MCPB); group-total rounding fix
+
+**What changed**: Authored the first GitHub release of v2.1.0 — the 2026-05-29 session bumped to 2.1.0 but never tagged or released it, and npm `@latest` is still 1.7.1 (publishing blocked on npm-auth recovery). Also fixed group-total float drift: added a `round2()` helper beside `dollars()`/`milliunits()` and applied it at the three sites that summed amounts with raw `reduce`/`+=` — `review_unapproved` ready_to_approve group totals, needs_category_first by-payee totals, and `get_overspent_categories` total_overspent — eliminating IEEE-754 artifacts like `-53.730000000000004`.
+
+**Decisions made**: Folded the round2 fix into the still-unreleased 2.1.0 rather than bumping to 2.1.1 — nothing ever consumed 2.1.0 (no tag, no release, no npm), so package.json/index.js/README stay consistent with zero churn. Rounded once at each final total (not per `+=`) to avoid compounding. Authored an annotated **unsigned** tag + `gh release create` (1Password SSH signing can't prompt from a headless shell; signing bypass was owner-authorized this session).
+
+**Verification**: `node --check` clean; `round2` unit cases incl. the `-53.73...` artifact + null passthrough; `smoke:list-tools` (28 read-only tools; 47 with `YNAB_ALLOW_WRITES=1`); `release:check` all PASS at 2.1.0. Rebuilt the MCPB with `--force` and confirmed `round2` is present in the bundle's root `index.js` (4 occurrences) before tagging. Release is live + marked Latest with `ynab-mcp-server-2.1.0.mcpb` (6.24 MB) attached: https://github.com/oliverames/ynab-mcp-server/releases/tag/v2.1.0 . HEAD d91696e == origin/main, clean.
+
+**Left off at**: v2.1.0 released on GitHub; npm publish still pending npm-auth recovery (owner working on it — then npm `@latest` catches up from 1.7.1).
+
+**Open questions**: NEW deferred feature — a dead-link resolver for `match_broken` (resolve `matched_transaction_id`; flag orphan vs live-duplicate). Scoped but intentionally NOT built until npm publish unblocks, so it can be integration-tested against the live server; the manual `get_transaction(matched_transaction_id)` method works meanwhile and is now documented in the ynab-finance skill. Carried forward: npm auth for `npm publish`; split-transaction tool-description audit.
+
+---
+
 ## 2026-05-29 - Categorization-session ergonomics: compact queue, summary writes, bulk-approve, payee reassign
 
 **What changed**: Four source additions to `index.js`, all driven by friction observed during a live ~90-transaction YNAB categorization + approval session run through the hosted connector:
