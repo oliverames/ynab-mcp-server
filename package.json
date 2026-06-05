@@ -15,14 +15,19 @@
   ],
   "scripts": {
     "start": "node index.js",
-    "pretest": "node --input-type=module -e \"await import('@modelcontextprotocol/sdk/client/index.js')\" >/dev/null 2>&1 || npm ci --silent --no-audit --no-fund",
+    "deps:ensure": "node --input-type=module -e \"await import('@modelcontextprotocol/sdk/client/index.js')\" >/dev/null 2>&1 || npm ci --silent --no-audit --no-fund",
+    "pretest": "npm run deps:ensure",
     "test": "node test.js",
+    "presmoke:list-tools": "npm run deps:ensure",
     "smoke:list-tools": "node scripts/smoke-list-tools.mjs",
+    "presmoke:review-unapproved": "npm run deps:ensure",
     "smoke:review-unapproved": "node scripts/smoke-review-unapproved.mjs",
+    "presmoke:batch-verify": "npm run deps:ensure",
     "smoke:batch-verify": "node scripts/smoke-batch-verify.mjs",
     "release:check": "node scripts/check-release-consistency.mjs",
     "release:check:registry": "node scripts/check-release-consistency.mjs --registry",
     "build:mcpb": "node scripts/build-mcpb.mjs",
+    "pretest:safety": "npm run deps:ensure",
     "test:safety": "node scripts/test-safety-model.mjs"
   },
   "dependencies": {
