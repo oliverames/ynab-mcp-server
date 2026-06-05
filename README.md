@@ -17,7 +17,7 @@
 
 <p align="center">
   <a href="https://www.npmjs.com/package/@oliverames/ynab-mcp-server"><img src="https://img.shields.io/npm/v/%40oliverames%2Fynab-mcp-server?style=flat-square&color=f5a542" alt="npm"></a>
-  <a href="https://github.com/oliverames/ynab-mcp-server/releases/tag/v2.1.0"><img src="https://img.shields.io/github/v/release/oliverames/ynab-mcp-server?style=flat-square&color=f5a542&label=MCPB" alt="MCPB release"></a>
+  <a href="https://github.com/oliverames/ynab-mcp-server/releases/tag/v2.1.1"><img src="https://img.shields.io/github/v/release/oliverames/ynab-mcp-server?style=flat-square&color=f5a542&label=MCPB" alt="MCPB release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-f5a542?style=flat-square" alt="License"></a>
   <a href="https://www.buymeacoffee.com/oliverames"><img src="https://img.shields.io/badge/Buy_Me_a_Coffee-support-f5a542?style=flat-square&logo=buy-me-a-coffee&logoColor=white" alt="Buy Me a Coffee"></a>
 </p>
@@ -44,9 +44,9 @@ This server gives your AI assistant a safe interface to YNAB's API, turning natu
 
 ### Install with MCPB
 
-For Claude Desktop and other MCPB-compatible clients, download the local bundle from the [v2.0.0 release](https://github.com/oliverames/ynab-mcp-server/releases/tag/v2.1.0):
+For Claude Desktop and other MCPB-compatible clients, download the local bundle from the [v2.1.1 release](https://github.com/oliverames/ynab-mcp-server/releases/tag/v2.1.1):
 
-[Download `ynab-mcp-server-2.1.0.mcpb`](https://github.com/oliverames/ynab-mcp-server/releases/download/v2.1.0/ynab-mcp-server-2.1.0.mcpb)
+[Download `ynab-mcp-server-2.1.1.mcpb`](https://github.com/oliverames/ynab-mcp-server/releases/download/v2.1.1/ynab-mcp-server-2.1.1.mcpb)
 
 The bundle includes the YNAB favicon, production runtime dependencies, and setup prompts for your personal access token, optional default budget ID, and optional write-tool opt-in.
 

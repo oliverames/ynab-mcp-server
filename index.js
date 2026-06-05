@@ -41,13 +41,13 @@ if (!API_TOKEN) {
   const fallbackMessage = tokenLookupError
     ? ` ${tokenLookupError}.`
     : " Set YNAB_API_TOKEN_FILE or YNAB_OP_PATH to enable token fallback.";
-  console.error(`YNAB_API_TOKEN environment variable is required.${fallbackMessage}`);
-  process.exit(1);
+  console.error(`YNAB_API_TOKEN environment variable is required.${fallbackMessage} Starting in discovery-only mode.`);
 }
 
 const ynabRateLimit = createYnabRateLimiter();
-const api = new ynab.API(API_TOKEN, BASE_URL);
-api._configuration.config = { accessToken: API_TOKEN, basePath: BASE_URL, fetchApi: secureFetch };
+const effectiveApiToken = API_TOKEN || "missing-token-for-tool-discovery";
+const api = new ynab.API(effectiveApiToken, BASE_URL);
+api._configuration.config = { accessToken: effectiveApiToken, basePath: BASE_URL, fetchApi: secureFetch };
 const DEFAULT_BUDGET_ID = process.env.YNAB_BUDGET_ID;
 
 // --- Helpers ---
@@ -320,7 +320,7 @@ async function ynabFetch(path, { method = "GET", body, query } = {}) {
   }
   const opts = {
     method,
-    headers: { Authorization: `Bearer ${API_TOKEN}`, "Content-Type": "application/json" },
+    headers: { Authorization: `Bearer ${effectiveApiToken}`, "Content-Type": "application/json" },
   };
   if (body) opts.body = JSON.stringify(body);
   const res = await secureFetch(url, opts);
@@ -345,8 +345,38 @@ async function ynabFetch(path, { method = "GET", body, query } = {}) {
 
 const server = new McpServer({
   name: "ynab-mcp-server",
-  version: "2.1.0",
+  version: "2.1.1",
 });
+
+const registeredTools = new Map();
+const toolCatalog = new Map();
+
+function registerTool(name, config, handler) {
+  const registration = server.registerTool(name, config, handler);
+  toolCatalog.set(name, { config });
+  if (registration !== undefined) {
+    registeredTools.set(name, { config, handler });
+  }
+  return registration;
+}
+
+function listRegisteredYnabTools() {
+  return [...toolCatalog.entries()]
+    .filter(([name]) => !name.startsWith("ynab_"))
+    .map(([name, { config }]) => {
+      const writeMetadata = WRITE_TOOL_METADATA[name];
+      const isWrite = !!writeMetadata;
+      return {
+        name,
+        title: config?.title ?? name,
+        description: isWrite ? withWriteGateDescription(config?.description ?? "") : config?.description ?? "",
+        has_input_schema: !!config?.inputSchema,
+        is_write: isWrite,
+        registered: registeredTools.has(name),
+        status: isWrite && !writesEnabled() ? "hidden_requires_YNAB_ALLOW_WRITES_1" : "available",
+      };
+    });
+}
 
 const WRITE_TOOL_METADATA = {
   create_account: { destructiveHint: false, idempotentHint: false },
@@ -364,6 +394,7 @@ const WRITE_TOOL_METADATA = {
   update_transactions: { destructiveHint: false, idempotentHint: true },
   approve_transactions: { destructiveHint: false, idempotentHint: true },
   reassign_payee_transactions: { destructiveHint: false, idempotentHint: true },
+  ynab_write_tool_execute: { destructiveHint: false, idempotentHint: false },
   import_transactions: { destructiveHint: false, idempotentHint: false },
   create_scheduled_transaction: { destructiveHint: false, idempotentHint: false },
   update_scheduled_transaction: { destructiveHint: false, idempotentHint: true },
@@ -372,6 +403,17 @@ const WRITE_TOOL_METADATA = {
 
 function writesEnabled() {
   return process.env.YNAB_ALLOW_WRITES === "1";
+}
+
+function ynabAuthStatus() {
+  return {
+    authenticated: !!API_TOKEN,
+    default_budget_id_configured: !!DEFAULT_BUDGET_ID,
+    writes_enabled: writesEnabled(),
+    message: API_TOKEN
+      ? "YNAB MCP server has an API token configured."
+      : "YNAB MCP server is running in discovery-only mode. Set YNAB_API_TOKEN, YNAB_API_TOKEN_FILE, or YNAB_OP_PATH, then restart the MCP server before calling API tools.",
+  };
 }
 
 function writeDisabledResult(name) {
@@ -428,7 +470,7 @@ server.registerTool = (name, config, handler) => {
 
 // ==================== User & Budgets ====================
 
-server.registerTool(
+registerTool(
   "get_user",
   { description: "Get the authenticated user" },
   () =>
@@ -438,7 +480,7 @@ server.registerTool(
   })
 );
 
-server.registerTool(
+registerTool(
   "list_budgets",
   { description: "List all budgets. Use a budget ID from the results in other tools, or omit budgetId to use the last-used budget." },
   () =>
@@ -454,7 +496,7 @@ server.registerTool(
   })
 );
 
-server.registerTool(
+registerTool(
   "get_budget",
   { description: "Get a budget summary including name, currency format, and account/category/payee counts", inputSchema: { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") } },
   ({ budgetId }) =>
@@ -476,7 +518,7 @@ server.registerTool(
     })
 );
 
-server.registerTool(
+registerTool(
   "get_budget_settings",
   { description: "Get budget settings (currency format, date format)", inputSchema: { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") } },
   ({ budgetId }) =>
@@ -512,7 +554,7 @@ function formatAccount(a) {
   return withCurrencyFields(out, a, ["balance", "cleared_balance", "uncleared_balance"]);
 }
 
-server.registerTool(
+registerTool(
   "list_accounts",
   { description: "List all accounts in a budget", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
@@ -526,7 +568,7 @@ server.registerTool(
     })
 );
 
-server.registerTool(
+registerTool(
   "get_account",
   { description: "Get details for a specific account", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
@@ -539,7 +581,7 @@ server.registerTool(
     })
 );
 
-server.registerTool(
+registerTool(
   "create_account",
   { description: "Create a new account", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
@@ -598,7 +640,7 @@ function formatCategory(c) {
   ]);
 }
 
-server.registerTool(
+registerTool(
   "list_categories",
   { description: "List all category groups and their categories", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
@@ -634,7 +676,7 @@ server.registerTool(
     })
 );
 
-server.registerTool(
+registerTool(
   "get_category",
   { description: "Get a specific category", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
@@ -647,7 +689,7 @@ server.registerTool(
     })
 );
 
-server.registerTool(
+registerTool(
   "get_month_category",
   { description: "Get category budget for a specific month", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
@@ -661,7 +703,7 @@ server.registerTool(
     })
 );
 
-server.registerTool(
+registerTool(
   "update_month_category",
   { description: "Set the budgeted amount for a category in a specific month", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
@@ -678,7 +720,7 @@ server.registerTool(
     })
 );
 
-server.registerTool(
+registerTool(
   "update_category",
   { description: "Update a category's name, note, goal target, or move it to a different group", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
@@ -708,7 +750,7 @@ server.registerTool(
     })
 );
 
-server.registerTool(
+registerTool(
   "create_category",
   { description: "Create a new category in a category group", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
@@ -735,7 +777,7 @@ server.registerTool(
     })
 );
 
-server.registerTool(
+registerTool(
   "create_category_group",
   { description: "Create a new category group", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
@@ -751,7 +793,7 @@ server.registerTool(
     })
 );
 
-server.registerTool(
+registerTool(
   "update_category_group",
   { description: "Rename a category group", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
@@ -770,7 +812,7 @@ server.registerTool(
 
 // ==================== Payees ====================
 
-server.registerTool(
+registerTool(
   "list_payees",
   { description: "List all payees", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
@@ -784,7 +826,7 @@ server.registerTool(
     })
 );
 
-server.registerTool(
+registerTool(
   "get_payee",
   { description: "Get a specific payee", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
@@ -797,7 +839,7 @@ server.registerTool(
     })
 );
 
-server.registerTool(
+registerTool(
   "update_payee",
   { description: "Rename a payee", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
@@ -813,7 +855,7 @@ server.registerTool(
     })
 );
 
-server.registerTool(
+registerTool(
   "create_payee",
   { description: "Create a new payee", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
@@ -831,7 +873,7 @@ server.registerTool(
 
 // ==================== Payee Locations ====================
 
-server.registerTool(
+registerTool(
   "list_payee_locations",
   { description: "List all payee locations (GPS coordinates where transactions occurred)", inputSchema: { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") } },
   ({ budgetId }) =>
@@ -841,7 +883,7 @@ server.registerTool(
     })
 );
 
-server.registerTool(
+registerTool(
   "get_payee_location",
   { description: "Get a specific payee location", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
@@ -854,7 +896,7 @@ server.registerTool(
     })
 );
 
-server.registerTool(
+registerTool(
   "get_payee_locations_by_payee",
   { description: "Get all locations for a specific payee", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
@@ -869,7 +911,7 @@ server.registerTool(
 
 // ==================== Months ====================
 
-server.registerTool(
+registerTool(
   "list_months",
   { description: "List all budget months", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
@@ -898,7 +940,7 @@ server.registerTool(
     })
 );
 
-server.registerTool(
+registerTool(
   "get_month",
   { description: "Get budget month detail with per-category breakdown", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
@@ -962,7 +1004,7 @@ function formatMoneyMovement(m) {
   }, m, ["amount"]);
 }
 
-server.registerTool(
+registerTool(
   "list_money_movements",
   { description: "List all money movements (budget re-allocations between categories)", inputSchema: { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") } },
   ({ budgetId }) =>
@@ -972,7 +1014,7 @@ server.registerTool(
     })
 );
 
-server.registerTool(
+registerTool(
   "get_money_movements_by_month",
   { description: "Get money movements for a specific month", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
@@ -985,7 +1027,7 @@ server.registerTool(
     })
 );
 
-server.registerTool(
+registerTool(
   "list_money_movement_groups",
   { description: "List all money movement groups (batches of related money movements)", inputSchema: { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") } },
   ({ budgetId }) =>
@@ -995,7 +1037,7 @@ server.registerTool(
     })
 );
 
-server.registerTool(
+registerTool(
   "get_money_movement_groups_by_month",
   { description: "Get money movement groups for a specific month", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
@@ -1057,7 +1099,7 @@ function formatTransaction(t) {
   return withCurrencyFields(out, t, ["amount"]);
 }
 
-server.registerTool(
+registerTool(
   "get_transactions",
   { description: "Get transactions with optional filters. Use type='unapproved' or type='uncategorized' to filter. Optionally filter by account, category, payee, or month. Each returned transaction includes 'import_payee_name_original' — the raw merchant string from the bank import (e.g. 'AplPay LS ONION RIVEMONTPELIER VT') — which encodes processor flag, merchant name (often longer than the cleaned payee_name), and city+state. This is the primary disambiguation field when payee_name is truncated or ambiguous. Note: large date ranges (6+ months on a busy budget) can return 50KB+ of data; narrow with categoryId/payeeId/month filters when possible.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
@@ -1100,7 +1142,7 @@ server.registerTool(
     })
 );
 
-server.registerTool(
+registerTool(
   "get_transaction",
   { description: "Get a single transaction by ID. Automatically handles composite scheduled-transaction IDs (e.g. uuid_YYYY-MM-DD): the date suffix is stripped before the lookup. If a composite ID's underlying matched transaction has been deleted, falls back to returning the active scheduled-transaction template wrapped in a marker shape { resource_type: 'scheduled_transaction', reason: 'composite_id_with_no_matched_transaction', scheduled_transaction, requested_id } so callers can distinguish the two return shapes. Non-composite IDs preserve strict behavior: a 404 still surfaces as resource_not_found.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
@@ -1140,7 +1182,7 @@ server.registerTool(
     })
 );
 
-server.registerTool(
+registerTool(
   "create_transaction",
   { description: "Create a new transaction. Amounts are in dollars (positive for inflows, negative for outflows). Note: future-dated transactions cannot be created here - use create_scheduled_transaction instead.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
@@ -1172,7 +1214,7 @@ server.registerTool(
     })
 );
 
-server.registerTool(
+registerTool(
   "create_transactions",
   { description: "Create multiple transactions at once. Amounts are in dollars. Returns created transactions and any duplicate import IDs. Future-dated transactions are not supported - use create_scheduled_transaction instead.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
@@ -1209,7 +1251,7 @@ server.registerTool(
     })
 );
 
-server.registerTool(
+registerTool(
   "update_transaction",
   { description: "Update an existing transaction. Only provided fields are changed. Amounts in dollars.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
@@ -1234,7 +1276,7 @@ server.registerTool(
     })
 );
 
-server.registerTool(
+registerTool(
   "delete_transaction",
   { description: "Delete a transaction", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
@@ -1247,7 +1289,7 @@ server.registerTool(
     })
 );
 
-server.registerTool(
+registerTool(
   "update_transactions",
   { description: "Batch update multiple transactions. Each transaction object must include its id and the fields to update. IMPORTANT: only use transaction IDs extracted from get_transactions / review_unapproved results — never compose IDs by hand (fabricated IDs return 'transaction does not exist in this budget' errors). For combined category+approval changes, include both 'categoryId' and 'approved: true' in the same entry. This tool refetches each transaction after the bulk update, verifies requested fields actually persisted, and retries mismatches once through single-transaction updates. Never trust review_unapproved counts alone after approving transactions; use this response's verification block or get_transaction to confirm fields.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
@@ -1307,7 +1349,7 @@ server.registerTool(
     })
 );
 
-server.registerTool(
+registerTool(
   "approve_transactions",
   { description: "Approve unapproved transactions in bulk by filter, without hand-listing IDs. Fetches the current unapproved queue, optionally narrows by payeeId / categoryId / accountId, and sets approved:true on the matches. By default SKIPS uncategorized transactions (no category and not a transfer) so nothing is approved without a category; set includeUncategorized:true to override. Returns a compact summary (approved_count + verification counts), never full objects, so it is safe on large batches. The CALLER is responsible for getting user confirmation before invoking — this tool does not prompt.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
@@ -1350,7 +1392,7 @@ server.registerTool(
     })
 );
 
-server.registerTool(
+registerTool(
   "reassign_payee_transactions",
   { description: "Move all transactions from one payee to another. The YNAB API has no payee-merge or payee-delete endpoint, so this is the merge workaround: refetch every transaction for fromPayeeId and set payee_id = toPayeeId. Use to consolidate a duplicate payee that a slightly different bank-import string created (e.g. fold 'Myles Court Barber' into the existing 'Myles Court Barbershop'). The emptied source payee still exists afterward and must be deleted manually in the YNAB UI (Settings → Manage Payees) if wanted. Returns a compact summary.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
@@ -1387,7 +1429,7 @@ server.registerTool(
     })
 );
 
-server.registerTool(
+registerTool(
   "import_transactions",
   { description: "Trigger import of linked account transactions", inputSchema: { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") } },
   ({ budgetId }) =>
@@ -1439,7 +1481,7 @@ function formatScheduledTransaction(t) {
   return withCurrencyFields(out, t, ["amount"]);
 }
 
-server.registerTool(
+registerTool(
   "list_scheduled_transactions",
   { description: "List all scheduled (recurring) transactions. NOTE: only manually-created recurring entries appear here — auto-imported recurring charges (subscriptions, utilities, insurance) are NOT included. Use prior-month transaction history to identify recurring charge timing instead.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
@@ -1453,7 +1495,7 @@ server.registerTool(
     })
 );
 
-server.registerTool(
+registerTool(
   "get_scheduled_transaction",
   { description: "Get a specific scheduled transaction", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
@@ -1466,7 +1508,7 @@ server.registerTool(
     })
 );
 
-server.registerTool(
+registerTool(
   "create_scheduled_transaction",
   { description: "Create a new scheduled (recurring) transaction", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
@@ -1499,7 +1541,7 @@ server.registerTool(
     })
 );
 
-server.registerTool(
+registerTool(
   "update_scheduled_transaction",
   { description: "Update an existing scheduled transaction. Only provided fields are changed. Amounts in dollars.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
@@ -1542,7 +1584,7 @@ server.registerTool(
     })
 );
 
-server.registerTool(
+registerTool(
   "delete_scheduled_transaction",
   { description: "Delete a scheduled transaction", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
@@ -1557,7 +1599,7 @@ server.registerTool(
 
 // ==================== Convenience Tools ====================
 
-server.registerTool(
+registerTool(
   "search_categories",
   { description: "Search categories by partial name match (case-insensitive). Useful for finding category IDs when you only know part of the name.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
@@ -1589,7 +1631,7 @@ server.registerTool(
     })
 );
 
-server.registerTool(
+registerTool(
   "search_payees",
   { description: "Search payees by partial name match (case-insensitive). Useful for finding payee IDs.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
@@ -1607,7 +1649,7 @@ server.registerTool(
     })
 );
 
-server.registerTool(
+registerTool(
   "review_unapproved",
   { description: "Get all unapproved transactions grouped by status: those already categorized (ready to approve) and those still uncategorized (need category first). Each transaction includes a 'flags' array: manually_entered (not bank-imported), match_broken (matched reference is stale — the `matched_transaction_id` field is read-only via this API; YNAB web/iOS UI is required to clear that link. The transaction itself remains fully mutable: you CAN approve, recategorize, and edit memo via update_transaction. The broken match persists as a cosmetic flag until the user resolves it in the UI.), scheduled_transaction_realized, new_payee (no transaction history for this payee), no_prior_amount_match (novel amount for this payee), category_drift:was_X (payee categorized differently before). Never approve uncategorized transactions without explicit user instruction. For large budgets the full response can exceed 100KB; pass summary:true for counts + by-payee aggregates only, or compact:true to keep per-transaction rows (with IDs) while dropping bulky fields so the response fits inline.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
@@ -1747,7 +1789,7 @@ server.registerTool(
     })
 );
 
-server.registerTool(
+registerTool(
   "get_overspent_categories",
   { description: "Get all categories with a negative balance for a given month. Use this to find prior-month overspends that are silently reducing the current month's Ready to Assign.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
@@ -1774,6 +1816,99 @@ server.registerTool(
         categories: overspent,
       });
     })
+);
+
+registerTool(
+  "ynab_auth_status",
+  {
+    title: "YNAB Auth Status",
+    description: "Check whether the YNAB MCP server has credentials configured and whether write tools are enabled.",
+    inputSchema: {},
+  },
+  () => ok(ynabAuthStatus())
+);
+
+registerTool(
+  "ynab_tool_index",
+  {
+    title: "YNAB Tool Index",
+    description: "Discover the YNAB MCP server tools. Use this when you need YNAB budgets, accounts, categories, payees, transactions, scheduled transactions, unapproved transaction review, approval, or budget cleanup tools.",
+    inputSchema: {},
+  },
+  () => ok({
+    server: "ynab-mcp-server",
+    package: "@oliverames/ynab-mcp-server",
+    auth: ynabAuthStatus(),
+    writes_enabled: writesEnabled(),
+    tools: listRegisteredYnabTools(),
+    execute_with: "ynab_tool_execute",
+    write_execute_with: writesEnabled() ? "ynab_write_tool_execute" : null,
+  })
+);
+
+registerTool(
+  "ynab_tool_execute",
+  {
+    title: "Execute YNAB Tool",
+    description: "Execute an existing read-only YNAB MCP tool by name. Use ynab_tool_index first to discover YNAB tool names, then pass the selected tool_name and its JSON input. Write-capable tools must be called directly or through ynab_write_tool_execute when YNAB_ALLOW_WRITES=1.",
+    inputSchema: {
+      tool_name: z.string().describe("Existing read-only YNAB tool name, such as review_unapproved, get_transactions, list_categories, search_categories, or search_payees."),
+      input: z.record(z.string(), z.any()).optional().describe("JSON input for the selected YNAB tool. Omit or pass an empty object for tools that take no input."),
+    },
+  },
+  async ({ tool_name: toolName, input = {} }) => {
+    if (toolName.startsWith("ynab_")) {
+      return {
+        isError: true,
+        content: [{ type: "text", text: "Refusing to execute YNAB discovery helper tools recursively." }],
+      };
+    }
+    if (WRITE_TOOL_METADATA[toolName]) {
+      return {
+        isError: true,
+        content: [{ type: "text", text: `${toolName} is a write-capable YNAB tool. Set YNAB_ALLOW_WRITES=1 and call it directly, or use ynab_write_tool_execute.` }],
+      };
+    }
+    const tool = registeredTools.get(toolName);
+    if (!tool) {
+      return {
+        isError: true,
+        content: [{ type: "text", text: `Unknown YNAB tool: ${toolName}` }],
+      };
+    }
+    return tool.handler(input);
+  }
+);
+
+registerTool(
+  "ynab_write_tool_execute",
+  {
+    title: "Execute YNAB Write Tool",
+    description: "Execute an existing write-capable YNAB MCP tool by name. This tool is registered only when YNAB_ALLOW_WRITES=1 and should be used only after explicit user confirmation.",
+    inputSchema: {
+      tool_name: z.string().describe("Existing write-capable YNAB tool name, such as update_transaction, update_transactions, approve_transactions, create_transaction, or delete_transaction."),
+      input: z.record(z.string(), z.any()).optional().describe("JSON input for the selected YNAB write tool."),
+    },
+  },
+  async ({ tool_name: toolName, input = {} }) => {
+    if (toolName.startsWith("ynab_")) {
+      return {
+        isError: true,
+        content: [{ type: "text", text: "Refusing to execute YNAB discovery helper tools recursively." }],
+      };
+    }
+    if (!WRITE_TOOL_METADATA[toolName]) {
+      return {
+        isError: true,
+        content: [{ type: "text", text: `${toolName} is not a write-capable YNAB tool. Use ynab_tool_execute for read-only tools.` }],
+      };
+    }
+    const tool = registeredTools.get(toolName);
+    if (!tool) {
+      return writeDisabledResult(toolName);
+    }
+    return tool.handler(input);
+  }
 );
 
 // --- Start ---

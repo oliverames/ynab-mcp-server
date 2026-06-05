@@ -21,10 +21,13 @@ const writeTools = [
   "update_transaction",
   "delete_transaction",
   "update_transactions",
+  "approve_transactions",
+  "reassign_payee_transactions",
   "import_transactions",
   "create_scheduled_transaction",
   "update_scheduled_transaction",
   "delete_scheduled_transaction",
+  "ynab_write_tool_execute",
 ];
 
 const requiredReadTools = [
@@ -82,8 +85,17 @@ async function listTools(overrides = {}) {
 const readOnlyTools = await listTools({ YNAB_ALLOW_WRITES: undefined });
 const readOnlyNames = new Set(readOnlyTools.map((tool) => tool.name));
 
+const discoveryOnlyTools = await listTools({
+  YNAB_API_TOKEN: undefined,
+  YNAB_API_TOKEN_FILE: undefined,
+  YNAB_OP_PATH: undefined,
+  YNAB_ALLOW_WRITES: undefined,
+});
+const discoveryOnlyNames = new Set(discoveryOnlyTools.map((tool) => tool.name));
+
 for (const name of requiredReadTools) {
   assert.ok(readOnlyNames.has(name), `expected read tool ${name} to be available by default`);
+  assert.ok(discoveryOnlyNames.has(name), `expected read tool ${name} to be discoverable without auth`);
 }
 
 for (const name of writeTools) {

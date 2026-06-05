@@ -41,7 +41,15 @@ assert(lock.version === version, `package-lock root version matches ${version}`)
 assert(lock.packages?.[""]?.version === version, `package-lock package version matches ${version}`);
 assert(indexJs.includes(`version: "${version}"`), `index.js McpServer version matches ${version}`);
 
-const registeredToolCount = [...indexJs.matchAll(/server\.registerTool\(/g)].length;
+const registeredToolNames = [...indexJs.matchAll(/^\s*registerTool\(\s*\n\s*"([^"]+)"/gm)]
+  .map((match) => match[1]);
+const registeredToolCount = registeredToolNames
+  .filter((name) => !name.startsWith("ynab_"))
+  .length;
+const discoveryHelpers = ["ynab_auth_status", "ynab_tool_index", "ynab_tool_execute", "ynab_write_tool_execute"];
+for (const helperName of discoveryHelpers) {
+  assert(registeredToolNames.includes(helperName), `discovery helper ${helperName} is registered`);
+}
 const readmeToolCounts = [...new Set(
   [...readme.matchAll(/\b(\d+) tools\b/gi)].map((match) => Number(match[1]))
 )];
