@@ -5,7 +5,7 @@
 <h1 align="center">MCP Server for YNAB</h1>
 
 <p align="center">
-  <strong>A local Model Context Protocol server for YNAB budget operations</strong><br>
+  <strong>Turn natural-language budget questions into safe, local YNAB API workflows</strong><br>
   <em>Give your AI assistant read-only budget access by default, with explicit write opt-in</em>
 </p>
 
@@ -32,17 +32,21 @@
 
 ---
 
+Run YNAB through Claude Code, Codex, or any stdio MCP host without a marketplace plugin. This server gives AI assistants a local, rate-aware YNAB API layer that is read-only by default, speaks in dollars instead of milliunits, and exposes write tools only after explicit opt-in.
+
 ## Why This Exists
 
-YNAB's budgeting philosophy works best when you interact with your budget frequently - but the app interface isn't designed for quick queries or bulk operations. "How much did I spend on groceries this month?" shouldn't require navigating three screens. "Categorize all my Amazon orders from this week" shouldn't be a manual, one-by-one process.
+YNAB's budgeting philosophy works best when you interact with your budget frequently, but the app interface is not designed for quick questions or careful bulk cleanup. "How much did I spend on groceries this month?" should not require navigating three screens. "Categorize all my Amazon orders from this week" should not become a manual, one-by-one review.
 
-This server gives your AI assistant a safe local interface to YNAB's API, turning natural language into budget review and, when explicitly enabled, budget operations. All monetary values are automatically converted between dollars and YNAB's internal milliunits format so the AI never has to think about it. Built on the [official YNAB JavaScript SDK](https://github.com/ynab/ynab-sdk-js) with direct API calls for endpoints and query parameters that the SDK has not caught up with yet.
+This server gives your AI assistant a safe local interface to YNAB's API, turning natural language into structured budget review and, when explicitly enabled, budget operations. It is designed for real budgeting work: finding overspending, reviewing unapproved transactions, checking category drift, investigating recurring payments, and making verified batch updates without giving the assistant broader access than it needs.
+
+All monetary values are automatically converted between dollars and YNAB's internal milliunits format so the AI never has to think about it. The server uses the [official YNAB JavaScript SDK](https://github.com/ynab/ynab-sdk-js) where it fits, plus direct API calls for newer endpoints and query parameters that the SDK has not caught up with yet.
 
 ---
 
 ## Quick Start
 
-This package stands on its own as a stdio MCP server. You do not need a Claude or Codex marketplace plugin; install it directly with `npx` and your MCP client will launch it on demand.
+This package stands on its own as a stdio MCP server. You do not need a Claude or Codex marketplace plugin; register the npm package directly and your MCP client will launch it on demand.
 
 ### 1. Get a YNAB Personal Access Token
 
@@ -53,8 +57,8 @@ This local stdio package is intended for a YNAB account owner running the server
 Credential lookup order:
 
 1. Values passed directly to the MCP process, such as `YNAB_API_TOKEN`.
-2. Codex plaintext settings in `~/.codex/config.toml`, first `[shell_environment_policy.set]`, then `[mcp_servers.ynab.env]`.
-3. Claude Code plaintext settings in `~/.claude/settings.json` under top-level `env`.
+2. The detected host's plaintext settings: Codex reads `~/.codex/config.toml`, first `[shell_environment_policy.set]`, then `[mcp_servers.ynab.env]`; Claude Code reads `~/.claude/settings.json` under top-level `env`.
+3. The other supported agent config as a fallback, useful when a token is already stored locally but the launcher did not inject it.
 4. `YNAB_API_TOKEN_FILE`, if configured in any of the sources above.
 5. `YNAB_OP_PATH`, if configured in any of the sources above and the `op` CLI is available.
 
@@ -438,18 +442,18 @@ Manual YNAB transfer fixes can replace one side of the pair with a new transacti
 
 ## Environment Variables
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `YNAB_API_TOKEN` | Yes* | [Personal access token](https://app.ynab.com/settings/developer) from YNAB Developer Settings. Read from process env first, then Codex and Claude plaintext agent settings. |
-| `YNAB_API_TOKEN_FILE` | No | Path to a file containing the token. The file must be 4 KB or smaller. Used only when `YNAB_API_TOKEN` is unset. Can be provided through process env or agent settings. |
-| `YNAB_BUDGET_ID` | No | Default budget ID. If omitted, uses `"last-used"` (your most recently accessed budget). Run `list_budgets` to find IDs. |
-| `YNAB_ALLOW_WRITES` | No | Set to `1` to register write tools. Any other value keeps the server read-only. |
-| `YNAB_OP_PATH` | No | 1Password secret reference for your API token (see below). Required only if using the 1Password fallback instead of `YNAB_API_TOKEN`. Can be provided through process env or agent settings. |
-| `YNAB_DISABLE_AGENT_CONFIG_FALLBACK` | No | Set to `1` to stop the server from reading `~/.codex/config.toml` and `~/.claude/settings.json`. Intended for tests and tightly controlled runtimes. |
-| `YNAB_RATE_LIMIT_PER_HOUR` | No | Client-side rate limiter. Defaults to `190`; set to `0` to disable for controlled tests. |
-| `YNAB_RATE_LIMIT_BURST` | No | Maximum burst size before rate limiting pauses requests. Defaults to `10`. |
-| `YNAB_HTTP_TIMEOUT_MS` | No | Per-request timeout. Defaults to `30000`. |
-| `YNAB_MAX_RESPONSE_BYTES` | No | Maximum direct-fetch response size for newer endpoints. Defaults to `8388608`. |
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `YNAB_API_TOKEN` | Yes* | (none) | [Personal access token](https://app.ynab.com/settings/developer) from YNAB Developer Settings. Read from process env first, then supported Codex and Claude plaintext agent settings. |
+| `YNAB_API_TOKEN_FILE` | No | (none) | Path to a file containing only the token. The file must be 4 KB or smaller. Used only when `YNAB_API_TOKEN` is unset, and can be provided through process env or agent settings. |
+| `YNAB_BUDGET_ID` | No | `last-used` | Default budget ID. If omitted, tools use YNAB's most recently accessed budget. Run `list_budgets` to find IDs. |
+| `YNAB_ALLOW_WRITES` | No | read-only | Set to `1` to register write tools. Any other value keeps the server read-only. |
+| `YNAB_OP_PATH` | No | (none) | 1Password secret reference for your API token. Used only if no direct token is configured. Can be provided through process env or agent settings. |
+| `YNAB_DISABLE_AGENT_CONFIG_FALLBACK` | No | `0` | Set to `1` to stop the server from reading `~/.codex/config.toml` and `~/.claude/settings.json`. Intended for tests and tightly controlled runtimes. |
+| `YNAB_RATE_LIMIT_PER_HOUR` | No | `190` | Client-side rate limiter. Set to `0` to disable for controlled tests. |
+| `YNAB_RATE_LIMIT_BURST` | No | `10` | Maximum burst size before rate limiting pauses requests. |
+| `YNAB_HTTP_TIMEOUT_MS` | No | `30000` | Per-request timeout in milliseconds. |
+| `YNAB_MAX_RESPONSE_BYTES` | No | `8388608` | Maximum direct-fetch response size for newer endpoints. |
 
 *`YNAB_API_TOKEN` is required unless `YNAB_API_TOKEN_FILE` or `YNAB_OP_PATH` is set. These values may come from direct process env, Codex config, or Claude settings.
 
@@ -471,7 +475,7 @@ If you store your YNAB token in [1Password CLI](https://developer.1password.com/
 }
 ```
 
-The fallback adds ~1-2s to startup and is silently skipped if `op` is unavailable or the item is not found. If no token source is configured, `ynab_auth_status` tells the calling agent to ask whether you have a token in 1Password or another password manager, request permission before editing agent config, and otherwise ask you to add `YNAB_API_TOKEN` to the appropriate Codex or Claude settings file.
+The fallback adds ~1-2s to startup. If `op` is unavailable or the item is not found, `ynab_auth_status` reports the lookup problem and returns setup guidance instead of letting a normal YNAB tool fail with a generic unauthorized error. If no token source is configured, the setup guide tells the calling agent to ask whether you have a token in 1Password or another password manager, request permission before editing agent config, and otherwise ask you to add `YNAB_API_TOKEN` to the appropriate Codex or Claude settings file.
 
 ---
 
@@ -508,7 +512,7 @@ Set `YNAB_RATE_LIMIT_PER_HOUR=0` only for controlled local tests or smoke checks
 ```
 
 - **Transport:** stdio (standard MCP server pattern)
-- **Auth:** Bearer token via `YNAB_API_TOKEN`, `YNAB_API_TOKEN_FILE`, or `YNAB_OP_PATH` for local owner-run use
+- **Auth:** Bearer token via process env, Codex or Claude agent config, `YNAB_API_TOKEN_FILE`, or `YNAB_OP_PATH` for local owner-run use
 - **SDK:** Official [`ynab`](https://www.npmjs.com/package/ynab) v4.1+ for core endpoints, direct `fetch` for newer API features and v1.85 transaction filters
 - **Safety:** read-only default, explicit write opt-in, host-pinned HTTPS requests to `api.ynab.com`, no redirect following, redacted token errors
 - **Validation:** All parameters validated with [Zod](https://zod.dev) schemas
@@ -532,7 +536,7 @@ Tests cover all tool categories: reads, reversible writes, bulk operations, sear
 
 ### MCP Smoke Tests
 
-Use the smoke tests when you need to prove the server is reachable over stdio without reconstructing a custom MCP client. These commands use the official MCP SDK client, the same transport shape used by normal MCP hosts. `smoke:list-tools` can run without a live token to verify discovery, but live read and write smokes require `YNAB_API_TOKEN`, `YNAB_API_TOKEN_FILE`, or `YNAB_OP_PATH`.
+Use the smoke tests when you need to prove the server is reachable over stdio without reconstructing a custom MCP client. These commands use the official MCP SDK client, the same transport shape used by normal MCP hosts. `smoke:list-tools` can run without a live token to verify discovery, but live read and write smokes need a token from process env, supported Codex or Claude settings, `YNAB_API_TOKEN_FILE`, or `YNAB_OP_PATH`.
 
 ```bash
 YNAB_API_TOKEN=your-token YNAB_BUDGET_ID=your-budget-id npm run smoke:list-tools
