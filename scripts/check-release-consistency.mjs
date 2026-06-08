@@ -74,9 +74,9 @@ assert(
 const mcpbVersions = [...readme.matchAll(/(?:ynab-mcp-server|mcp-server-for-ynab)-(\d+\.\d+\.\d+)\.mcpb/g)].map((match) => match[1]);
 const staleMcpbVersions = [...new Set(mcpbVersions.filter((mcpbVersion) => mcpbVersion !== version))];
 assert(
-  staleMcpbVersions.length === 0 && mcpbVersions.length > 0,
+  staleMcpbVersions.length === 0,
   staleMcpbVersions.length === 0
-    ? `README MCPB artifact references match ${version}`
+    ? (mcpbVersions.length > 0 ? `README MCPB artifact references match ${version}` : "README has no MCPB artifact references")
     : `README has stale MCPB artifact versions: ${staleMcpbVersions.join(", ")}`
 );
 

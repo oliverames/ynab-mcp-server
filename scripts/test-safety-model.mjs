@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -47,6 +49,7 @@ function buildEnv(overrides = {}) {
   );
   env.YNAB_API_TOKEN = "test-token-for-list-tools";
   env.YNAB_RATE_LIMIT_PER_HOUR = "0";
+  env.YNAB_DISABLE_AGENT_CONFIG_FALLBACK = "1";
 
   for (const [key, value] of Object.entries(overrides)) {
     if (value === undefined) {
@@ -59,7 +62,7 @@ function buildEnv(overrides = {}) {
   return env;
 }
 
-async function listTools(overrides = {}) {
+async function withTestClient(overrides, callback) {
   const client = new Client({
     name: "ynab-safety-model-test",
     version: "1.0.0",
@@ -75,11 +78,33 @@ async function listTools(overrides = {}) {
 
   try {
     await client.connect(transport);
-    const response = await client.listTools();
-    return response.tools;
+    return await callback(client);
   } finally {
     await client.close();
   }
+}
+
+async function listTools(overrides = {}) {
+  return withTestClient(overrides, async (client) => {
+    const response = await client.listTools();
+    return response.tools;
+  });
+}
+
+async function callJsonTool(name, overrides = {}, input = {}) {
+  return withTestClient(overrides, async (client) => {
+    const response = await client.callTool({ name, arguments: input });
+    const textItem = response.content?.find((item) => item.type === "text" && item.text);
+    assert.ok(textItem, `${name} returned text content`);
+    return {
+      isError: !!response.isError,
+      payload: JSON.parse(textItem.text),
+    };
+  });
+}
+
+function tempHome() {
+  return fs.mkdtempSync(path.join(os.tmpdir(), "ynab-mcp-safety-"));
 }
 
 const readOnlyTools = await listTools({ YNAB_ALLOW_WRITES: undefined });
@@ -90,6 +115,7 @@ const discoveryOnlyTools = await listTools({
   YNAB_API_TOKEN: undefined,
   YNAB_API_TOKEN_FILE: undefined,
   YNAB_OP_PATH: undefined,
+  YNAB_BUDGET_ID: undefined,
   YNAB_ALLOW_WRITES: undefined,
 });
 const discoveryOnlyNames = new Set(discoveryOnlyTools.map((tool) => tool.name));
@@ -156,6 +182,76 @@ for (const name of ["approve_transactions", "reassign_payee_transactions", "ynab
     requiresConfirmedTrue(destructiveTools.get(name)),
     `expected ${name} to require confirmed:true in its input schema`,
   );
+}
+
+{
+  const home = tempHome();
+  fs.mkdirSync(path.join(home, ".codex"), { recursive: true });
+  fs.writeFileSync(path.join(home, ".codex", "config.toml"), [
+    "[shell_environment_policy.set]",
+    "YNAB_API_TOKEN = \"codex-config-token\"",
+    "YNAB_BUDGET_ID = \"codex-budget-id\"",
+    "YNAB_ALLOW_WRITES = \"1\"",
+    "",
+  ].join("\n"));
+
+  const { payload } = await callJsonTool("ynab_auth_status", {
+    HOME: home,
+    YNAB_API_TOKEN: undefined,
+    YNAB_API_TOKEN_FILE: undefined,
+    YNAB_OP_PATH: undefined,
+    YNAB_BUDGET_ID: undefined,
+    YNAB_ALLOW_WRITES: undefined,
+    YNAB_DISABLE_AGENT_CONFIG_FALLBACK: undefined,
+  });
+
+  assert.equal(payload.authenticated, true, "expected Codex config fallback token to authenticate");
+  assert.equal(payload.credential_source, "codex_shell_environment");
+  assert.equal(payload.default_budget_id_configured, true);
+  assert.equal(payload.writes_enabled, true);
+}
+
+{
+  const home = tempHome();
+  fs.mkdirSync(path.join(home, ".claude"), { recursive: true });
+  fs.writeFileSync(path.join(home, ".claude", "settings.json"), JSON.stringify({
+    env: {
+      YNAB_API_TOKEN: "claude-settings-token",
+      YNAB_BUDGET_ID: "claude-budget-id",
+    },
+  }));
+
+  const { payload } = await callJsonTool("ynab_auth_status", {
+    HOME: home,
+    YNAB_API_TOKEN: undefined,
+    YNAB_API_TOKEN_FILE: undefined,
+    YNAB_OP_PATH: undefined,
+    YNAB_BUDGET_ID: undefined,
+    YNAB_ALLOW_WRITES: undefined,
+    YNAB_DISABLE_AGENT_CONFIG_FALLBACK: undefined,
+  });
+
+  assert.equal(payload.authenticated, true, "expected Claude settings fallback token to authenticate");
+  assert.equal(payload.credential_source, "claude_settings_env");
+  assert.equal(payload.default_budget_id_configured, true);
+}
+
+{
+  const home = tempHome();
+  const { isError, payload } = await callJsonTool("get_user", {
+    HOME: home,
+    YNAB_API_TOKEN: undefined,
+    YNAB_API_TOKEN_FILE: undefined,
+    YNAB_OP_PATH: undefined,
+    YNAB_BUDGET_ID: undefined,
+    YNAB_ALLOW_WRITES: undefined,
+    YNAB_DISABLE_AGENT_CONFIG_FALLBACK: undefined,
+  });
+
+  assert.equal(isError, true, "expected missing credentials to fail before YNAB API call");
+  assert.equal(payload.error, "missing_credentials");
+  assert.equal(payload.auth.authenticated, false);
+  assert.ok(payload.auth.setup.prompt_for_agent.includes("password manager"));
 }
 
 console.log("Safety model checks passed");

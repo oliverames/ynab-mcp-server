@@ -17,7 +17,6 @@
 
 <p align="center">
   <a href="https://www.npmjs.com/package/@oliverames/ynab-mcp-server"><img src="https://img.shields.io/npm/v/%40oliverames%2Fynab-mcp-server?style=flat-square&color=f5a542" alt="npm"></a>
-  <a href="https://github.com/oliverames/ynab-mcp-server/releases/tag/v3.0.0"><img src="https://img.shields.io/github/v/release/oliverames/ynab-mcp-server?style=flat-square&color=f5a542&label=MCPB" alt="MCPB release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-f5a542?style=flat-square" alt="License"></a>
   <a href="https://www.buymeacoffee.com/oliverames"><img src="https://img.shields.io/badge/Buy_Me_a_Coffee-support-f5a542?style=flat-square&logo=buy-me-a-coffee&logoColor=white" alt="Buy Me a Coffee"></a>
 </p>
@@ -51,6 +50,16 @@ Go to [YNAB Developer Settings](https://app.ynab.com/settings/developer) and cre
 
 This local stdio package is intended for a YNAB account owner running the server for their own account. A public hosted connector for other YNAB users must use YNAB OAuth instead of asking users for personal access tokens; see [docs/hosted-oauth-connector.md](docs/hosted-oauth-connector.md).
 
+Credential lookup order:
+
+1. Values passed directly to the MCP process, such as `YNAB_API_TOKEN`.
+2. Codex plaintext settings in `~/.codex/config.toml`, first `[shell_environment_policy.set]`, then `[mcp_servers.ynab.env]`.
+3. Claude Code plaintext settings in `~/.claude/settings.json` under top-level `env`.
+4. `YNAB_API_TOKEN_FILE`, if configured in any of the sources above.
+5. `YNAB_OP_PATH`, if configured in any of the sources above and the `op` CLI is available.
+
+If no token is found, `ynab_auth_status` returns a structured setup guide. Agents should first ask whether the user already has the YNAB token in a password manager such as 1Password. If yes, ask permission before configuring `YNAB_OP_PATH`; otherwise ask the user to add `YNAB_API_TOKEN` to the correct Codex or Claude config file and restart the MCP server.
+
 ### 2. Install in Claude Code
 
 Use user scope if you want the server available in all Claude Code projects:
@@ -71,6 +80,8 @@ claude mcp add ynab --scope user \
 ```
 
 Use `--scope project` instead of `--scope user` if you want Claude Code to write a project-local `.mcp.json`.
+
+If `~/.claude/settings.json` already contains `env.YNAB_API_TOKEN`, you may omit `-e YNAB_API_TOKEN=...`; the server will read the Claude setting as a fallback if the launcher does not inject it.
 
 Verify Claude Code can see the server:
 
@@ -102,6 +113,8 @@ codex mcp add ynab \
   --env YNAB_BUDGET_ID=optional-default-budget-id \
   -- npx -y @oliverames/ynab-mcp-server@latest
 ```
+
+If `~/.codex/config.toml` already contains `YNAB_API_TOKEN` under `[shell_environment_policy.set]` or `[mcp_servers.ynab.env]`, you may omit `--env YNAB_API_TOKEN=...`; the server will read the Codex setting as a fallback if the launcher does not inject it.
 
 Verify Codex can see the server:
 
@@ -189,14 +202,6 @@ npm install -g @oliverames/ynab-mcp-server
 }
 ```
 
-### Install with MCPB (Optional)
-
-For Claude Desktop and other MCPB-compatible clients, download the local bundle from the [v3.0.0 release](https://github.com/oliverames/ynab-mcp-server/releases/tag/v3.0.0):
-
-[Download `mcp-server-for-ynab-3.0.0.mcpb`](https://github.com/oliverames/ynab-mcp-server/releases/download/v3.0.0/mcp-server-for-ynab-3.0.0.mcpb)
-
-The bundle includes the YNAB favicon, production runtime dependencies, and setup prompts for your personal access token, optional default budget ID, and optional write-tool opt-in.
-
 ### 1Password Token Lookup (Optional)
 
 If your token is stored in 1Password, set `YNAB_OP_PATH` instead of `YNAB_API_TOKEN`. The `op` CLI must be installed and authenticated in the environment that launches the MCP server.
@@ -263,7 +268,7 @@ YNAB_API_TOKEN=your-token-here npm run smoke:review-unapproved -- --published
 - **Dollar amounts everywhere** - inputs and outputs are in dollars (`-12.34`), never milliunits (`-12340`). Conversion is automatic and transparent.
 - **Smart budget resolution** - set `YNAB_BUDGET_ID` for a default, or omit it to auto-resolve to your last-used budget. Every tool accepts an optional `budgetId` override.
 - **Pinned YNAB host** - all HTTP requests are restricted to `https://api.ynab.com`, redirects are not followed, and API tokens are redacted from surfaced errors.
-- **Token fallback options** - use `YNAB_API_TOKEN`, a small token file via `YNAB_API_TOKEN_FILE`, or a 1Password CLI reference via `YNAB_OP_PATH`.
+- **Agent-aware token fallback** - use direct process env, Codex `~/.codex/config.toml`, Claude `~/.claude/settings.json`, a small token file via `YNAB_API_TOKEN_FILE`, or a 1Password CLI reference via `YNAB_OP_PATH`.
 - **Split transactions** - first-class support for subtransactions in create, read, and format operations.
 - **Current transaction filters** - transaction list tools support `sinceDate`, `untilDate`, type filters, resource filters, and delta requests. YNAB defaults omitted `sinceDate` to one year ago, so pass an explicit older date when you need older history.
 - **Bulk operations** - `create_transactions` and `update_transactions` handle arrays in a single API call.
@@ -435,17 +440,18 @@ Manual YNAB transfer fixes can replace one side of the pair with a new transacti
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `YNAB_API_TOKEN` | Yes* | [Personal access token](https://app.ynab.com/settings/developer) from YNAB Developer Settings. |
-| `YNAB_API_TOKEN_FILE` | No | Path to a file containing the token. The file must be 4 KB or smaller. Used only when `YNAB_API_TOKEN` is unset. |
+| `YNAB_API_TOKEN` | Yes* | [Personal access token](https://app.ynab.com/settings/developer) from YNAB Developer Settings. Read from process env first, then Codex and Claude plaintext agent settings. |
+| `YNAB_API_TOKEN_FILE` | No | Path to a file containing the token. The file must be 4 KB or smaller. Used only when `YNAB_API_TOKEN` is unset. Can be provided through process env or agent settings. |
 | `YNAB_BUDGET_ID` | No | Default budget ID. If omitted, uses `"last-used"` (your most recently accessed budget). Run `list_budgets` to find IDs. |
 | `YNAB_ALLOW_WRITES` | No | Set to `1` to register write tools. Any other value keeps the server read-only. |
-| `YNAB_OP_PATH` | No | 1Password secret reference for your API token (see below). Required only if using the 1Password fallback instead of `YNAB_API_TOKEN`. |
+| `YNAB_OP_PATH` | No | 1Password secret reference for your API token (see below). Required only if using the 1Password fallback instead of `YNAB_API_TOKEN`. Can be provided through process env or agent settings. |
+| `YNAB_DISABLE_AGENT_CONFIG_FALLBACK` | No | Set to `1` to stop the server from reading `~/.codex/config.toml` and `~/.claude/settings.json`. Intended for tests and tightly controlled runtimes. |
 | `YNAB_RATE_LIMIT_PER_HOUR` | No | Client-side rate limiter. Defaults to `190`; set to `0` to disable for controlled tests. |
 | `YNAB_RATE_LIMIT_BURST` | No | Maximum burst size before rate limiting pauses requests. Defaults to `10`. |
 | `YNAB_HTTP_TIMEOUT_MS` | No | Per-request timeout. Defaults to `30000`. |
 | `YNAB_MAX_RESPONSE_BYTES` | No | Maximum direct-fetch response size for newer endpoints. Defaults to `8388608`. |
 
-*`YNAB_API_TOKEN` is required unless `YNAB_API_TOKEN_FILE` or `YNAB_OP_PATH` is set.
+*`YNAB_API_TOKEN` is required unless `YNAB_API_TOKEN_FILE` or `YNAB_OP_PATH` is set. These values may come from direct process env, Codex config, or Claude settings.
 
 ### 1Password Integration
 
@@ -465,7 +471,7 @@ If you store your YNAB token in [1Password CLI](https://developer.1password.com/
 }
 ```
 
-The fallback adds ~1-2s to startup and is silently skipped if `op` is unavailable or the item is not found.
+The fallback adds ~1-2s to startup and is silently skipped if `op` is unavailable or the item is not found. If no token source is configured, `ynab_auth_status` tells the calling agent to ask whether you have a token in 1Password or another password manager, request permission before editing agent config, and otherwise ask you to add `YNAB_API_TOKEN` to the appropriate Codex or Claude settings file.
 
 ---
 
@@ -568,11 +574,10 @@ Before publishing, run:
 
 ```bash
 npm run release:check
-npm run build:mcpb
 npm pack --dry-run
 ```
 
-After publishing, run `npm run release:check:registry` to verify the npm `latest` dist-tag, repo metadata, README release links, and MCPB artifact references all agree on the same version.
+After publishing, run `npm run release:check:registry` to verify the npm `latest` dist-tag and repo metadata agree on the same version. `npm run build:mcpb` remains available for an explicit local bundle, but the normal install path is direct MCP registration through npm.
 
 ---
 

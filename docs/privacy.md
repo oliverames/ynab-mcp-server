@@ -19,6 +19,8 @@ Authentication is configured by the user through one of these local mechanisms:
 - `YNAB_API_TOKEN`
 - `YNAB_API_TOKEN_FILE`
 - `YNAB_OP_PATH`
+- Codex local plaintext settings in `~/.codex/config.toml`
+- Claude Code local plaintext settings in `~/.claude/settings.json`
 
 The server does not ask for, handle, or store bank credentials or other financial account login credentials.
 

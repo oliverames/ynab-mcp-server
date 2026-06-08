@@ -2,6 +2,8 @@
 
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import path from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
@@ -13,44 +15,360 @@ const BASE_URL = "https://api.ynab.com/v1";
 const YNAB_API_HOST = "api.ynab.com";
 const MAX_TOKEN_FILE_BYTES = 4096;
 const MAX_RESPONSE_BYTES = Number.parseInt(process.env.YNAB_MAX_RESPONSE_BYTES || "8388608", 10);
+const YNAB_RUNTIME_KEYS = [
+  "YNAB_API_TOKEN",
+  "YNAB_API_TOKEN_FILE",
+  "YNAB_OP_PATH",
+  "YNAB_BUDGET_ID",
+  "YNAB_ALLOW_WRITES",
+];
 
-let API_TOKEN = process.env.YNAB_API_TOKEN;
-let tokenLookupError;
-if (!API_TOKEN && process.env.YNAB_API_TOKEN_FILE) {
-  try {
-    const tokenFileContents = readFileSync(process.env.YNAB_API_TOKEN_FILE, "utf8");
-    if (Buffer.byteLength(tokenFileContents, "utf8") > MAX_TOKEN_FILE_BYTES) {
-      throw new Error(`token file exceeds ${MAX_TOKEN_FILE_BYTES} bytes`);
-    }
-    API_TOKEN = tokenFileContents.trim();
-  } catch (e) {
-    tokenLookupError = `Could not read YNAB_API_TOKEN_FILE: ${e.message || String(e)}`;
-  }
-}
-if (!API_TOKEN && process.env.YNAB_OP_PATH) {
-  try {
-    API_TOKEN = execFileSync(
-      "op", ["read", process.env.YNAB_OP_PATH],
-      { encoding: "utf-8", timeout: 10000, stdio: ["pipe", "pipe", "pipe"] }
-    ).trim();
-  } catch (e) {
-    tokenLookupError = `Could not read YNAB_OP_PATH via 1Password CLI: ${e.stderr?.toString().trim() || e.message || "unknown 1Password CLI error"}`;
-  }
-}
+const runtimeConfig = resolveYnabRuntimeConfig();
+const API_TOKEN = runtimeConfig.apiToken;
+const tokenLookupError = runtimeConfig.tokenLookupError;
+const DEFAULT_BUDGET_ID = runtimeConfig.values.YNAB_BUDGET_ID?.value;
 if (!API_TOKEN) {
   const fallbackMessage = tokenLookupError
     ? ` ${tokenLookupError}.`
-    : " Set YNAB_API_TOKEN_FILE or YNAB_OP_PATH to enable token fallback.";
-  console.error(`YNAB_API_TOKEN environment variable is required.${fallbackMessage} Starting MCP Server for YNAB in discovery-only mode.`);
+    : " Add YNAB_API_TOKEN to the agent config file, set YNAB_API_TOKEN_FILE, or set YNAB_OP_PATH.";
+  console.error(`YNAB_API_TOKEN is required.${fallbackMessage} Starting MCP Server for YNAB in discovery-only mode.`);
 }
 
 const ynabRateLimit = createYnabRateLimiter();
 const effectiveApiToken = API_TOKEN || "missing-token-for-tool-discovery";
 const api = new ynab.API(effectiveApiToken, BASE_URL);
 api._configuration.config = { accessToken: effectiveApiToken, basePath: BASE_URL, fetchApi: secureFetch };
-const DEFAULT_BUDGET_ID = process.env.YNAB_BUDGET_ID;
 
 // --- Helpers ---
+
+function resolveYnabRuntimeConfig() {
+  const sources = loadYnabSettingSources();
+  const values = {};
+
+  for (const key of YNAB_RUNTIME_KEYS) {
+    const source = sources.find((candidate) => hasNonEmptyString(candidate.values[key]));
+    if (source) {
+      values[key] = {
+        value: source.values[key].trim(),
+        source: source.id,
+        source_label: source.label,
+        path: source.path,
+        section: source.section,
+      };
+    }
+  }
+
+  const lookupErrors = sources
+    .flatMap((source) => source.errors || [])
+    .filter(Boolean);
+
+  let apiToken = values.YNAB_API_TOKEN?.value;
+  let tokenSource = values.YNAB_API_TOKEN || null;
+
+  if (!apiToken && values.YNAB_API_TOKEN_FILE?.value) {
+    try {
+      const tokenFileContents = readFileSync(values.YNAB_API_TOKEN_FILE.value, "utf8");
+      if (Buffer.byteLength(tokenFileContents, "utf8") > MAX_TOKEN_FILE_BYTES) {
+        throw new Error(`token file exceeds ${MAX_TOKEN_FILE_BYTES} bytes`);
+      }
+      apiToken = tokenFileContents.trim();
+      tokenSource = {
+        source: "token_file",
+        source_label: "YNAB_API_TOKEN_FILE",
+        path: values.YNAB_API_TOKEN_FILE.value,
+      };
+    } catch (e) {
+      lookupErrors.push(`Could not read YNAB_API_TOKEN_FILE: ${e.message || String(e)}`);
+    }
+  }
+
+  if (!apiToken && values.YNAB_OP_PATH?.value) {
+    try {
+      apiToken = execFileSync(
+        "op", ["read", values.YNAB_OP_PATH.value],
+        { encoding: "utf-8", timeout: 10000, stdio: ["pipe", "pipe", "pipe"] }
+      ).trim();
+      tokenSource = {
+        source: "onepassword_cli",
+        source_label: "YNAB_OP_PATH via 1Password CLI",
+      };
+    } catch (e) {
+      lookupErrors.push(`Could not read YNAB_OP_PATH via 1Password CLI: ${e.stderr?.toString().trim() || e.message || "unknown 1Password CLI error"}`);
+    }
+  }
+
+  return {
+    apiToken,
+    tokenSource,
+    values,
+    sources_checked: sources.map((source) => ({
+      id: source.id,
+      label: source.label,
+      path: source.path,
+      section: source.section,
+      available: source.available,
+      keys_found: source.keysFound,
+    })),
+    config_fallback_disabled: process.env.YNAB_DISABLE_AGENT_CONFIG_FALLBACK === "1",
+    detected_agent: detectAgentRuntime(),
+    tokenLookupError: lookupErrors[lookupErrors.length - 1],
+    lookup_errors: lookupErrors,
+  };
+}
+
+function loadYnabSettingSources() {
+  const finalize = (sources) => sources.map((source) => ({
+    ...source,
+    keysFound: YNAB_RUNTIME_KEYS.filter((key) => hasNonEmptyString(source.values[key])),
+  }));
+
+  const sources = [{
+    id: "process_env",
+    label: "process environment",
+    path: null,
+    section: null,
+    available: true,
+    values: pickYnabValues(process.env),
+    errors: [],
+  }];
+
+  if (process.env.YNAB_DISABLE_AGENT_CONFIG_FALLBACK === "1") {
+    return finalize(sources);
+  }
+
+  const codexSources = loadCodexConfigSources();
+  const claudeSource = loadClaudeSettingsSource();
+  if (detectAgentRuntime() === "claude") {
+    sources.push(claudeSource, ...codexSources);
+  } else {
+    sources.push(...codexSources, claudeSource);
+  }
+  return finalize(sources);
+}
+
+function loadCodexConfigSources() {
+  const configPath = path.join(userHomeDir(), ".codex", "config.toml");
+  const emptySources = [
+    configSource("codex_shell_environment", "Codex shell_environment_policy.set", configPath, "shell_environment_policy.set"),
+    configSource("codex_mcp_env", "Codex mcp_servers.ynab.env", configPath, "mcp_servers.ynab.env"),
+  ];
+
+  let text;
+  try {
+    text = readFileSync(configPath, "utf8");
+  } catch (e) {
+    return emptySources.map((source) => ({
+      ...source,
+      available: false,
+      errors: isMissingFileError(e) ? [] : [`Could not read ${configPath}: ${e.message || String(e)}`],
+    }));
+  }
+
+  const sections = parseSimpleTomlSections(text);
+  return emptySources.map((source) => ({
+    ...source,
+    available: true,
+    values: pickYnabValues(sections[source.section] || {}),
+    errors: [],
+  }));
+}
+
+function loadClaudeSettingsSource() {
+  const settingsPath = path.join(userHomeDir(), ".claude", "settings.json");
+  const source = configSource("claude_settings_env", "Claude settings.json env", settingsPath, "env");
+
+  let settings;
+  try {
+    settings = JSON.parse(readFileSync(settingsPath, "utf8"));
+  } catch (e) {
+    return {
+      ...source,
+      available: false,
+      errors: isMissingFileError(e) ? [] : [`Could not read ${settingsPath}: ${e.message || String(e)}`],
+    };
+  }
+
+  return {
+    ...source,
+    available: true,
+    values: pickYnabValues(settings?.env || {}),
+    errors: [],
+  };
+}
+
+function configSource(id, label, filePath, section) {
+  return {
+    id,
+    label,
+    path: filePath,
+    section,
+    available: false,
+    values: {},
+    errors: [],
+  };
+}
+
+function pickYnabValues(source) {
+  return Object.fromEntries(
+    YNAB_RUNTIME_KEYS
+      .filter((key) => hasNonEmptyString(source?.[key]))
+      .map((key) => [key, String(source[key])])
+  );
+}
+
+function parseSimpleTomlSections(text) {
+  const sections = {};
+  let currentSection = "";
+
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+
+    const sectionMatch = line.match(/^\[([^\]]+)\]$/);
+    if (sectionMatch) {
+      currentSection = sectionMatch[1].trim();
+      sections[currentSection] ||= {};
+      continue;
+    }
+
+    const assignmentMatch = line.match(/^([A-Za-z0-9_]+)\s*=\s*(.+)$/);
+    if (!assignmentMatch || !currentSection) continue;
+
+    const [, key, rawValue] = assignmentMatch;
+    const value = parseSimpleTomlString(rawValue);
+    if (value !== undefined) {
+      sections[currentSection] ||= {};
+      sections[currentSection][key] = value;
+    }
+  }
+
+  return sections;
+}
+
+function parseSimpleTomlString(rawValue) {
+  const value = stripTomlComment(rawValue).trim();
+  if (!value) return undefined;
+  if (value.startsWith("\"") && value.endsWith("\"")) {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return value.slice(1, -1);
+    }
+  }
+  if (value.startsWith("'") && value.endsWith("'")) {
+    return value.slice(1, -1);
+  }
+  return value;
+}
+
+function stripTomlComment(value) {
+  let quote = null;
+  let escaped = false;
+  for (let i = 0; i < value.length; i += 1) {
+    const char = value[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) quote = null;
+      continue;
+    }
+    if (char === "\"" || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (char === "#") {
+      return value.slice(0, i);
+    }
+  }
+  return value;
+}
+
+function userHomeDir() {
+  return process.env.HOME || homedir();
+}
+
+function hasNonEmptyString(value) {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function isMissingFileError(error) {
+  return error?.code === "ENOENT" || error?.code === "ENOTDIR";
+}
+
+function detectAgentRuntime() {
+  if (Object.keys(process.env).some((key) => key.startsWith("CODEX_"))) return "codex";
+  if (Object.keys(process.env).some((key) => key.startsWith("CLAUDE_"))) return "claude";
+  return "unknown";
+}
+
+function publicYnabRuntimeSettings() {
+  return Object.fromEntries(
+    Object.entries(runtimeConfig.values)
+      .filter(([key]) => key !== "YNAB_API_TOKEN")
+      .map(([key, entry]) => [key, {
+        configured: true,
+        source: entry.source,
+        source_label: entry.source_label,
+      }])
+  );
+}
+
+function ynabAuthSetupGuide() {
+  const agent = runtimeConfig.detected_agent;
+  const codexPath = path.join(userHomeDir(), ".codex", "config.toml");
+  const claudePath = path.join(userHomeDir(), ".claude", "settings.json");
+  const shouldShowCodex = agent === "codex" || agent === "unknown";
+  const shouldShowClaude = agent === "claude" || agent === "unknown";
+  const manualTargets = [];
+  const passwordManagerTargets = [];
+
+  if (shouldShowCodex) {
+    manualTargets.push({
+      agent: "codex",
+      path: codexPath,
+      section: "shell_environment_policy.set",
+      snippet: "[shell_environment_policy.set]\nYNAB_API_TOKEN = \"your-token-here\"",
+    });
+    passwordManagerTargets.push({
+      agent: "codex",
+      path: codexPath,
+      section: "shell_environment_policy.set",
+      snippet: "[shell_environment_policy.set]\nYNAB_OP_PATH = \"op://Personal/YNAB API Token/credential\"",
+      note: "Ask the user for permission before editing this config, and confirm the 1Password item path they want to use.",
+    });
+  }
+
+  if (shouldShowClaude) {
+    manualTargets.push({
+      agent: "claude",
+      path: claudePath,
+      section: "env",
+      snippet: "{\n  \"env\": {\n    \"YNAB_API_TOKEN\": \"your-token-here\"\n  }\n}",
+    });
+    passwordManagerTargets.push({
+      agent: "claude",
+      path: claudePath,
+      section: "env",
+      snippet: "{\n  \"env\": {\n    \"YNAB_OP_PATH\": \"op://Personal/YNAB API Token/credential\"\n  }\n}",
+      note: "Ask the user for permission before editing this config, and confirm the 1Password item path they want to use.",
+    });
+  }
+
+  return {
+    prompt_for_agent: "Ask the user whether they already have a YNAB API key in a password manager such as 1Password. If yes, ask permission to configure YNAB_OP_PATH for this agent. If no, ask them to add YNAB_API_TOKEN to the correct agent config file, then restart the MCP server.",
+    detected_agent: agent,
+    manual_api_key_targets: manualTargets,
+    password_manager_targets: passwordManagerTargets,
+    token_file_option: "Alternatively, set YNAB_API_TOKEN_FILE to a small local file containing only the token.",
+    restart_required: true,
+  };
+}
 
 function resolveBudgetId(input) {
   return input || DEFAULT_BUDGET_ID || "last-used";
@@ -264,6 +582,10 @@ async function fetchTransactions({
 }
 
 async function run(fn) {
+  if (!API_TOKEN) {
+    return missingCredentialsResult();
+  }
+
   try {
     return await fn();
   } catch (e) {
@@ -274,6 +596,17 @@ async function run(fn) {
       : (e?.message || String(e));
     return { content: [{ type: "text", text: `Error: ${sanitizeErrorMessage(msg)}` }], isError: true };
   }
+}
+
+function missingCredentialsResult() {
+  return {
+    content: [{ type: "text", text: JSON.stringify({
+      error: "missing_credentials",
+      message: "YNAB API credentials are not configured for this MCP server process.",
+      auth: ynabAuthStatus(),
+    }, null, 2) }],
+    isError: true,
+  };
 }
 
 function sanitizeErrorMessage(value) {
@@ -446,7 +779,7 @@ const WRITE_TOOL_METADATA = {
 };
 
 function writesEnabled() {
-  return process.env.YNAB_ALLOW_WRITES === "1";
+  return runtimeConfig.values.YNAB_ALLOW_WRITES?.value === "1";
 }
 
 function ynabAuthStatus() {
@@ -457,9 +790,17 @@ function ynabAuthStatus() {
     default_budget_id_configured: !!DEFAULT_BUDGET_ID,
     writes_enabled: writesEnabled(),
     write_tools_available: writeToolsAvailable,
+    credential_source: runtimeConfig.tokenSource?.source ?? null,
+    credential_source_label: runtimeConfig.tokenSource?.source_label ?? null,
+    detected_agent: runtimeConfig.detected_agent,
+    config_fallback_disabled: runtimeConfig.config_fallback_disabled,
+    configured_settings: publicYnabRuntimeSettings(),
+    credential_sources_checked: runtimeConfig.sources_checked,
+    lookup_error: authenticated ? null : tokenLookupError ?? null,
+    setup: authenticated ? null : ynabAuthSetupGuide(),
     message: authenticated
       ? "MCP Server for YNAB has an API token configured."
-      : "MCP Server for YNAB is running in discovery-only mode. Set YNAB_API_TOKEN, YNAB_API_TOKEN_FILE, or YNAB_OP_PATH, then restart the MCP server before calling API tools.",
+      : "MCP Server for YNAB is running in discovery-only mode. Check setup.prompt_for_agent for the safe credential setup flow, then restart the MCP server before calling API tools.",
   };
 }
 
