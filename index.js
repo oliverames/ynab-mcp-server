@@ -1661,9 +1661,10 @@ registerTool(
 
 registerTool(
   "delete_transaction",
-  { description: "Delete a transaction", inputSchema: {
+  { description: "Delete a transaction. Requires confirmed:true after explicit user confirmation.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     transactionId: z.string().describe("Transaction ID"),
+    confirmed: z.literal(true).describe("Required. Pass true only after the user explicitly confirms this transaction deletion."),
   } },
   ({ budgetId, transactionId }) =>
     run(async () => {
@@ -1992,9 +1993,10 @@ registerTool(
 
 registerTool(
   "delete_scheduled_transaction",
-  { description: "Delete a scheduled transaction", inputSchema: {
+  { description: "Delete a scheduled transaction. Requires confirmed:true after explicit user confirmation.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     scheduledTransactionId: z.string().describe("Scheduled transaction ID"),
+    confirmed: z.literal(true).describe("Required. Pass true only after the user explicitly confirms this scheduled transaction deletion."),
   } },
   ({ budgetId, scheduledTransactionId }) =>
     run(async () => {
@@ -2243,7 +2245,7 @@ registerTool(
   },
   () => ok({
     server: "mcp-server-for-ynab",
-    package: "@oliverames/ynab-mcp-server",
+    package: "@oliverames/mcp-server-for-ynab",
     auth: ynabAuthStatus(),
     writes_enabled: writesEnabled(),
     writes_available: writesEnabled() && !!API_TOKEN,
@@ -2315,7 +2317,12 @@ registerTool(
     if (!tool) {
       return writeDisabledResult(toolName);
     }
-    const confirmedInput = ["approve_transactions", "reassign_payee_transactions"].includes(toolName) && input.confirmed === undefined
+    const confirmedInput = [
+      "delete_transaction",
+      "delete_scheduled_transaction",
+      "approve_transactions",
+      "reassign_payee_transactions",
+    ].includes(toolName) && input.confirmed === undefined
       ? { ...input, confirmed: true }
       : input;
     return tool.handler(confirmedInput);

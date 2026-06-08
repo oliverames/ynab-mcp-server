@@ -75,7 +75,7 @@ await withSmokeClient(options, async (client, params) => {
     console.log(`Verification retried: ${updated.verification.retried.length}`);
   } finally {
     if (transactionId) {
-      await call(client, "delete_transaction", { transactionId });
+      await call(client, "delete_transaction", { transactionId, confirmed: true });
     }
   }
 });

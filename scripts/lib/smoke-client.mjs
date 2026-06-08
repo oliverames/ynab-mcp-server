@@ -29,7 +29,7 @@ function usage() {
     "       YNAB_ALLOW_WRITES=1 npm run smoke:batch-verify -- [--published | --package <pkg> | --server-command <command>]",
     "",
     "Defaults to the local checkout entrypoint: node index.js",
-    "Use --published to test npx -y @oliverames/ynab-mcp-server@latest from /tmp.",
+    `Use --published to test npx -y ${packageJson.name}@latest from /tmp.`,
   ].join("\n");
 }
 

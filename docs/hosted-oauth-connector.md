@@ -78,8 +78,11 @@ The hosted connector should store tokens by connector user or YNAB user ID:
 
 - Create and verify a YNAB OAuth application with the production redirect URI.
 - Decide whether the hosted connector offers read-only only, read/write, or separate read-only and write-enabled variants.
-- Publish privacy and deletion pages before public distribution.
+- Publish privacy, support, and deletion pages before public distribution.
+- Include a public support contact for account, deletion, and security questions.
+- Configure the OAuth app with a privacy policy URL and display that URL clearly in the connector interface.
+- Use public names and DNS names that follow the "for YNAB" pattern and do not imply sponsorship, endorsement, or official YNAB support.
 - Add non-affiliation language; this connector is not an official YNAB product.
 - Run read-only smoke tests through `/mcp`.
 - If writes are enabled, run the batch category+approval smoke against a dedicated test budget and assert post-write refetch verification.
-
+- Require `confirmed: true` for destructive direct tools, bulk-filter write tools, and any generic write executor.

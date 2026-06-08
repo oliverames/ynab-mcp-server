@@ -177,7 +177,13 @@ function requiresConfirmedTrue(tool) {
     && (confirmed?.const === true || confirmed?.enum?.includes(true));
 }
 
-for (const name of ["approve_transactions", "reassign_payee_transactions", "ynab_write_tool_execute"]) {
+for (const name of [
+  "delete_transaction",
+  "delete_scheduled_transaction",
+  "approve_transactions",
+  "reassign_payee_transactions",
+  "ynab_write_tool_execute",
+]) {
   assert.ok(
     requiresConfirmedTrue(destructiveTools.get(name)),
     `expected ${name} to require confirmed:true in its input schema`,

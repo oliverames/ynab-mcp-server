@@ -425,14 +425,14 @@ await test("update_transactions (batch category + approve verifies persisted fie
     console.log("    ✓ Batch category+approve verified by refetch");
   } finally {
     if (regressionTxnId) {
-      await call("delete_transaction", { budgetId: bid, transactionId: regressionTxnId });
+      await call("delete_transaction", { budgetId: bid, transactionId: regressionTxnId, confirmed: true });
     }
   }
 });
 
 await test("delete_transaction", async () => {
   if (!createdTxnId) throw new Error("no test transaction to delete");
-  const t = await call("delete_transaction", { budgetId: bid, transactionId: createdTxnId });
+  const t = await call("delete_transaction", { budgetId: bid, transactionId: createdTxnId, confirmed: true });
   if (!t.id) throw new Error("no id in delete response");
   console.log(`    ✓ Deleted ${t.payee_name} $${t.amount}`);
 });
@@ -464,7 +464,7 @@ await test("create_transaction (split)", async () => {
     if (!t.subtransactions || t.subtransactions.length !== 2) throw new Error(`expected 2 subtransactions, got ${t.subtransactions?.length}`);
     console.log(`    ✓ Created split: ${t.subtransactions.map(s => `$${s.amount}`).join(" + ")}`);
   } finally {
-    if (splitTxnId) await call("delete_transaction", { budgetId: bid, transactionId: splitTxnId });
+    if (splitTxnId) await call("delete_transaction", { budgetId: bid, transactionId: splitTxnId, confirmed: true });
   }
 });
 
@@ -484,7 +484,7 @@ await test("create_transactions (bulk)", async () => {
     console.log(`    ✓ Bulk created ${created.length} transactions`);
   } finally {
     for (const t of created) {
-      await call("delete_transaction", { budgetId: bid, transactionId: t.id });
+      await call("delete_transaction", { budgetId: bid, transactionId: t.id, confirmed: true });
     }
   }
 });

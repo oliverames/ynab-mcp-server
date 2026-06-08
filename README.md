@@ -16,7 +16,7 @@
 </p>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/@oliverames/ynab-mcp-server"><img src="https://img.shields.io/npm/v/%40oliverames%2Fynab-mcp-server?style=flat-square&color=f5a542" alt="npm"></a>
+  <a href="https://www.npmjs.com/package/@oliverames/mcp-server-for-ynab"><img src="https://img.shields.io/npm/v/%40oliverames%2Fmcp-server-for-ynab?style=flat-square&color=f5a542" alt="npm"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-f5a542?style=flat-square" alt="License"></a>
   <a href="https://www.buymeacoffee.com/oliverames"><img src="https://img.shields.io/badge/Buy_Me_a_Coffee-support-f5a542?style=flat-square&logo=buy-me-a-coffee&logoColor=white" alt="Buy Me a Coffee"></a>
 </p>
@@ -48,11 +48,13 @@ All monetary values are automatically converted between dollars and YNAB's inter
 
 This package stands on its own as a stdio MCP server. You do not need a Claude or Codex marketplace plugin; register the npm package directly and your MCP client will launch it on demand.
 
+This is the local, owner-run package. It uses a personal access token because it is intended for a YNAB account owner running the MCP server for that same account. A public connector for other YNAB users should be reviewed as an OAuth application and should follow the hosted pattern in [docs/hosted-oauth-connector.md](docs/hosted-oauth-connector.md).
+
 ### 1. Get a YNAB Personal Access Token
 
 Go to [YNAB Developer Settings](https://app.ynab.com/settings/developer) and create a new personal access token.
 
-This local stdio package is intended for a YNAB account owner running the server for their own account. A public hosted connector for other YNAB users must use YNAB OAuth instead of asking users for personal access tokens; see [docs/hosted-oauth-connector.md](docs/hosted-oauth-connector.md).
+Do not ask another YNAB user for a personal access token. If you are building a public connector for accounts you do not own, use YNAB OAuth instead.
 
 Credential lookup order:
 
@@ -71,7 +73,7 @@ Use user scope if you want the server available in all Claude Code projects:
 ```bash
 claude mcp add ynab --scope user \
   -e YNAB_API_TOKEN=your-token-here \
-  -- npx -y @oliverames/ynab-mcp-server@latest
+  -- npx -y @oliverames/mcp-server-for-ynab@latest
 ```
 
 Add a default budget ID if you do not want tools to use YNAB's `last-used` budget:
@@ -80,7 +82,7 @@ Add a default budget ID if you do not want tools to use YNAB's `last-used` budge
 claude mcp add ynab --scope user \
   -e YNAB_API_TOKEN=your-token-here \
   -e YNAB_BUDGET_ID=optional-default-budget-id \
-  -- npx -y @oliverames/ynab-mcp-server@latest
+  -- npx -y @oliverames/mcp-server-for-ynab@latest
 ```
 
 Use `--scope project` instead of `--scope user` if you want Claude Code to write a project-local `.mcp.json`.
@@ -106,7 +108,7 @@ Register the same npm package directly with Codex:
 ```bash
 codex mcp add ynab \
   --env YNAB_API_TOKEN=your-token-here \
-  -- npx -y @oliverames/ynab-mcp-server@latest
+  -- npx -y @oliverames/mcp-server-for-ynab@latest
 ```
 
 With a default budget ID:
@@ -115,7 +117,7 @@ With a default budget ID:
 codex mcp add ynab \
   --env YNAB_API_TOKEN=your-token-here \
   --env YNAB_BUDGET_ID=optional-default-budget-id \
-  -- npx -y @oliverames/ynab-mcp-server@latest
+  -- npx -y @oliverames/mcp-server-for-ynab@latest
 ```
 
 If `~/.codex/config.toml` already contains `YNAB_API_TOKEN` under `[shell_environment_policy.set]` or `[mcp_servers.ynab.env]`, you may omit `--env YNAB_API_TOKEN=...`; the server will read the Codex setting as a fallback if the launcher does not inject it.
@@ -140,17 +142,17 @@ By default, the server registers read-only tools only. To expose tools that crea
 claude mcp add ynab --scope user \
   -e YNAB_API_TOKEN=your-token-here \
   -e YNAB_ALLOW_WRITES=1 \
-  -- npx -y @oliverames/ynab-mcp-server@latest
+  -- npx -y @oliverames/mcp-server-for-ynab@latest
 ```
 
 ```bash
 codex mcp add ynab \
   --env YNAB_API_TOKEN=your-token-here \
   --env YNAB_ALLOW_WRITES=1 \
-  -- npx -y @oliverames/ynab-mcp-server@latest
+  -- npx -y @oliverames/mcp-server-for-ynab@latest
 ```
 
-Bulk-filter write tools such as `approve_transactions`, `reassign_payee_transactions`, and the generic `ynab_write_tool_execute` helper also require `confirmed: true` in the tool input after explicit user confirmation. For extra protection, pass `expectedMatchedCount` when using bulk-filter writes.
+Destructive direct tools, bulk-filter write tools such as `approve_transactions` and `reassign_payee_transactions`, and the generic `ynab_write_tool_execute` helper also require `confirmed: true` in the tool input after explicit user confirmation. For extra protection, pass `expectedMatchedCount` when using bulk-filter writes.
 
 ### Manual JSON Config
 
@@ -161,7 +163,7 @@ Bulk-filter write tools such as `approve_transactions`, `reassign_payee_transact
   "mcpServers": {
     "ynab": {
       "command": "npx",
-      "args": ["-y", "@oliverames/ynab-mcp-server"],
+      "args": ["-y", "@oliverames/mcp-server-for-ynab"],
       "env": {
         "YNAB_API_TOKEN": "your-token-here"
       }
@@ -177,7 +179,7 @@ Bulk-filter write tools such as `approve_transactions`, `reassign_payee_transact
   "mcpServers": {
     "ynab": {
       "command": "npx",
-      "args": ["-y", "@oliverames/ynab-mcp-server"],
+      "args": ["-y", "@oliverames/mcp-server-for-ynab"],
       "env": {
         "YNAB_API_TOKEN": "your-token-here"
       }
@@ -189,7 +191,7 @@ Bulk-filter write tools such as `approve_transactions`, `reassign_payee_transact
 If you prefer a global install, point your MCP client at the package binary directly:
 
 ```bash
-npm install -g @oliverames/ynab-mcp-server
+npm install -g @oliverames/mcp-server-for-ynab
 ```
 
 ```json
@@ -213,13 +215,13 @@ If your token is stored in 1Password, set `YNAB_OP_PATH` instead of `YNAB_API_TO
 ```bash
 claude mcp add ynab --scope user \
   -e YNAB_OP_PATH="op://Personal/YNAB API Token/credential" \
-  -- npx -y @oliverames/ynab-mcp-server@latest
+  -- npx -y @oliverames/mcp-server-for-ynab@latest
 ```
 
 ```bash
 codex mcp add ynab \
   --env 'YNAB_OP_PATH=op://Personal/YNAB API Token/credential' \
-  -- npx -y @oliverames/ynab-mcp-server@latest
+  -- npx -y @oliverames/mcp-server-for-ynab@latest
 ```
 
 ### Local Smoke Test
@@ -269,6 +271,7 @@ YNAB_API_TOKEN=your-token-here npm run smoke:review-unapproved -- --published
 ### Design Decisions
 
 - **Read-only by default** - write tools are not registered unless `YNAB_ALLOW_WRITES=1` is set. Read tools are annotated with `readOnlyHint: true`; write tools are annotated with `readOnlyHint: false`, idempotency hints, and destructive hints for delete operations.
+- **Explicit destructive confirmation** - delete tools require `confirmed: true` in their input after user confirmation. Bulk-filter writes also require `confirmed: true`, and support `expectedMatchedCount` when the current match count needs to be locked before mutation.
 - **Dollar amounts everywhere** - inputs and outputs are in dollars (`-12.34`), never milliunits (`-12340`). Conversion is automatic and transparent.
 - **Smart budget resolution** - set `YNAB_BUDGET_ID` for a default, or omit it to auto-resolve to your last-used budget. Every tool accepts an optional `budgetId` override.
 - **Pinned YNAB host** - all HTTP requests are restricted to `https://api.ynab.com`, redirects are not followed, and API tokens are redacted from surfaced errors.
@@ -370,7 +373,7 @@ Read tools are available by default. Tools that create, update, import, or delet
 | `update_transactions` | Write tool: batch update multiple transactions at once, then refetch and verify requested fields persisted. Pass `returnSummary: true` for compact counts instead of full objects on large batches (avoids overflowing the tool-result size limit). |
 | `approve_transactions` | Write tool: approve unapproved transactions in bulk by filter (`payeeId` / `categoryId` / `accountId`) without hand-listing IDs. Skips uncategorized transactions by default, requires `confirmed: true`, and supports `expectedMatchedCount`. |
 | `reassign_payee_transactions` | Write tool: move all transactions from one payee to another, the merge workaround since the YNAB API has no payee delete/merge endpoint. Requires `confirmed: true` and supports `expectedMatchedCount`. |
-| `delete_transaction` | Write tool: delete a transaction |
+| `delete_transaction` | Write tool: delete a transaction. Requires `confirmed: true`. |
 | `import_transactions` | Write tool: trigger import from linked bank accounts |
 
 ### Scheduled Transactions
@@ -381,7 +384,7 @@ Read tools are available by default. Tools that create, update, import, or delet
 | `get_scheduled_transaction` | Get a specific scheduled transaction |
 | `create_scheduled_transaction` | Write tool: create a recurring transaction with frequency |
 | `update_scheduled_transaction` | Write tool: update (fetch-then-merge preserves unchanged fields) |
-| `delete_scheduled_transaction` | Write tool: delete a scheduled transaction |
+| `delete_scheduled_transaction` | Write tool: delete a scheduled transaction. Requires `confirmed: true`. |
 
 **Supported frequencies:** `never`, `daily`, `weekly`, `everyOtherWeek`, `twiceAMonth`, `every4Weeks`, `monthly`, `everyOtherMonth`, `every3Months`, `every4Months`, `twiceAYear`, `yearly`, `everyOtherYear`
 
@@ -402,7 +405,7 @@ The server starts in read-only mode. Write tools are not merely discouraged; the
 
 If a client already has the process running, changing the environment is not enough. Restart the MCP server after setting or clearing `YNAB_ALLOW_WRITES`.
 
-Bulk-filter writes require confirmation in the tool input, not only in surrounding chat:
+High-impact writes require confirmation in the tool input, not only in surrounding chat. This applies to direct delete tools, `approve_transactions`, `reassign_payee_transactions`, and `ynab_write_tool_execute`:
 
 ```json
 {
@@ -466,7 +469,7 @@ If you store your YNAB token in [1Password CLI](https://developer.1password.com/
   "mcpServers": {
     "ynab": {
       "command": "npx",
-      "args": ["-y", "@oliverames/ynab-mcp-server"],
+      "args": ["-y", "@oliverames/mcp-server-for-ynab"],
       "env": {
         "YNAB_OP_PATH": "op://Personal/YNAB API Token/credential"
       }
@@ -514,11 +517,19 @@ Set `YNAB_RATE_LIMIT_PER_HOUR=0` only for controlled local tests or smoke checks
 - **Transport:** stdio (standard MCP server pattern)
 - **Auth:** Bearer token via process env, Codex or Claude agent config, `YNAB_API_TOKEN_FILE`, or `YNAB_OP_PATH` for local owner-run use
 - **SDK:** Official [`ynab`](https://www.npmjs.com/package/ynab) v4.1+ for core endpoints, direct `fetch` for newer API features and v1.85 transaction filters
-- **Safety:** read-only default, explicit write opt-in, host-pinned HTTPS requests to `api.ynab.com`, no redirect following, redacted token errors
+- **Safety:** read-only default, explicit write opt-in, confirmation gates for destructive and bulk-filter writes, host-pinned HTTPS requests to `api.ynab.com`, no redirect following, redacted token errors
 - **Validation:** All parameters validated with [Zod](https://zod.dev) schemas
 - **Error handling:** API errors are caught, formatted, and returned as MCP error responses with detail messages
 
 For a hosted OAuth connector design, see [docs/hosted-oauth-connector.md](docs/hosted-oauth-connector.md). For data handling details for this local package, see [docs/privacy.md](docs/privacy.md).
+
+### Public Listing Readiness
+
+This repository is production-ready as a local owner-run stdio MCP package. For a public "Works with YNAB" style listing, confirm the listing scope with YNAB first:
+
+- If YNAB accepts a local owner-run package, submit this package with the published privacy policy, non-affiliation language, read-only default, write opt-in, confirmation gates, and test evidence.
+- If YNAB expects an OAuth application for public distribution, use [docs/hosted-oauth-connector.md](docs/hosted-oauth-connector.md) as the implementation checklist before submission.
+- Keep public display names in the "for YNAB" pattern and avoid names that imply sponsorship or official support.
 
 ---
 

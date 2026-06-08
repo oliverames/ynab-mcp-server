@@ -4,11 +4,13 @@ Last Updated: June 8, 2026
 
 MCP Server for YNAB is a local stdio MCP server that runs on the user's machine or in a user-controlled MCP host. It connects the user's MCP client to the YNAB API.
 
+This policy covers the local owner-run package published as `@oliverames/mcp-server-for-ynab`. It does not cover a hosted OAuth connector or any third-party MCP host that a user chooses to connect to this package.
+
 ## Data Access
 
 The server can access YNAB budget data that the configured YNAB access token is allowed to access, including budgets, accounts, categories, payees, transactions, scheduled transactions, months, and related metadata.
 
-Write tools are disabled by default. They are registered only when `YNAB_ALLOW_WRITES=1` is set before the MCP process starts. Bulk-filter write tools also require `confirmed: true` in the tool input after explicit user confirmation.
+Write tools are disabled by default. They are registered only when `YNAB_ALLOW_WRITES=1` is set before the MCP process starts. Destructive delete tools, bulk-filter write tools, and the generic write executor also require `confirmed: true` in the tool input after explicit user confirmation.
 
 ## Data Storage
 
@@ -42,7 +44,17 @@ Because this local package does not persist YNAB budget data, there is no server
 2. Delete any local token file or environment variable used for `YNAB_API_TOKEN`.
 3. Revoke the personal access token in YNAB Developer Settings.
 
-If a hosted OAuth connector is deployed later, that hosted service must publish its own privacy policy, token storage details, and user-facing deletion or revocation flow.
+If a hosted OAuth connector is deployed later, that hosted service must publish its own privacy policy, token storage details, public support contact, and user-facing deletion or revocation flow.
+
+## Support and Data Requests
+
+For package support, security questions, or data-handling questions, open an issue at https://github.com/oliverames/ynab-mcp-server/issues or contact Oliver Ames through https://ames.consulting.
+
+Because this local package does not operate a server-side data store, data deletion requests usually mean helping the user remove local configuration and revoke the YNAB access token. If a hosted OAuth connector is launched later, deletion requests must also remove any hosted token records associated with the requesting user.
+
+## Children
+
+This package is not directed to children under 13.
 
 ## Non-Affiliation
 
