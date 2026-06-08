@@ -24,7 +24,8 @@
 
 <p align="center">
   <a href="#quick-start">Quick Start</a> &bull;
-  <a href="#install-with-mcpb">MCPB Download</a> &bull;
+  <a href="#install-in-claude-code">Claude Code</a> &bull;
+  <a href="#install-in-codex">Codex</a> &bull;
   <a href="#what-you-can-do">What You Can Do</a> &bull;
   <a href="#tools-reference">Tools Reference</a> &bull;
   <a href="#environment-variables">Configuration</a>
@@ -42,13 +43,7 @@ This server gives your AI assistant a safe local interface to YNAB's API, turnin
 
 ## Quick Start
 
-### Install with MCPB
-
-For Claude Desktop and other MCPB-compatible clients, download the local bundle from the [v3.0.0 release](https://github.com/oliverames/ynab-mcp-server/releases/tag/v3.0.0):
-
-[Download `mcp-server-for-ynab-3.0.0.mcpb`](https://github.com/oliverames/ynab-mcp-server/releases/download/v3.0.0/mcp-server-for-ynab-3.0.0.mcpb)
-
-The bundle includes the YNAB favicon, production runtime dependencies, and setup prompts for your personal access token, optional default budget ID, and optional write-tool opt-in.
+This package stands on its own as a stdio MCP server. You do not need a Claude or Codex marketplace plugin; install it directly with `npx` and your MCP client will launch it on demand.
 
 ### 1. Get a YNAB Personal Access Token
 
@@ -56,7 +51,91 @@ Go to [YNAB Developer Settings](https://app.ynab.com/settings/developer) and cre
 
 This local stdio package is intended for a YNAB account owner running the server for their own account. A public hosted connector for other YNAB users must use YNAB OAuth instead of asking users for personal access tokens; see [docs/hosted-oauth-connector.md](docs/hosted-oauth-connector.md).
 
-### 2. Configure your MCP client
+### 2. Install in Claude Code
+
+Use user scope if you want the server available in all Claude Code projects:
+
+```bash
+claude mcp add ynab --scope user \
+  -e YNAB_API_TOKEN=your-token-here \
+  -- npx -y @oliverames/ynab-mcp-server@latest
+```
+
+Add a default budget ID if you do not want tools to use YNAB's `last-used` budget:
+
+```bash
+claude mcp add ynab --scope user \
+  -e YNAB_API_TOKEN=your-token-here \
+  -e YNAB_BUDGET_ID=optional-default-budget-id \
+  -- npx -y @oliverames/ynab-mcp-server@latest
+```
+
+Use `--scope project` instead of `--scope user` if you want Claude Code to write a project-local `.mcp.json`.
+
+Verify Claude Code can see the server:
+
+```bash
+claude mcp get ynab
+```
+
+If Claude Code reports that `ynab` already exists, remove the old entry and run the add command again:
+
+```bash
+claude mcp remove ynab
+```
+
+### 3. Install in Codex
+
+Register the same npm package directly with Codex:
+
+```bash
+codex mcp add ynab \
+  --env YNAB_API_TOKEN=your-token-here \
+  -- npx -y @oliverames/ynab-mcp-server@latest
+```
+
+With a default budget ID:
+
+```bash
+codex mcp add ynab \
+  --env YNAB_API_TOKEN=your-token-here \
+  --env YNAB_BUDGET_ID=optional-default-budget-id \
+  -- npx -y @oliverames/ynab-mcp-server@latest
+```
+
+Verify Codex can see the server:
+
+```bash
+codex mcp get ynab
+```
+
+If Codex reports that `ynab` already exists, remove the old entry and run the add command again:
+
+```bash
+codex mcp remove ynab
+```
+
+### 4. Enable Write Tools (Optional)
+
+By default, the server registers read-only tools only. To expose tools that create, update, import, or delete YNAB data, add `YNAB_ALLOW_WRITES=1` when you register the server:
+
+```bash
+claude mcp add ynab --scope user \
+  -e YNAB_API_TOKEN=your-token-here \
+  -e YNAB_ALLOW_WRITES=1 \
+  -- npx -y @oliverames/ynab-mcp-server@latest
+```
+
+```bash
+codex mcp add ynab \
+  --env YNAB_API_TOKEN=your-token-here \
+  --env YNAB_ALLOW_WRITES=1 \
+  -- npx -y @oliverames/ynab-mcp-server@latest
+```
+
+Bulk-filter write tools such as `approve_transactions`, `reassign_payee_transactions`, and the generic `ynab_write_tool_execute` helper also require `confirmed: true` in the tool input after explicit user confirmation. For extra protection, pass `expectedMatchedCount` when using bulk-filter writes.
+
+### Manual JSON Config
 
 **Claude Desktop** (`claude_desktop_config.json`):
 
@@ -74,7 +153,7 @@ This local stdio package is intended for a YNAB account owner running the server
 }
 ```
 
-**Claude Code** (`.mcp.json`):
+**Generic MCP client**:
 
 ```json
 {
@@ -90,7 +169,7 @@ This local stdio package is intended for a YNAB account owner running the server
 }
 ```
 
-Or install globally and point to the binary directly:
+If you prefer a global install, point your MCP client at the package binary directly:
 
 ```bash
 npm install -g @oliverames/ynab-mcp-server
@@ -110,26 +189,37 @@ npm install -g @oliverames/ynab-mcp-server
 }
 ```
 
-That's it. Your AI can now talk to YNAB.
+### Install with MCPB (Optional)
 
-By default, the server registers read-only tools only. To expose tools that create, update, import, or delete YNAB data, add `YNAB_ALLOW_WRITES=1` to the MCP server environment:
+For Claude Desktop and other MCPB-compatible clients, download the local bundle from the [v3.0.0 release](https://github.com/oliverames/ynab-mcp-server/releases/tag/v3.0.0):
 
-```json
-{
-  "mcpServers": {
-    "ynab": {
-      "command": "npx",
-      "args": ["-y", "@oliverames/ynab-mcp-server"],
-      "env": {
-        "YNAB_API_TOKEN": "your-token-here",
-        "YNAB_ALLOW_WRITES": "1"
-      }
-    }
-  }
-}
+[Download `mcp-server-for-ynab-3.0.0.mcpb`](https://github.com/oliverames/ynab-mcp-server/releases/download/v3.0.0/mcp-server-for-ynab-3.0.0.mcpb)
+
+The bundle includes the YNAB favicon, production runtime dependencies, and setup prompts for your personal access token, optional default budget ID, and optional write-tool opt-in.
+
+### 1Password Token Lookup (Optional)
+
+If your token is stored in 1Password, set `YNAB_OP_PATH` instead of `YNAB_API_TOKEN`. The `op` CLI must be installed and authenticated in the environment that launches the MCP server.
+
+```bash
+claude mcp add ynab --scope user \
+  -e YNAB_OP_PATH="op://Personal/YNAB API Token/credential" \
+  -- npx -y @oliverames/ynab-mcp-server@latest
 ```
 
-Bulk-filter write tools such as `approve_transactions`, `reassign_payee_transactions`, and the generic `ynab_write_tool_execute` helper also require `confirmed: true` in the tool input after explicit user confirmation. For extra protection, pass `expectedMatchedCount` when using bulk-filter writes.
+```bash
+codex mcp add ynab \
+  --env 'YNAB_OP_PATH=op://Personal/YNAB API Token/credential' \
+  -- npx -y @oliverames/ynab-mcp-server@latest
+```
+
+### Local Smoke Test
+
+From this repo, you can verify the published npm package without changing any MCP client config:
+
+```bash
+YNAB_API_TOKEN=your-token-here npm run smoke:review-unapproved -- --published
+```
 
 ---
 
