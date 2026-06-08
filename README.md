@@ -413,7 +413,7 @@ Set `YNAB_RATE_LIMIT_PER_HOUR=0` only for controlled local tests or smoke checks
 
 - **Transport:** stdio (standard MCP server pattern)
 - **Auth:** Bearer token via `YNAB_API_TOKEN`, `YNAB_API_TOKEN_FILE`, or `YNAB_OP_PATH` for local owner-run use
-- **SDK:** Official [`ynab`](https://www.npmjs.com/package/ynab) v2.5+ for core endpoints, direct `fetch` for newer API features and v1.85 transaction filters
+- **SDK:** Official [`ynab`](https://www.npmjs.com/package/ynab) v4.1+ for core endpoints, direct `fetch` for newer API features and v1.85 transaction filters
 - **Safety:** read-only default, explicit write opt-in, host-pinned HTTPS requests to `api.ynab.com`, no redirect following, redacted token errors
 - **Validation:** All parameters validated with [Zod](https://zod.dev) schemas
 - **Error handling:** API errors are caught, formatted, and returned as MCP error responses with detail messages

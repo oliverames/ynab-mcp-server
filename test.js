@@ -20,8 +20,9 @@ const runNonReversibleTests = process.env.YNAB_RUN_NONREVERSIBLE_TESTS === "1";
 // Dynamic date helpers keep tests current regardless of when they run.
 const now = new Date();
 const prevMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-const testMonth = prevMonth.toISOString().slice(0, 7) + "-01"; // e.g. "2025-03-01"
-const testMonthLabel = testMonth.slice(0, 7);
+const fallbackMonth = prevMonth.toISOString().slice(0, 7) + "-01"; // e.g. "2025-03-01"
+let testMonth = fallbackMonth;
+let testMonthLabel = testMonth.slice(0, 7);
 const todayDate = now.toISOString().slice(0, 10);
 
 async function call(name, args = {}) {
@@ -49,6 +50,19 @@ async function test(label, fn) {
 function skip(label, reason) {
   console.log(`  SKIP: ${label}: ${reason}`);
   skipped++;
+}
+
+function chooseTestMonth(months) {
+  const currentMonth = now.toISOString().slice(0, 7) + "-01";
+  const availableMonths = months
+    .filter((m) => !m.deleted)
+    .map((m) => m.month)
+    .filter(Boolean)
+    .sort();
+
+  if (availableMonths.includes(fallbackMonth)) return fallbackMonth;
+  if (availableMonths.includes(currentMonth)) return currentMonth;
+  return availableMonths[availableMonths.length - 1] || fallbackMonth;
 }
 
 // --- Read operations ---
@@ -125,6 +139,15 @@ await test("get_category", async () => {
   }
 });
 
+let budgetMonths = [];
+await test("list_months", async () => {
+  budgetMonths = await call("list_months", { budgetId: bid });
+  if (budgetMonths.length === 0) throw new Error("no months");
+  testMonth = chooseTestMonth(budgetMonths);
+  testMonthLabel = testMonth.slice(0, 7);
+  console.log(`    using ${testMonthLabel} for month-scoped checks`);
+});
+
 await test("get_month_category", async () => {
   const c = await call("get_month_category", { budgetId: bid, month: testMonth, categoryId: testCatId });
   if (typeof c.budgeted !== "number") throw new Error("budgeted not a number");
@@ -167,11 +190,6 @@ await test("list_payee_locations", async () => {
 await test("get_payee_locations_by_payee", async () => {
   const locs = await call("get_payee_locations_by_payee", { budgetId: bid, payeeId: testPayeeId });
   if (!Array.isArray(locs)) throw new Error("not an array");
-});
-
-await test("list_months", async () => {
-  const m = await call("list_months", { budgetId: bid });
-  if (m.length === 0) throw new Error("no months");
 });
 
 await test("get_month", async () => {
@@ -510,44 +528,47 @@ await test("get_transactions (by month)", async () => {
 // --- Scheduled transactions ---
 console.log("\n=== Scheduled Transaction Operations ===");
 
+let scheduledTransactions = [];
 await test("list_scheduled_transactions", async () => {
-  const s = await call("list_scheduled_transactions", { budgetId: bid });
-  if (!Array.isArray(s)) throw new Error("not an array");
+  scheduledTransactions = await call("list_scheduled_transactions", { budgetId: bid });
+  if (!Array.isArray(scheduledTransactions)) throw new Error("not an array");
 });
 
 let testScheduledTxn;
-await test("get_scheduled_transaction", async () => {
-  const list = await call("list_scheduled_transactions", { budgetId: bid });
-  if (list.length === 0) throw new Error("no scheduled transactions");
-  testScheduledTxn = list[0];
-  const s = await call("get_scheduled_transaction", { budgetId: bid, scheduledTransactionId: testScheduledTxn.id });
-  if (!s.id) throw new Error("no id");
-  // Verify subtransactions field is present
-  if (!("subtransactions" in s)) throw new Error("subtransactions field missing");
-});
+if (scheduledTransactions.length > 0) {
+  await test("get_scheduled_transaction", async () => {
+    testScheduledTxn = scheduledTransactions[0];
+    const s = await call("get_scheduled_transaction", { budgetId: bid, scheduledTransactionId: testScheduledTxn.id });
+    if (!s.id) throw new Error("no id");
+    // Verify subtransactions field is present
+    if (!("subtransactions" in s)) throw new Error("subtransactions field missing");
+  });
 
-await test("update_scheduled_transaction (update memo, verify round-trip)", async () => {
-  if (!testScheduledTxn) throw new Error("no scheduled transaction to update");
-  const marker = `MCP test ${Date.now()}`;
-  const original = await call("get_scheduled_transaction", { budgetId: bid, scheduledTransactionId: testScheduledTxn.id });
-  try {
-    const updated = await call("update_scheduled_transaction", {
-      budgetId: bid,
-      scheduledTransactionId: testScheduledTxn.id,
-      memo: marker,
-    });
-    if (updated.memo !== marker) throw new Error("memo not updated");
-    // Verify other fields preserved (fetch-then-merge worked)
-    if (updated.amount !== original.amount) throw new Error(`amount changed: ${original.amount} -> ${updated.amount}`);
-    if (updated.frequency !== original.frequency) throw new Error("frequency changed");
-  } finally {
-    await call("update_scheduled_transaction", {
-      budgetId: bid,
-      scheduledTransactionId: testScheduledTxn.id,
-      memo: original.memo,
-    });
-  }
-});
+  await test("update_scheduled_transaction (update memo, verify round-trip)", async () => {
+    const marker = `MCP test ${Date.now()}`;
+    const original = await call("get_scheduled_transaction", { budgetId: bid, scheduledTransactionId: testScheduledTxn.id });
+    try {
+      const updated = await call("update_scheduled_transaction", {
+        budgetId: bid,
+        scheduledTransactionId: testScheduledTxn.id,
+        memo: marker,
+      });
+      if (updated.memo !== marker) throw new Error("memo not updated");
+      // Verify other fields preserved (fetch-then-merge worked)
+      if (updated.amount !== original.amount) throw new Error(`amount changed: ${original.amount} -> ${updated.amount}`);
+      if (updated.frequency !== original.frequency) throw new Error("frequency changed");
+    } finally {
+      await call("update_scheduled_transaction", {
+        budgetId: bid,
+        scheduledTransactionId: testScheduledTxn.id,
+        memo: original.memo,
+      });
+    }
+  });
+} else {
+  skip("get_scheduled_transaction", "no scheduled transactions in this budget");
+  skip("update_scheduled_transaction (update memo, verify round-trip)", "no scheduled transactions in this budget");
+}
 
 // --- Summary ---
 console.log(`\n=== Results: ${passed} passed, ${failed} failed, ${skipped} skipped ===`);

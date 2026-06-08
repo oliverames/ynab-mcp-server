@@ -532,12 +532,14 @@ registerTool(
   { description: "List all budgets. Use a budget ID from the results in other tools, or omit budgetId to use the last-used budget." },
   () =>
   run(async () => {
-    const { data } = await api.budgets.getBudgets();
+    const { data } = await api.plans.getPlans();
+    const plans = data.plans || data.budgets || [];
+    const defaultPlan = data.default_plan || data.default_budget;
     const result = {
-      budgets: data.budgets.map((b) => ({ id: b.id, name: b.name, last_modified_on: b.last_modified_on, first_month: b.first_month, last_month: b.last_month, date_format: b.date_format, currency_format: b.currency_format })),
+      budgets: plans.map((b) => ({ id: b.id, name: b.name, last_modified_on: b.last_modified_on, first_month: b.first_month, last_month: b.last_month, date_format: b.date_format, currency_format: b.currency_format })),
     };
-    if (data.default_budget) {
-      result.default_budget = { id: data.default_budget.id, name: data.default_budget.name };
+    if (defaultPlan) {
+      result.default_budget = { id: defaultPlan.id, name: defaultPlan.name };
     }
     return ok(result);
   })
@@ -548,8 +550,8 @@ registerTool(
   { description: "Get a budget summary including name, currency format, and account/category/payee counts", inputSchema: { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") } },
   ({ budgetId }) =>
     run(async () => {
-      const { data } = await api.budgets.getBudgetById(resolveBudgetId(budgetId));
-      const b = data.budget;
+      const { data } = await api.plans.getPlanById(resolveBudgetId(budgetId));
+      const b = data.plan || data.budget;
       return ok({
         id: b.id,
         name: b.name,
@@ -570,7 +572,7 @@ registerTool(
   { description: "Get budget settings (currency format, date format)", inputSchema: { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") } },
   ({ budgetId }) =>
     run(async () => {
-      const { data } = await api.budgets.getBudgetSettingsById(resolveBudgetId(budgetId));
+      const { data } = await api.plans.getPlanSettingsById(resolveBudgetId(budgetId));
       return ok(data.settings);
     })
 );
@@ -966,7 +968,7 @@ registerTool(
   } },
   ({ budgetId, lastKnowledgeOfServer }) =>
     run(async () => {
-      const { data } = await api.months.getBudgetMonths(resolveBudgetId(budgetId), lastKnowledgeOfServer);
+      const { data } = await api.months.getPlanMonths(resolveBudgetId(budgetId), lastKnowledgeOfServer);
       const months = data.months.map((m) =>
           withCurrencyFields(
             {
@@ -995,7 +997,7 @@ registerTool(
   } },
   ({ budgetId, month }) =>
     run(async () => {
-      const { data } = await api.months.getBudgetMonth(resolveBudgetId(budgetId), month);
+      const { data } = await api.months.getPlanMonth(resolveBudgetId(budgetId), month);
       const m = data.month;
       const out = {
         month: m.month,
@@ -1860,7 +1862,7 @@ registerTool(
   } },
   ({ budgetId, month }) =>
     run(async () => {
-      const { data } = await api.months.getBudgetMonth(resolveBudgetId(budgetId), month);
+      const { data } = await api.months.getPlanMonth(resolveBudgetId(budgetId), month);
       const overspent = (data.month.categories || [])
         .filter((c) => !c.deleted && c.balance < 0 && c.category_group_name !== "Internal Master Category")
         .map((c) => ({
