@@ -10,7 +10,7 @@ const projectRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const pkg = JSON.parse(fs.readFileSync(path.join(projectRoot, "package.json"), "utf8"));
 const force = process.argv.includes("--force");
 const distDir = path.join(projectRoot, "dist");
-const outputPath = path.join(distDir, `ynab-mcp-server-${pkg.version}.mcpb`);
+const outputPath = path.join(distDir, `mcp-server-for-ynab-${pkg.version}.mcpb`);
 
 if (fs.existsSync(outputPath) && !force) {
   console.error(`Refusing to overwrite existing artifact: ${outputPath}`);
@@ -52,10 +52,10 @@ copyFile("assets/icon.png");
 
 writeJson("manifest.json", {
   manifest_version: "0.3",
-  name: "ynab-mcp-server",
-  display_name: "YNAB MCP Server",
+  name: "mcp-server-for-ynab",
+  display_name: "MCP Server for YNAB",
   version: pkg.version,
-  description: "Complete MCP server for YNAB budget operations.",
+  description: "Local MCP server for YNAB budget operations.",
   author: {
     name: "Oliver Ames",
     url: "https://github.com/oliverames",
@@ -84,7 +84,7 @@ writeJson("manifest.json", {
   tools_generated: true,
   keywords: ["mcp", "model-context-protocol", "ynab", "budgeting", "personal-finance"],
   license: "MIT",
-  privacy_policies: ["https://www.ynab.com/privacy-policy"],
+  privacy_policies: ["https://github.com/oliverames/ynab-mcp-server/blob/main/docs/privacy.md"],
   compatibility: {
     platforms: ["darwin", "win32", "linux"],
     runtimes: {

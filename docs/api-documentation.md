@@ -45,6 +45,12 @@
 
 ##### Changelog
 
+- [v1.85.0](https://api.ynab.com/#v1.85.0)
+- [v1.84.0](https://api.ynab.com/#v1.84.0)
+- [v1.83.0](https://api.ynab.com/#v1.83.0)
+- [v1.82.0](https://api.ynab.com/#v1.82.0)
+- [v1.81.0](https://api.ynab.com/#v1.81.0)
+- [v1.80.0](https://api.ynab.com/#v1.80.0)
 - [v1.79.0](https://api.ynab.com/#v1.79.0)
 - [v1.78.0](https://api.ynab.com/#v1.78.0)
 - [v1.77.0](https://api.ynab.com/#v1.77.0)
@@ -851,6 +857,45 @@ In addition to the above terms, OAuth Applications must adhere to these requirem
 _Last updated: May 28, 2025_
 
 ## Changelog
+
+### v1.85.0
+
+**2026-05-27**
+
+- When listing [plan](https://api.ynab.com/v1#tag/transactions/GET/plans/{plan_id}/transactions), [account](https://api.ynab.com/v1#tag/transactions/GET/plans/{plan_id}/accounts/{account_id}/transactions), [category](https://api.ynab.com/v1#tag/transactions/GET/plans/{plan_id}/categories/{category_id}/transactions), or [payee](https://api.ynab.com/v1#tag/transactions/GET/plans/{plan_id}/payees/{payee_id}/transactions) transactions, the `since_date` parameter now defaults to one year ago when not specified. Pass an explicit `since_date` to retrieve older transactions.
+- Added an `until_date` query parameter to the [plan](https://api.ynab.com/v1#tag/transactions/GET/plans/{plan_id}/transactions), [account](https://api.ynab.com/v1#tag/transactions/GET/plans/{plan_id}/accounts/{account_id}/transactions), [category](https://api.ynab.com/v1#tag/transactions/GET/plans/{plan_id}/categories/{category_id}/transactions), [payee](https://api.ynab.com/v1#tag/transactions/GET/plans/{plan_id}/payees/{payee_id}/transactions), and [month](https://api.ynab.com/v1#tag/transactions/GET/plans/{plan_id}/months/{month}/transactions) transaction listings. When provided, only transactions on or before this date will be included.
+
+### v1.84.0
+
+**2026-05-26**
+
+- Added an `internal` field to [category](https://api.ynab.com/v1#tag/categories/GET/plans/{plan_id}/categories) and category group resource responses. This boolean field indicates if the resource is internally used and not user generated.
+
+### v1.83.0
+
+**2026-04-14**
+
+- When [creating](https://api.ynab.com/v1#tag/categories/POST/plans/{plan_id}/categories) or [updating](https://api.ynab.com/v1#tag/categories/PATCH/plans/{plan_id}/categories/{category_id}) categories, a `goal_needs_whole_amount` can now be specified. When `true`, the goal uses "Set aside another" behavior; when `false`, it uses "Refill up to" behavior.
+- When [updating](https://api.ynab.com/v1#tag/categories/PATCH/plans/{plan_id}/categories/{category_id}) a Credit Card Payment category, if you specify a `goal_target` and no `goal_target_date`, a "Pay Specific Amount Monthly" target will be created. If you specify a `goal_target` along with a `goal_target_date`, a "Pay Off Balance by Date" target will be created.
+
+### v1.82.0
+
+**2026-04-02**
+
+- Added `..._formatted` and `..._currency` fields to [account](https://api.ynab.com/v1#tag/accounts/GET/plans/{plan_id}/accounts), [category](https://api.ynab.com/v1#tag/categories/GET/plans/{plan_id}/categories), [transaction](https://api.ynab.com/v1#tag/transactions/GET/plans/{plan_id}/transactions), [scheduled transaction](https://api.ynab.com/v1#tag/scheduled-transactions/GET/plans/{plan_id}/scheduled_transactions), [month](https://api.ynab.com/v1#tag/months/GET/plans/{plan_id}/months/{month}), and [money movement](https://api.ynab.com/v1#tag/money-movements/GET/plans/{plan_id}/money_movements) responses.
+- When [creating accounts](https://api.ynab.com/v1#tag/accounts/POST/plans/{plan_id}/accounts), you can now also specify `otherAsset` and `otherLiability`.
+
+### v1.81.0
+
+**2026-03-26**
+
+- Added support for [creating payees](https://api.ynab.com/v1#tag/payees/POST/plans/{plan_id}/payees).
+
+### v1.80.0
+
+**2026-03-25**
+
+- When [creating accounts](https://api.ynab.com/v1#tag/accounts/POST/plans/{plan_id}/accounts), you can specify `checking`, `savings`, `cash`, or `creditCard`.
 
 ### v1.79.0
 

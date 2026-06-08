@@ -1,17 +1,19 @@
 {
   "name": "@oliverames/ynab-mcp-server",
-  "version": "2.1.1",
-  "description": "YNAB MCP server with full API coverage",
+  "version": "3.0.0",
+  "description": "Local MCP server for YNAB budget operations",
   "type": "module",
   "main": "index.js",
   "bin": {
+    "mcp-server-for-ynab": "index.js",
     "ynab-mcp-server": "index.js"
   },
   "files": [
     "index.js",
     "scripts/",
     "assets/icon.png",
-    "docs/hosted-oauth-connector.md"
+    "docs/hosted-oauth-connector.md",
+    "docs/privacy.md"
   ],
   "scripts": {
     "start": "node index.js",
@@ -32,8 +34,8 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "ynab": "^2.5.0",
-    "zod": "^4.3.6"
+    "ynab": "^4.1.0",
+    "zod": "^4.4.3"
   },
   "engines": {
     "node": ">=18"

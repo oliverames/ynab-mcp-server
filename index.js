@@ -41,7 +41,7 @@ if (!API_TOKEN) {
   const fallbackMessage = tokenLookupError
     ? ` ${tokenLookupError}.`
     : " Set YNAB_API_TOKEN_FILE or YNAB_OP_PATH to enable token fallback.";
-  console.error(`YNAB_API_TOKEN environment variable is required.${fallbackMessage} Starting in discovery-only mode.`);
+  console.error(`YNAB_API_TOKEN environment variable is required.${fallbackMessage} Starting MCP Server for YNAB in discovery-only mode.`);
 }
 
 const ynabRateLimit = createYnabRateLimiter();
@@ -225,6 +225,44 @@ function collection(data, key, items, lastKnowledgeOfServer) {
     : { [key]: items, server_knowledge: data.server_knowledge };
 }
 
+function pathSegment(value) {
+  return encodeURIComponent(String(value));
+}
+
+function allHistorySinceDate() {
+  return "1970-01-01";
+}
+
+function buildTransactionListPath({ budgetId, accountId, categoryId, payeeId, month }) {
+  const bid = pathSegment(resolveBudgetId(budgetId));
+  if (accountId) return `/plans/${bid}/accounts/${pathSegment(accountId)}/transactions`;
+  if (categoryId) return `/plans/${bid}/categories/${pathSegment(categoryId)}/transactions`;
+  if (payeeId) return `/plans/${bid}/payees/${pathSegment(payeeId)}/transactions`;
+  if (month) return `/plans/${bid}/months/${pathSegment(month)}/transactions`;
+  return `/plans/${bid}/transactions`;
+}
+
+async function fetchTransactions({
+  budgetId,
+  sinceDate,
+  untilDate,
+  type,
+  accountId,
+  categoryId,
+  payeeId,
+  month,
+  lastKnowledgeOfServer,
+}) {
+  return ynabFetch(buildTransactionListPath({ budgetId, accountId, categoryId, payeeId, month }), {
+    query: {
+      since_date: sinceDate,
+      until_date: untilDate,
+      type,
+      last_knowledge_of_server: lastKnowledgeOfServer,
+    },
+  });
+}
+
 async function run(fn) {
   try {
     return await fn();
@@ -344,8 +382,8 @@ async function ynabFetch(path, { method = "GET", body, query } = {}) {
 // --- Server ---
 
 const server = new McpServer({
-  name: "ynab-mcp-server",
-  version: "2.1.1",
+  name: "mcp-server-for-ynab",
+  version: "3.0.0",
 });
 
 const registeredTools = new Map();
@@ -366,6 +404,12 @@ function listRegisteredYnabTools() {
     .map(([name, { config }]) => {
       const writeMetadata = WRITE_TOOL_METADATA[name];
       const isWrite = !!writeMetadata;
+      let status = "available";
+      if (isWrite && !writesEnabled()) {
+        status = "hidden_requires_YNAB_ALLOW_WRITES_1";
+      } else if (!API_TOKEN) {
+        status = "discoverable_requires_credentials";
+      }
       return {
         name,
         title: config?.title ?? name,
@@ -373,7 +417,7 @@ function listRegisteredYnabTools() {
         has_input_schema: !!config?.inputSchema,
         is_write: isWrite,
         registered: registeredTools.has(name),
-        status: isWrite && !writesEnabled() ? "hidden_requires_YNAB_ALLOW_WRITES_1" : "available",
+        status,
       };
     });
 }
@@ -406,13 +450,16 @@ function writesEnabled() {
 }
 
 function ynabAuthStatus() {
+  const authenticated = !!API_TOKEN;
+  const writeToolsAvailable = authenticated && writesEnabled();
   return {
-    authenticated: !!API_TOKEN,
+    authenticated,
     default_budget_id_configured: !!DEFAULT_BUDGET_ID,
     writes_enabled: writesEnabled(),
-    message: API_TOKEN
-      ? "YNAB MCP server has an API token configured."
-      : "YNAB MCP server is running in discovery-only mode. Set YNAB_API_TOKEN, YNAB_API_TOKEN_FILE, or YNAB_OP_PATH, then restart the MCP server before calling API tools.",
+    write_tools_available: writeToolsAvailable,
+    message: authenticated
+      ? "MCP Server for YNAB has an API token configured."
+      : "MCP Server for YNAB is running in discovery-only mode. Set YNAB_API_TOKEN, YNAB_API_TOKEN_FILE, or YNAB_OP_PATH, then restart the MCP server before calling API tools.",
   };
 }
 
@@ -1101,9 +1148,10 @@ function formatTransaction(t) {
 
 registerTool(
   "get_transactions",
-  { description: "Get transactions with optional filters. Use type='unapproved' or type='uncategorized' to filter. Optionally filter by account, category, payee, or month. Each returned transaction includes 'import_payee_name_original' — the raw merchant string from the bank import (e.g. 'AplPay LS ONION RIVEMONTPELIER VT') — which encodes processor flag, merchant name (often longer than the cleaned payee_name), and city+state. This is the primary disambiguation field when payee_name is truncated or ambiguous. Note: large date ranges (6+ months on a busy budget) can return 50KB+ of data; narrow with categoryId/payeeId/month filters when possible.", inputSchema: {
+  { description: "Get transactions with optional filters. Use type='unapproved' or type='uncategorized' to filter. Optionally filter by account, category, payee, or month. Each returned transaction includes 'import_payee_name_original' — the raw merchant string from the bank import (e.g. 'AplPay LS ONION RIVEMONTPELIER VT') — which encodes processor flag, merchant name (often longer than the cleaned payee_name), and city+state. This is the primary disambiguation field when payee_name is truncated or ambiguous. YNAB now defaults omitted sinceDate to one year ago; pass an explicit older sinceDate to retrieve older history. Note: large date ranges (6+ months on a busy budget) can return 50KB+ of data; narrow with categoryId/payeeId/month/sinceDate/untilDate filters when possible.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
-    sinceDate: z.string().optional().describe("Only return transactions on or after this date (YYYY-MM-DD)"),
+    sinceDate: z.string().optional().describe("Only return transactions on or after this date (YYYY-MM-DD). If omitted, YNAB defaults to one year ago."),
+    untilDate: z.string().optional().describe("Only return transactions on or before this date (YYYY-MM-DD)"),
     type: z.enum(["unapproved", "uncategorized"]).optional().describe("Filter by approval/categorization status"),
     accountId: z.string().optional().describe("Filter by account ID"),
     categoryId: z.string().optional().describe("Filter by category ID"),
@@ -1111,33 +1159,25 @@ registerTool(
     month: z.string().optional().describe("Filter by month (YYYY-MM-DD, first of month)"),
     lastKnowledgeOfServer: z.number().int().nonnegative().optional().describe("Delta request server knowledge. When provided, returns { transactions, server_knowledge }."),
   } },
-  ({ budgetId, sinceDate, type, accountId, categoryId, payeeId, month, lastKnowledgeOfServer }) =>
+  ({ budgetId, sinceDate, untilDate, type, accountId, categoryId, payeeId, month, lastKnowledgeOfServer }) =>
     run(async () => {
-      const bid = resolveBudgetId(budgetId);
-      let transactions;
-      let data;
       const resourceFilters = [accountId, categoryId, payeeId, month].filter((value) => value !== undefined && value !== null && value !== "");
       if (resourceFilters.length > 1) {
         throw new Error("Provide only one of accountId, categoryId, payeeId, or month.");
       }
 
-      if (accountId) {
-        ({ data } = await api.transactions.getTransactionsByAccount(bid, accountId, sinceDate, type, lastKnowledgeOfServer));
-        transactions = data.transactions;
-      } else if (categoryId) {
-        ({ data } = await api.transactions.getTransactionsByCategory(bid, categoryId, sinceDate, type, lastKnowledgeOfServer));
-        transactions = data.transactions;
-      } else if (payeeId) {
-        ({ data } = await api.transactions.getTransactionsByPayee(bid, payeeId, sinceDate, type, lastKnowledgeOfServer));
-        transactions = data.transactions;
-      } else if (month) {
-        ({ data } = await api.transactions.getTransactionsByMonth(bid, month, sinceDate, type, lastKnowledgeOfServer));
-        transactions = data.transactions;
-      } else {
-        ({ data } = await api.transactions.getTransactions(bid, sinceDate, type, lastKnowledgeOfServer));
-        transactions = data.transactions;
-      }
-
+      const data = await fetchTransactions({
+        budgetId,
+        sinceDate,
+        untilDate,
+        type,
+        accountId,
+        categoryId,
+        payeeId,
+        month,
+        lastKnowledgeOfServer,
+      });
+      const transactions = data.transactions;
       return ok(collection(data, "transactions", transactions.map(formatTransaction), lastKnowledgeOfServer));
     })
 );
@@ -1351,23 +1391,35 @@ registerTool(
 
 registerTool(
   "approve_transactions",
-  { description: "Approve unapproved transactions in bulk by filter, without hand-listing IDs. Fetches the current unapproved queue, optionally narrows by payeeId / categoryId / accountId, and sets approved:true on the matches. By default SKIPS uncategorized transactions (no category and not a transfer) so nothing is approved without a category; set includeUncategorized:true to override. Returns a compact summary (approved_count + verification counts), never full objects, so it is safe on large batches. The CALLER is responsible for getting user confirmation before invoking — this tool does not prompt.", inputSchema: {
+  { description: "Approve unapproved transactions in bulk by filter, without hand-listing IDs. Fetches the current unapproved queue, optionally narrows by payeeId / categoryId / accountId, and sets approved:true on the matches. By default SKIPS uncategorized transactions (no category and not a transfer) so nothing is approved without a category; set includeUncategorized:true to override. Returns a compact summary (approved_count + verification counts), never full objects, so it is safe on large batches. Requires confirmed:true after explicit user confirmation.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+    confirmed: z.literal(true).describe("Required. Pass true only after the user explicitly confirms this approval action."),
+    expectedMatchedCount: z.number().int().nonnegative().optional().describe("Optional safety check. If provided and the current match count differs, no transactions are approved."),
+    sinceDate: z.string().optional().describe("Only inspect unapproved transactions on or after this date (YYYY-MM-DD). Defaults to all history."),
+    untilDate: z.string().optional().describe("Only inspect unapproved transactions on or before this date (YYYY-MM-DD)."),
     payeeId: z.string().optional().describe("Only approve unapproved transactions for this payee"),
     categoryId: z.string().optional().describe("Only approve unapproved transactions in this category"),
     accountId: z.string().optional().describe("Only approve unapproved transactions in this account"),
     includeUncategorized: z.boolean().optional().describe("If true, also approve transactions with no category (default false — uncategorized are skipped for safety)"),
   } },
-  ({ budgetId, payeeId, categoryId, accountId, includeUncategorized }) =>
+  ({ budgetId, expectedMatchedCount, sinceDate, untilDate, payeeId, categoryId, accountId, includeUncategorized }) =>
     run(async () => {
       const bid = resolveBudgetId(budgetId);
-      const { data } = await api.transactions.getTransactions(bid, undefined, "unapproved");
+      const data = await fetchTransactions({
+        budgetId: bid,
+        sinceDate: sinceDate || allHistorySinceDate(),
+        untilDate,
+        type: "unapproved",
+      });
       let txns = data.transactions.filter((t) => !t.deleted);
       if (payeeId) txns = txns.filter((t) => t.payee_id === payeeId);
       if (categoryId) txns = txns.filter((t) => t.category_id === categoryId);
       if (accountId) txns = txns.filter((t) => t.account_id === accountId);
       if (!includeUncategorized) {
         txns = txns.filter((t) => (t.category_id && t.category_name !== "Uncategorized") || t.transfer_account_id);
+      }
+      if (expectedMatchedCount !== undefined && expectedMatchedCount !== txns.length) {
+        throw new Error(`approve_transactions matched ${txns.length} transactions, but expectedMatchedCount was ${expectedMatchedCount}; no transactions were approved.`);
       }
       if (txns.length === 0) {
         return ok({ approved_count: 0, matched: 0, message: "No matching unapproved transactions to approve." });
@@ -1394,17 +1446,28 @@ registerTool(
 
 registerTool(
   "reassign_payee_transactions",
-  { description: "Move all transactions from one payee to another. The YNAB API has no payee-merge or payee-delete endpoint, so this is the merge workaround: refetch every transaction for fromPayeeId and set payee_id = toPayeeId. Use to consolidate a duplicate payee that a slightly different bank-import string created (e.g. fold 'Myles Court Barber' into the existing 'Myles Court Barbershop'). The emptied source payee still exists afterward and must be deleted manually in the YNAB UI (Settings → Manage Payees) if wanted. Returns a compact summary.", inputSchema: {
+  { description: "Move all transactions from one payee to another. The YNAB API has no payee-merge or payee-delete endpoint, so this is the merge workaround: refetch every transaction for fromPayeeId and set payee_id = toPayeeId. Use to consolidate a duplicate payee that a slightly different bank-import string created (e.g. fold 'Myles Court Barber' into the existing 'Myles Court Barbershop'). The emptied source payee still exists afterward and must be deleted manually in the YNAB UI (Settings → Manage Payees) if wanted. Returns a compact summary. Requires confirmed:true after explicit user confirmation.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+    confirmed: z.literal(true).describe("Required. Pass true only after the user explicitly confirms this payee reassignment."),
+    expectedMatchedCount: z.number().int().nonnegative().optional().describe("Optional safety check. If provided and the current match count differs, no transactions are reassigned."),
     fromPayeeId: z.string().describe("Payee whose transactions will be moved"),
     toPayeeId: z.string().describe("Destination payee that transactions will be reassigned to"),
-    sinceDate: z.string().optional().describe("Only move transactions on or after this date (YYYY-MM-DD); omit to move all history"),
+    sinceDate: z.string().optional().describe("Only move transactions on or after this date (YYYY-MM-DD); defaults to all history"),
+    untilDate: z.string().optional().describe("Only move transactions on or before this date (YYYY-MM-DD)"),
   } },
-  ({ budgetId, fromPayeeId, toPayeeId, sinceDate }) =>
+  ({ budgetId, expectedMatchedCount, fromPayeeId, toPayeeId, sinceDate, untilDate }) =>
     run(async () => {
       const bid = resolveBudgetId(budgetId);
-      const { data } = await api.transactions.getTransactionsByPayee(bid, fromPayeeId, sinceDate);
+      const data = await fetchTransactions({
+        budgetId: bid,
+        payeeId: fromPayeeId,
+        sinceDate: sinceDate || allHistorySinceDate(),
+        untilDate,
+      });
       const txns = data.transactions.filter((t) => !t.deleted);
+      if (expectedMatchedCount !== undefined && expectedMatchedCount !== txns.length) {
+        throw new Error(`reassign_payee_transactions matched ${txns.length} transactions, but expectedMatchedCount was ${expectedMatchedCount}; no transactions were reassigned.`);
+      }
       if (txns.length === 0) {
         return ok({ reassigned_count: 0, message: "No transactions found for fromPayeeId in the given range." });
       }
@@ -1836,13 +1899,14 @@ registerTool(
     inputSchema: {},
   },
   () => ok({
-    server: "ynab-mcp-server",
+    server: "mcp-server-for-ynab",
     package: "@oliverames/ynab-mcp-server",
     auth: ynabAuthStatus(),
     writes_enabled: writesEnabled(),
+    writes_available: writesEnabled() && !!API_TOKEN,
     tools: listRegisteredYnabTools(),
     execute_with: "ynab_tool_execute",
-    write_execute_with: writesEnabled() ? "ynab_write_tool_execute" : null,
+    write_execute_with: writesEnabled() && !!API_TOKEN ? "ynab_write_tool_execute" : null,
   })
 );
 
@@ -1884,8 +1948,9 @@ registerTool(
   "ynab_write_tool_execute",
   {
     title: "Execute YNAB Write Tool",
-    description: "Execute an existing write-capable YNAB MCP tool by name. This tool is registered only when YNAB_ALLOW_WRITES=1 and should be used only after explicit user confirmation.",
+    description: "Execute an existing write-capable YNAB MCP tool by name. This tool is registered only when YNAB_ALLOW_WRITES=1 and requires confirmed:true after explicit user confirmation.",
     inputSchema: {
+      confirmed: z.literal(true).describe("Required. Pass true only after the user explicitly confirms this write action."),
       tool_name: z.string().describe("Existing write-capable YNAB tool name, such as update_transaction, update_transactions, approve_transactions, create_transaction, or delete_transaction."),
       input: z.record(z.string(), z.any()).optional().describe("JSON input for the selected YNAB write tool."),
     },
@@ -1907,7 +1972,10 @@ registerTool(
     if (!tool) {
       return writeDisabledResult(toolName);
     }
-    return tool.handler(input);
+    const confirmedInput = ["approve_transactions", "reassign_payee_transactions"].includes(toolName) && input.confirmed === undefined
+      ? { ...input, confirmed: true }
+      : input;
+    return tool.handler(confirmedInput);
   }
 );
 

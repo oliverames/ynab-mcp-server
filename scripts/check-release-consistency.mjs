@@ -71,7 +71,7 @@ assert(
     : `README has stale release link versions: ${staleReleaseVersions.join(", ")}`
 );
 
-const mcpbVersions = [...readme.matchAll(/ynab-mcp-server-(\d+\.\d+\.\d+)\.mcpb/g)].map((match) => match[1]);
+const mcpbVersions = [...readme.matchAll(/(?:ynab-mcp-server|mcp-server-for-ynab)-(\d+\.\d+\.\d+)\.mcpb/g)].map((match) => match[1]);
 const staleMcpbVersions = [...new Set(mcpbVersions.filter((mcpbVersion) => mcpbVersion !== version))];
 assert(
   staleMcpbVersions.length === 0 && mcpbVersions.length > 0,

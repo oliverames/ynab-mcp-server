@@ -22,6 +22,7 @@ const now = new Date();
 const prevMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
 const testMonth = prevMonth.toISOString().slice(0, 7) + "-01"; // e.g. "2025-03-01"
 const testMonthLabel = testMonth.slice(0, 7);
+const todayDate = now.toISOString().slice(0, 10);
 
 async function call(name, args = {}) {
   const result = await client.callTool({ name, arguments: args });
@@ -260,6 +261,16 @@ await test("get_transactions (unapproved)", async () => {
 
 await test("get_transactions (by account)", async () => {
   const txns = await call("get_transactions", { budgetId: bid, accountId: testAccountId, sinceDate: testMonth });
+  if (!Array.isArray(txns)) throw new Error("not an array");
+});
+
+await test("get_transactions (untilDate)", async () => {
+  const txns = await call("get_transactions", {
+    budgetId: bid,
+    accountId: testAccountId,
+    sinceDate: testMonth,
+    untilDate: todayDate,
+  });
   if (!Array.isArray(txns)) throw new Error("not an array");
 });
 

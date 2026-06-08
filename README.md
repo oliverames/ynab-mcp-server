@@ -2,22 +2,22 @@
   <img src="assets/icon.png" width="80" height="80" alt="YNAB">
 </p>
 
-<h1 align="center">YNAB MCP Server</h1>
+<h1 align="center">MCP Server for YNAB</h1>
 
 <p align="center">
-  <strong>The complete Model Context Protocol server for YNAB</strong><br>
+  <strong>A local Model Context Protocol server for YNAB budget operations</strong><br>
   <em>Give your AI assistant read-only budget access by default, with explicit write opt-in</em>
 </p>
 
 <p align="center">
   <code>47 tools with writes enabled</code> &bull;
-  <code>100% API coverage</code> &bull;
-  <code>YNAB API v1.83</code>
+  <code>YNAB API v1.85</code> &bull;
+  <code>read-only by default</code>
 </p>
 
 <p align="center">
   <a href="https://www.npmjs.com/package/@oliverames/ynab-mcp-server"><img src="https://img.shields.io/npm/v/%40oliverames%2Fynab-mcp-server?style=flat-square&color=f5a542" alt="npm"></a>
-  <a href="https://github.com/oliverames/ynab-mcp-server/releases/tag/v2.1.1"><img src="https://img.shields.io/github/v/release/oliverames/ynab-mcp-server?style=flat-square&color=f5a542&label=MCPB" alt="MCPB release"></a>
+  <a href="https://github.com/oliverames/ynab-mcp-server/releases/tag/v3.0.0"><img src="https://img.shields.io/github/v/release/oliverames/ynab-mcp-server?style=flat-square&color=f5a542&label=MCPB" alt="MCPB release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-f5a542?style=flat-square" alt="License"></a>
   <a href="https://www.buymeacoffee.com/oliverames"><img src="https://img.shields.io/badge/Buy_Me_a_Coffee-support-f5a542?style=flat-square&logo=buy-me-a-coffee&logoColor=white" alt="Buy Me a Coffee"></a>
 </p>
@@ -36,7 +36,7 @@
 
 YNAB's budgeting philosophy works best when you interact with your budget frequently - but the app interface isn't designed for quick queries or bulk operations. "How much did I spend on groceries this month?" shouldn't require navigating three screens. "Categorize all my Amazon orders from this week" shouldn't be a manual, one-by-one process.
 
-This server gives your AI assistant a safe interface to YNAB's API, turning natural language into budget review and, when explicitly enabled, budget operations. All monetary values are automatically converted between dollars and YNAB's internal milliunits format so the AI never has to think about it. Built on the [official YNAB JavaScript SDK](https://github.com/ynab/ynab-sdk-js) with direct API calls for the newest endpoints (category creation, category groups, money movements) that the SDK hasn't caught up with yet.
+This server gives your AI assistant a safe local interface to YNAB's API, turning natural language into budget review and, when explicitly enabled, budget operations. All monetary values are automatically converted between dollars and YNAB's internal milliunits format so the AI never has to think about it. Built on the [official YNAB JavaScript SDK](https://github.com/ynab/ynab-sdk-js) with direct API calls for endpoints and query parameters that the SDK has not caught up with yet.
 
 ---
 
@@ -44,15 +44,17 @@ This server gives your AI assistant a safe interface to YNAB's API, turning natu
 
 ### Install with MCPB
 
-For Claude Desktop and other MCPB-compatible clients, download the local bundle from the [v2.1.1 release](https://github.com/oliverames/ynab-mcp-server/releases/tag/v2.1.1):
+For Claude Desktop and other MCPB-compatible clients, download the local bundle from the [v3.0.0 release](https://github.com/oliverames/ynab-mcp-server/releases/tag/v3.0.0):
 
-[Download `ynab-mcp-server-2.1.1.mcpb`](https://github.com/oliverames/ynab-mcp-server/releases/download/v2.1.1/ynab-mcp-server-2.1.1.mcpb)
+[Download `mcp-server-for-ynab-3.0.0.mcpb`](https://github.com/oliverames/ynab-mcp-server/releases/download/v3.0.0/mcp-server-for-ynab-3.0.0.mcpb)
 
 The bundle includes the YNAB favicon, production runtime dependencies, and setup prompts for your personal access token, optional default budget ID, and optional write-tool opt-in.
 
 ### 1. Get a YNAB Personal Access Token
 
 Go to [YNAB Developer Settings](https://app.ynab.com/settings/developer) and create a new personal access token.
+
+This local stdio package is intended for a YNAB account owner running the server for their own account. A public hosted connector for other YNAB users must use YNAB OAuth instead of asking users for personal access tokens; see [docs/hosted-oauth-connector.md](docs/hosted-oauth-connector.md).
 
 ### 2. Configure your MCP client
 
@@ -98,7 +100,7 @@ npm install -g @oliverames/ynab-mcp-server
 {
   "mcpServers": {
     "ynab": {
-      "command": "ynab-mcp-server",
+      "command": "mcp-server-for-ynab",
       "env": {
         "YNAB_API_TOKEN": "your-token-here",
         "YNAB_BUDGET_ID": "optional-default-budget-id"
@@ -127,6 +129,8 @@ By default, the server registers read-only tools only. To expose tools that crea
 }
 ```
 
+Bulk-filter write tools such as `approve_transactions`, `reassign_payee_transactions`, and the generic `ynab_write_tool_execute` helper also require `confirmed: true` in the tool input after explicit user confirmation. For extra protection, pass `expectedMatchedCount` when using bulk-filter writes.
+
 ---
 
 ## What You Can Do
@@ -148,7 +152,7 @@ By default, the server registers read-only tools only. To expose tools that crea
 
 ## Features
 
-**Complete YNAB API v1.83 coverage** with 47 tools when writes are enabled:
+**YNAB API v1.85 coverage** with 47 tools when writes are enabled:
 
 | Resource | Tools | Capabilities |
 |----------|-------|-------------|
@@ -171,11 +175,12 @@ By default, the server registers read-only tools only. To expose tools that crea
 - **Pinned YNAB host** - all HTTP requests are restricted to `https://api.ynab.com`, redirects are not followed, and API tokens are redacted from surfaced errors.
 - **Token fallback options** - use `YNAB_API_TOKEN`, a small token file via `YNAB_API_TOKEN_FILE`, or a 1Password CLI reference via `YNAB_OP_PATH`.
 - **Split transactions** - first-class support for subtransactions in create, read, and format operations.
+- **Current transaction filters** - transaction list tools support `sinceDate`, `untilDate`, type filters, resource filters, and delta requests. YNAB defaults omitted `sinceDate` to one year ago, so pass an explicit older date when you need older history.
 - **Bulk operations** - `create_transactions` and `update_transactions` handle arrays in a single API call.
 - **Verified batch updates** - `update_transactions` refetches every requested transaction after the bulk API call, retries mismatched fields once through `update_transaction`, and returns a `verification` block so approval counts cannot hide failed category writes.
 - **Fetch-then-merge updates** - scheduled transaction updates (which use PUT semantics) automatically fetch the current state and merge your changes, so you only specify what changed.
 - **Fuzzy search** - `search_categories` and `search_payees` do case-insensitive partial matching across all entries.
-- **Approval workflow with anomaly flags** - `review_unapproved` groups transactions into "ready to approve" (categorized, split, or transfer) and "needs attention" (uncategorized), and attaches a `flags` array to each transaction surfacing anomalies: `manually_entered` (not bank-imported), `match_broken` (stale match reference), `scheduled_transaction_realized`, `new_payee`, `no_prior_amount_match` (novel amount for this payee), and `category_drift:was_X` (payee categorized differently in the prior 60 days). Group-level flags aggregate the union of all transaction flags.
+- **Approval workflow with anomaly flags** - `review_unapproved` groups transactions into "ready to approve" (categorized, split, or transfer) and "needs attention" (uncategorized), and attaches a `flags` array to each transaction surfacing anomalies: `manually_entered` (not bank-imported), `match_broken` (stale match reference), `scheduled_transaction_realized`, `new_payee`, `no_prior_amount_match` (novel amount for this payee), and `category_drift:was_X` (payee categorized differently in the prior 60 days). Group-level flags aggregate the union of all transaction flags. Bulk approval requires `confirmed: true`.
 - **Nullable updates** - update tools accept `null` for clearable fields (`memo`, `payeeName`, `categoryId`, `flagColor`) to distinguish "don't change" (omit) from "clear this field" (`null`).
 - **Target behavior support** - category create/update tools expose `goalNeedsWholeAmount` for YNAB's "Set aside another" vs. "Refill up to" goal behavior.
 - **Delta request support** - high-volume list tools accept `lastKnowledgeOfServer` and return `server_knowledge` when that parameter is provided.
@@ -258,14 +263,14 @@ Read tools are available by default. Tools that create, update, import, or delet
 
 | Tool | Description |
 |------|-------------|
-| `get_transactions` | Get transactions with filters: by account, category, payee, month, or status (`unapproved`/`uncategorized`) |
+| `get_transactions` | Get transactions with filters: by account, category, payee, month, status (`unapproved`/`uncategorized`), `sinceDate`, and `untilDate` |
 | `get_transaction` | Get a single transaction by ID (includes subtransactions). Auto-handles composite scheduled-transaction IDs like `uuid_YYYY-MM-DD`; if the underlying matched transaction has been deleted, falls back to returning the active scheduled template wrapped as `{ resource_type: "scheduled_transaction", ... }`. |
 | `create_transaction` | Write tool: create a transaction with optional split (subtransactions must sum to total) |
 | `create_transactions` | Write tool: bulk create multiple transactions in a single API call (supports split transactions) |
 | `update_transaction` | Write tool: partial update - only specified fields change |
 | `update_transactions` | Write tool: batch update multiple transactions at once, then refetch and verify requested fields persisted. Pass `returnSummary: true` for compact counts instead of full objects on large batches (avoids overflowing the tool-result size limit). |
-| `approve_transactions` | Write tool: approve unapproved transactions in bulk by filter (`payeeId` / `categoryId` / `accountId`) without hand-listing IDs. Skips uncategorized transactions by default; returns a compact summary. |
-| `reassign_payee_transactions` | Write tool: move all transactions from one payee to another — the merge workaround, since the YNAB API has no payee delete/merge endpoint. |
+| `approve_transactions` | Write tool: approve unapproved transactions in bulk by filter (`payeeId` / `categoryId` / `accountId`) without hand-listing IDs. Skips uncategorized transactions by default, requires `confirmed: true`, and supports `expectedMatchedCount`. |
+| `reassign_payee_transactions` | Write tool: move all transactions from one payee to another, the merge workaround since the YNAB API has no payee delete/merge endpoint. Requires `confirmed: true` and supports `expectedMatchedCount`. |
 | `delete_transaction` | Write tool: delete a transaction |
 | `import_transactions` | Write tool: trigger import from linked bank accounts |
 
@@ -297,6 +302,18 @@ Read tools are available by default. Tools that create, update, import, or delet
 The server starts in read-only mode. Write tools are not merely discouraged; they are absent from `listTools` unless `YNAB_ALLOW_WRITES=1` is present when the MCP process starts. This mirrors the safer hosted-connector pattern: the default permission set can inspect budgets, transactions, categories, payees, months, and scheduled transactions, but it cannot mutate financial data.
 
 If a client already has the process running, changing the environment is not enough. Restart the MCP server after setting or clearing `YNAB_ALLOW_WRITES`.
+
+Bulk-filter writes require confirmation in the tool input, not only in surrounding chat:
+
+```json
+{
+  "confirmed": true,
+  "expectedMatchedCount": 3,
+  "payeeId": "payee-id-to-approve"
+}
+```
+
+If `expectedMatchedCount` is provided and the current match count differs, the tool returns an error before mutating any transactions.
 
 ### Batch Updates
 
@@ -387,20 +404,21 @@ Set `YNAB_RATE_LIMIT_PER_HOUR=0` only for controlled local tests or smoke checks
 
 ```
 ┌─────────────────────┐     ┌──────────────────┐     ┌──────────────┐
-│  AI Assistant       │────▶│  YNAB MCP Server │────▶│  YNAB API    │
-│  (Claude, GPT, etc) │◀────│  (this package)  │◀────│  api.ynab.com│
+│  AI Assistant       │────▶│ MCP Server for   │────▶│  YNAB API    │
+│                     │     │ YNAB             │     │              │
+│  (Claude, GPT, etc) │◀────│ (this package)   │◀────│  api.ynab.com│
 └─────────────────────┘     └──────────────────┘     └──────────────┘
          MCP                    stdio transport           HTTPS/REST
 ```
 
 - **Transport:** stdio (standard MCP server pattern)
-- **Auth:** Bearer token via `YNAB_API_TOKEN`, `YNAB_API_TOKEN_FILE`, or `YNAB_OP_PATH`
-- **SDK:** Official [`ynab`](https://www.npmjs.com/package/ynab) v2.5+ for core endpoints, direct `fetch` for newer API features
+- **Auth:** Bearer token via `YNAB_API_TOKEN`, `YNAB_API_TOKEN_FILE`, or `YNAB_OP_PATH` for local owner-run use
+- **SDK:** Official [`ynab`](https://www.npmjs.com/package/ynab) v2.5+ for core endpoints, direct `fetch` for newer API features and v1.85 transaction filters
 - **Safety:** read-only default, explicit write opt-in, host-pinned HTTPS requests to `api.ynab.com`, no redirect following, redacted token errors
 - **Validation:** All parameters validated with [Zod](https://zod.dev) schemas
 - **Error handling:** API errors are caught, formatted, and returned as MCP error responses with detail messages
 
-For a hosted OAuth connector design, see [docs/hosted-oauth-connector.md](docs/hosted-oauth-connector.md).
+For a hosted OAuth connector design, see [docs/hosted-oauth-connector.md](docs/hosted-oauth-connector.md). For data handling details for this local package, see [docs/privacy.md](docs/privacy.md).
 
 ---
 
@@ -418,7 +436,7 @@ Tests cover all tool categories: reads, reversible writes, bulk operations, sear
 
 ### MCP Smoke Tests
 
-Use the smoke tests when you need to prove the server is reachable over stdio without reconstructing a custom MCP client. These commands use the official MCP SDK client, the same transport shape used by normal MCP hosts, and require `YNAB_API_TOKEN` because this server validates credentials at startup.
+Use the smoke tests when you need to prove the server is reachable over stdio without reconstructing a custom MCP client. These commands use the official MCP SDK client, the same transport shape used by normal MCP hosts. `smoke:list-tools` can run without a live token to verify discovery, but live read and write smokes require `YNAB_API_TOKEN`, `YNAB_API_TOKEN_FILE`, or `YNAB_OP_PATH`.
 
 ```bash
 YNAB_API_TOKEN=your-token YNAB_BUDGET_ID=your-budget-id npm run smoke:list-tools
@@ -465,6 +483,16 @@ npm pack --dry-run
 ```
 
 After publishing, run `npm run release:check:registry` to verify the npm `latest` dist-tag, repo metadata, README release links, and MCPB artifact references all agree on the same version.
+
+---
+
+## Privacy and Non-Affiliation
+
+See [docs/privacy.md](docs/privacy.md) for this connector's data handling, deletion, and token-use details.
+
+This connector is not affiliated, associated, or in any way officially connected with YNAB or any of its subsidiaries or affiliates. The official YNAB website can be found at [https://www.ynab.com](https://www.ynab.com/).
+
+The names YNAB and You Need A Budget, as well as related names, trade names, marks, trademarks, emblems, and images are registered trademarks of YNAB.
 
 ---
 

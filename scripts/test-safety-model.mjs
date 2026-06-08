@@ -84,6 +84,7 @@ async function listTools(overrides = {}) {
 
 const readOnlyTools = await listTools({ YNAB_ALLOW_WRITES: undefined });
 const readOnlyNames = new Set(readOnlyTools.map((tool) => tool.name));
+const readOnlyToolsByName = new Map(readOnlyTools.map((tool) => [tool.name, tool]));
 
 const discoveryOnlyTools = await listTools({
   YNAB_API_TOKEN: undefined,
@@ -109,6 +110,11 @@ for (const tool of readOnlyTools) {
     `expected ${tool.name} to be annotated read-only`,
   );
 }
+
+assert.ok(
+  readOnlyToolsByName.get("get_transactions")?.inputSchema?.properties?.untilDate,
+  "expected get_transactions to expose untilDate for YNAB API v1.85 transaction listings",
+);
 
 const writableTools = await listTools({ YNAB_ALLOW_WRITES: "1" });
 const writableNames = new Set(writableTools.map((tool) => tool.name));
@@ -136,5 +142,20 @@ assert.equal(
   true,
   "expected delete_scheduled_transaction to be annotated destructive",
 );
+
+function requiresConfirmedTrue(tool) {
+  const schema = tool?.inputSchema || {};
+  const confirmed = schema.properties?.confirmed;
+  return Array.isArray(schema.required)
+    && schema.required.includes("confirmed")
+    && (confirmed?.const === true || confirmed?.enum?.includes(true));
+}
+
+for (const name of ["approve_transactions", "reassign_payee_transactions", "ynab_write_tool_execute"]) {
+  assert.ok(
+    requiresConfirmedTrue(destructiveTools.get(name)),
+    `expected ${name} to require confirmed:true in its input schema`,
+  );
+}
 
 console.log("Safety model checks passed");
