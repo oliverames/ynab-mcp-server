@@ -1,5 +1,19 @@
 # Worklog
 
+## 2026-06-18 - Standalone YNAB marketplace replaces ames-connectors
+
+**What changed**: Made this repo a standalone plugin marketplace for `ynab-mcp-server` so YNAB no longer depends on the older `ames-connectors` marketplace. Added Claude Code and Codex marketplace/plugin metadata, then added Hermes and Antigravity manifests using the existing host-specific shapes: Claude uses `.claude-plugin/marketplace.json` plus `.mcp.json`, Codex uses `.agents/plugins/marketplace.json` plus `.codex-plugin/mcp.json`, Hermes uses a flat `.hermes-plugin/mcp.json`, and Antigravity uses `.antigravity-plugin/mcp_config.json`. Updated `scripts/sync-plugin-metadata.mjs` and `scripts/check-release-consistency.mjs` so future version bumps and release checks cover all four hosts.
+
+**Decisions made**: Treat `ynab-mcp-server` as the active standalone YNAB marketplace and `ames-connectors` as sunsetted for YNAB. Kept the plugin install behavior aligned with the old `ames-ynab` connector by setting `YNAB_ALLOW_WRITES=1` in plugin MCP configs, while direct MCP registration remains read-only unless writes are explicitly enabled. Did not edit protected host configs or caches during this wrap-up; the repo is the source of truth, and host cleanup should happen as a separate confirmed task.
+
+**Verification**: `npm run sync:plugin`, `npm run release:check`, `npm run test:safety`, `npm test`, `claude plugin validate .`, `npm pack --dry-run`, and `git diff --check` all passed. After push, `origin/main` matched local HEAD `0ee01573f014874ef31f48a8298d66f7262c4871`.
+
+**Left off at**: Commits `64a7263`, `6ed7467`, and `0ee0157` are pushed to `main`. The user confirmed in the plugin directory UI that `ynab-mcp-server` now appears as its own Personal marketplace with the `YNAB MCP` plugin card.
+
+**Open questions**: NEW residual drift - safe preflight still sees `ames-connectors` and `ames-ynab@ames-connectors` in Claude settings metadata. Clean those protected host references only after explicit confirmation, since the repo work is complete and the UI replacement was already performed manually.
+
+---
+
 ## 2026-06-01 - v2.1.0 released to GitHub (MCPB); group-total rounding fix
 
 **What changed**: Authored the first GitHub release of v2.1.0 — the 2026-05-29 session bumped to 2.1.0 but never tagged or released it, and npm `@latest` is still 1.7.1 (publishing blocked on npm-auth recovery). Also fixed group-total float drift: added a `round2()` helper beside `dollars()`/`milliunits()` and applied it at the three sites that summed amounts with raw `reduce`/`+=` — `review_unapproved` ready_to_approve group totals, needs_category_first by-payee totals, and `get_overspent_categories` total_overspent — eliminating IEEE-754 artifacts like `-53.730000000000004`.
