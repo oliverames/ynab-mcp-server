@@ -13,37 +13,52 @@ const pluginName = "ynab-mcp-server";
 const marketplaceName = "ynab-mcp-server";
 const packageInstallTarget = `${packageName}@latest`;
 
-updateJson(".claude-plugin/plugin.json", (data) => {
-  data.version = version;
-});
+const pluginManifestPaths = [
+  ".claude-plugin/plugin.json",
+  ".codex-plugin/plugin.json",
+  ".hermes-plugin/plugin.json",
+  ".antigravity-plugin/plugin.json",
+];
 
-updateJson(".codex-plugin/plugin.json", (data) => {
-  data.version = version;
-});
+const marketplacePaths = [
+  ".claude-plugin/marketplace.json",
+  ".agents/plugins/marketplace.json",
+  ".hermes-plugin/marketplace.json",
+  ".antigravity-plugin/marketplace.json",
+];
 
-updateJson(".claude-plugin/marketplace.json", (data) => {
-  for (const plugin of data.plugins ?? []) {
-    if (plugin.name === pluginName) {
-      plugin.version = version;
+const mcpConfigPaths = [
+  ".mcp.json",
+  ".codex-plugin/mcp.json",
+  ".hermes-plugin/mcp.json",
+  ".antigravity-plugin/mcp_config.json",
+];
+
+for (const manifestPath of pluginManifestPaths) {
+  updateJson(manifestPath, (data) => {
+    data.version = version;
+  });
+}
+
+for (const marketplacePath of marketplacePaths) {
+  updateJson(marketplacePath, (data) => {
+    for (const plugin of data.plugins ?? []) {
+      if (plugin.name === pluginName) {
+        plugin.version = version;
+      }
     }
-  }
-});
+  });
+}
 
-updateJson(".agents/plugins/marketplace.json", (data) => {
-  for (const plugin of data.plugins ?? []) {
-    if (plugin.name === pluginName) {
-      plugin.version = version;
-    }
-  }
-});
+for (const mcpConfigPath of mcpConfigPaths) {
+  updateJson(mcpConfigPath, (data) => {
+    setPackageInstallTarget(findMcpServer(data));
+  });
+}
 
-updateJson(".mcp.json", (data) => {
-  setPackageInstallTarget(data.mcpServers?.[pluginName]);
-});
-
-updateJson(".codex-plugin/mcp.json", (data) => {
-  setPackageInstallTarget(data.mcpServers?.[pluginName]);
-});
+function findMcpServer(data) {
+  return data.mcpServers?.[pluginName] ?? data[pluginName];
+}
 
 function setPackageInstallTarget(server) {
   if (!server || !Array.isArray(server.args)) {

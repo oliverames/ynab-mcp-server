@@ -85,25 +85,44 @@ assert(
 
 const claudePlugin = readJson(".claude-plugin/plugin.json");
 const codexPlugin = readJson(".codex-plugin/plugin.json");
+const hermesPlugin = readJson(".hermes-plugin/plugin.json");
+const antigravityPlugin = readJson(".antigravity-plugin/plugin.json");
 const claudeMarketplace = readJson(".claude-plugin/marketplace.json");
 const codexMarketplace = readJson(".agents/plugins/marketplace.json");
+const hermesMarketplace = readJson(".hermes-plugin/marketplace.json");
+const antigravityMarketplace = readJson(".antigravity-plugin/marketplace.json");
 const claudeMcp = readJson(".mcp.json");
 const codexMcp = readJson(".codex-plugin/mcp.json");
+const hermesMcp = readJson(".hermes-plugin/mcp.json");
+const antigravityMcp = readJson(".antigravity-plugin/mcp_config.json");
 const claudeMarketplacePlugin = claudeMarketplace.plugins?.find((plugin) => plugin.name === pluginName);
 const codexMarketplacePlugin = codexMarketplace.plugins?.find((plugin) => plugin.name === pluginName);
+const hermesMarketplacePlugin = hermesMarketplace.plugins?.find((plugin) => plugin.name === pluginName);
+const antigravityMarketplacePlugin = antigravityMarketplace.plugins?.find((plugin) => plugin.name === pluginName);
 const claudeMcpServer = claudeMcp.mcpServers?.[pluginName];
 const codexMcpServer = codexMcp.mcpServers?.[pluginName];
+const hermesMcpServer = hermesMcp[pluginName];
+const antigravityMcpServer = antigravityMcp.mcpServers?.[pluginName];
 
 assert(claudePlugin.version === version, `Claude plugin manifest version matches ${version}`);
 assert(codexPlugin.version === version, `Codex plugin manifest version matches ${version}`);
+assert(hermesPlugin.version === version, `Hermes plugin manifest version matches ${version}`);
+assert(antigravityPlugin.version === version, `Antigravity plugin manifest version matches ${version}`);
 assert(claudeMarketplace.name === marketplaceName, `Claude marketplace name is ${marketplaceName}`);
 assert(codexMarketplace.name === marketplaceName, `Codex marketplace name is ${marketplaceName}`);
+assert(hermesMarketplace.name === marketplaceName, `Hermes marketplace name is ${marketplaceName}`);
+assert(antigravityMarketplace.name === marketplaceName, `Antigravity marketplace name is ${marketplaceName}`);
 assert(claudeMarketplacePlugin?.version === version, `Claude marketplace plugin version matches ${version}`);
 assert(codexMarketplacePlugin?.version === version, `Codex marketplace plugin version matches ${version}`);
+assert(hermesMarketplacePlugin?.version === version, `Hermes marketplace plugin version matches ${version}`);
+assert(antigravityMarketplacePlugin?.version === version, `Antigravity marketplace plugin version matches ${version}`);
 assert(claudePlugin.mcpServers === "./.mcp.json", "Claude plugin mcpServers points to ./.mcp.json");
 assert(codexPlugin.mcpServers === "./.codex-plugin/mcp.json", "Codex plugin mcpServers points to ./.codex-plugin/mcp.json");
+assert(hermesPlugin.mcpServers === "./.hermes-plugin/mcp.json", "Hermes plugin mcpServers points to ./.hermes-plugin/mcp.json");
 assert(claudeMcpServer?.args?.includes(packageInstallTarget), `Claude MCP config launches ${packageInstallTarget}`);
 assert(codexMcpServer?.args?.includes(packageInstallTarget), `Codex MCP config launches ${packageInstallTarget}`);
+assert(hermesMcpServer?.args?.includes(packageInstallTarget), `Hermes MCP config launches ${packageInstallTarget}`);
+assert(antigravityMcpServer?.args?.includes(packageInstallTarget), `Antigravity MCP config launches ${packageInstallTarget}`);
 
 if (checkRegistry) {
   const npmVersion = execFileSync("npm", ["view", pkg.name, "version"], {

@@ -26,6 +26,7 @@
   <a href="#install-as-a-plugin">Plugin</a> &bull;
   <a href="#install-in-claude-code">Claude Code</a> &bull;
   <a href="#install-in-codex">Codex</a> &bull;
+  <a href="#other-plugin-hosts">Other Hosts</a> &bull;
   <a href="#what-you-can-do">What You Can Do</a> &bull;
   <a href="#tools-reference">Tools Reference</a> &bull;
   <a href="#environment-variables">Configuration</a>
@@ -33,7 +34,7 @@
 
 ---
 
-Run YNAB through Claude Code, Codex, or any stdio MCP host without a marketplace plugin. This server gives AI assistants a local, rate-aware YNAB API layer that is read-only by default, speaks in dollars instead of milliunits, and exposes write tools only after explicit opt-in.
+Run YNAB through Claude Code, Codex, Hermes, Antigravity, or any stdio MCP host without a marketplace plugin. This server gives AI assistants a local, rate-aware YNAB API layer that is read-only by default, speaks in dollars instead of milliunits, and exposes write tools only after explicit opt-in.
 
 ## Why This Exists
 
@@ -47,7 +48,7 @@ All monetary values are automatically converted between dollars and YNAB's inter
 
 ## Quick Start
 
-This package stands on its own as a stdio MCP server. You can install it from this repo as a standalone Claude Code or Codex plugin, or register the npm package directly and let your MCP client launch it on demand. You do not need the older `ames-connectors` marketplace for YNAB.
+This package stands on its own as a stdio MCP server. You can install it from this repo as a standalone Claude Code, Codex, Hermes, or Antigravity plugin, or register the npm package directly and let your MCP client launch it on demand. You do not need the older `ames-connectors` marketplace for YNAB.
 
 This is the local, owner-run package. It uses a personal access token because it is intended for a YNAB account owner running the MCP server for that same account. A public connector for other YNAB users should be reviewed as an OAuth application and should follow the hosted pattern in [docs/hosted-oauth-connector.md](docs/hosted-oauth-connector.md).
 
@@ -68,6 +69,17 @@ codex plugin add ynab-mcp-server@ynab-mcp-server
 ```
 
 The plugin starts `@oliverames/mcp-server-for-ynab@latest` and preserves the prior `ames-ynab` connector behavior by setting `YNAB_ALLOW_WRITES=1`. Direct MCP registration remains read-only unless you explicitly enable writes.
+
+### Other Plugin Hosts
+
+The repository also carries host-specific marketplace and plugin manifests for Hermes and Antigravity:
+
+| Host | Marketplace | Plugin manifest | MCP config |
+|---|---|---|---|
+| Claude Code | `.claude-plugin/marketplace.json` | `.claude-plugin/plugin.json` | `.mcp.json` |
+| Codex | `.agents/plugins/marketplace.json` | `.codex-plugin/plugin.json` | `.codex-plugin/mcp.json` |
+| Hermes | `.hermes-plugin/marketplace.json` | `.hermes-plugin/plugin.json` | `.hermes-plugin/mcp.json` |
+| Antigravity | `.antigravity-plugin/marketplace.json` | `.antigravity-plugin/plugin.json` | `.antigravity-plugin/mcp_config.json` |
 
 ### 1. Get a YNAB Personal Access Token
 

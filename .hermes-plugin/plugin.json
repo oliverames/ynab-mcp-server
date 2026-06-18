@@ -1,0 +1,27 @@
+{
+  "name": "ynab-mcp-server",
+  "version": "3.0.0",
+  "description": "YNAB MCP connector for budgets, transactions, categories, scheduled transactions, accounts, months, payees, and budget review workflows.",
+  "source": {
+    "source": "local",
+    "path": "."
+  },
+  "category": "finance",
+  "displayName": "YNAB MCP",
+  "author": {
+    "name": "Oliver Ames",
+    "email": "oliverames@gmail.com",
+    "url": "https://github.com/oliverames"
+  },
+  "homepage": "https://github.com/oliverames/ynab-mcp-server#readme",
+  "repository": "https://github.com/oliverames/ynab-mcp-server",
+  "license": "MIT",
+  "keywords": [
+    "mcp",
+    "ynab",
+    "budget",
+    "finance",
+    "personal-finance"
+  ],
+  "mcpServers": "./.hermes-plugin/mcp.json"
+}
