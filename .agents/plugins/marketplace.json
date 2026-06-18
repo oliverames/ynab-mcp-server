@@ -1,0 +1,25 @@
+{
+  "name": "ynab-mcp-server",
+  "interface": {
+    "displayName": "YNAB MCP"
+  },
+  "metadata": {
+    "description": "Standalone YNAB MCP connector marketplace",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "ynab-mcp-server",
+      "version": "3.0.0",
+      "source": {
+        "source": "local",
+        "path": "./"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "finance"
+    }
+  ]
+}

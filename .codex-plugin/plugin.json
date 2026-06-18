@@ -1,0 +1,42 @@
+{
+  "name": "ynab-mcp-server",
+  "version": "3.0.0",
+  "description": "YNAB MCP connector for budgets, transactions, categories, scheduled transactions, accounts, months, payees, and budget review workflows.",
+  "author": {
+    "name": "Oliver Ames",
+    "email": "oliverames@gmail.com",
+    "url": "https://github.com/oliverames"
+  },
+  "homepage": "https://github.com/oliverames/ynab-mcp-server#readme",
+  "repository": "https://github.com/oliverames/ynab-mcp-server",
+  "keywords": [
+    "mcp",
+    "ynab",
+    "budget",
+    "finance",
+    "personal-finance"
+  ],
+  "category": "finance",
+  "mcpServers": "./.codex-plugin/mcp.json",
+  "interface": {
+    "displayName": "YNAB MCP",
+    "shortDescription": "Connect Claude and Codex to YNAB budgets and transactions.",
+    "longDescription": "A standalone YNAB MCP connector that gives Claude and Codex access to budgets, transactions, categories, scheduled transactions, accounts, months, and payees. Requires YNAB_API_TOKEN unless using the server's YNAB_OP_PATH fallback.",
+    "developerName": "Oliver Ames",
+    "category": "Finance",
+    "capabilities": [
+      "MCP Servers",
+      "Finance"
+    ],
+    "websiteURL": "https://github.com/oliverames/ynab-mcp-server#readme",
+    "defaultPrompt": [
+      "Summarize my YNAB budget this month.",
+      "Find uncategorized YNAB transactions.",
+      "Create a budget review checklist."
+    ],
+    "brandColor": "#14b8a6",
+    "composerIcon": "./assets/icon.png",
+    "logo": "./assets/icon.png"
+  },
+  "license": "MIT"
+}

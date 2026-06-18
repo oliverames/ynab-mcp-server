@@ -1,0 +1,35 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "ynab-mcp-server",
+  "version": "1.0.0",
+  "description": "Standalone YNAB MCP connector marketplace",
+  "owner": {
+    "name": "Oliver Ames",
+    "email": "oliverames@users.noreply.github.com"
+  },
+  "plugins": [
+    {
+      "name": "ynab-mcp-server",
+      "displayName": "YNAB MCP",
+      "description": "YNAB MCP connector for budgets, transactions, categories, scheduled transactions, accounts, months, payees, and budget review workflows.",
+      "version": "3.0.0",
+      "author": {
+        "name": "Oliver Ames",
+        "email": "oliverames@gmail.com",
+        "url": "https://github.com/oliverames"
+      },
+      "homepage": "https://github.com/oliverames/ynab-mcp-server#readme",
+      "repository": "https://github.com/oliverames/ynab-mcp-server",
+      "license": "MIT",
+      "keywords": [
+        "mcp",
+        "ynab",
+        "budget",
+        "finance",
+        "personal-finance"
+      ],
+      "source": "./",
+      "category": "finance"
+    }
+  ]
+}

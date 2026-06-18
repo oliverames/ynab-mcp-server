@@ -23,6 +23,7 @@
 
 <p align="center">
   <a href="#quick-start">Quick Start</a> &bull;
+  <a href="#install-as-a-plugin">Plugin</a> &bull;
   <a href="#install-in-claude-code">Claude Code</a> &bull;
   <a href="#install-in-codex">Codex</a> &bull;
   <a href="#what-you-can-do">What You Can Do</a> &bull;
@@ -46,9 +47,27 @@ All monetary values are automatically converted between dollars and YNAB's inter
 
 ## Quick Start
 
-This package stands on its own as a stdio MCP server. You do not need a Claude or Codex marketplace plugin; register the npm package directly and your MCP client will launch it on demand.
+This package stands on its own as a stdio MCP server. You can install it from this repo as a standalone Claude Code or Codex plugin, or register the npm package directly and let your MCP client launch it on demand. You do not need the older `ames-connectors` marketplace for YNAB.
 
 This is the local, owner-run package. It uses a personal access token because it is intended for a YNAB account owner running the MCP server for that same account. A public connector for other YNAB users should be reviewed as an OAuth application and should follow the hosted pattern in [docs/hosted-oauth-connector.md](docs/hosted-oauth-connector.md).
+
+### Install as a Plugin
+
+Install the standalone marketplace from this repository:
+
+```bash
+/plugin marketplace add oliverames/ynab-mcp-server
+/plugin install ynab-mcp-server@ynab-mcp-server
+```
+
+Install the same marketplace in Codex:
+
+```bash
+codex plugin marketplace add oliverames/ynab-mcp-server
+codex plugin add ynab-mcp-server@ynab-mcp-server
+```
+
+The plugin starts `@oliverames/mcp-server-for-ynab@latest` and preserves the prior `ames-ynab` connector behavior by setting `YNAB_ALLOW_WRITES=1`. Direct MCP registration remains read-only unless you explicitly enable writes.
 
 ### 1. Get a YNAB Personal Access Token
 
