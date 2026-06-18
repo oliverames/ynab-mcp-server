@@ -56,6 +56,7 @@ node -e "
   fs.writeFileSync(readmePath, readme);
 "
 
+npm run sync:plugin
 npm run release:check
 npm run build:mcpb
 
@@ -65,9 +66,10 @@ npm pack --dry-run 2>&1
 
 # Publish to npm
 echo ""
-echo "Publishing @oliverames/ynab-mcp-server@$NEW_VERSION..."
+PACKAGE_NAME=$(node -e "console.log(JSON.parse(require('fs').readFileSync('package.json','utf8')).name)")
+echo "Publishing $PACKAGE_NAME@$NEW_VERSION..."
 npm publish --access public
 npm run release:check:registry
 
 echo ""
-echo "Done! Published @oliverames/ynab-mcp-server@$NEW_VERSION"
+echo "Done! Published $PACKAGE_NAME@$NEW_VERSION"

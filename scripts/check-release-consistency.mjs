@@ -36,6 +36,9 @@ const lock = readJson("package-lock.json");
 const indexJs = readText("index.js");
 const readme = readText("README.md");
 const version = pkg.version;
+const pluginName = "ynab-mcp-server";
+const marketplaceName = "ynab-mcp-server";
+const packageInstallTarget = `${pkg.name}@latest`;
 
 assert(lock.version === version, `package-lock root version matches ${version}`);
 assert(lock.packages?.[""]?.version === version, `package-lock package version matches ${version}`);
@@ -79,6 +82,28 @@ assert(
     ? (mcpbVersions.length > 0 ? `README MCPB artifact references match ${version}` : "README has no MCPB artifact references")
     : `README has stale MCPB artifact versions: ${staleMcpbVersions.join(", ")}`
 );
+
+const claudePlugin = readJson(".claude-plugin/plugin.json");
+const codexPlugin = readJson(".codex-plugin/plugin.json");
+const claudeMarketplace = readJson(".claude-plugin/marketplace.json");
+const codexMarketplace = readJson(".agents/plugins/marketplace.json");
+const claudeMcp = readJson(".mcp.json");
+const codexMcp = readJson(".codex-plugin/mcp.json");
+const claudeMarketplacePlugin = claudeMarketplace.plugins?.find((plugin) => plugin.name === pluginName);
+const codexMarketplacePlugin = codexMarketplace.plugins?.find((plugin) => plugin.name === pluginName);
+const claudeMcpServer = claudeMcp.mcpServers?.[pluginName];
+const codexMcpServer = codexMcp.mcpServers?.[pluginName];
+
+assert(claudePlugin.version === version, `Claude plugin manifest version matches ${version}`);
+assert(codexPlugin.version === version, `Codex plugin manifest version matches ${version}`);
+assert(claudeMarketplace.name === marketplaceName, `Claude marketplace name is ${marketplaceName}`);
+assert(codexMarketplace.name === marketplaceName, `Codex marketplace name is ${marketplaceName}`);
+assert(claudeMarketplacePlugin?.version === version, `Claude marketplace plugin version matches ${version}`);
+assert(codexMarketplacePlugin?.version === version, `Codex marketplace plugin version matches ${version}`);
+assert(claudePlugin.mcpServers === "./.mcp.json", "Claude plugin mcpServers points to ./.mcp.json");
+assert(codexPlugin.mcpServers === "./.codex-plugin/mcp.json", "Codex plugin mcpServers points to ./.codex-plugin/mcp.json");
+assert(claudeMcpServer?.args?.includes(packageInstallTarget), `Claude MCP config launches ${packageInstallTarget}`);
+assert(codexMcpServer?.args?.includes(packageInstallTarget), `Codex MCP config launches ${packageInstallTarget}`);
 
 if (checkRegistry) {
   const npmVersion = execFileSync("npm", ["view", pkg.name, "version"], {

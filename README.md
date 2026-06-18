@@ -607,6 +607,7 @@ Zero additional dependencies. No build step. Pure ESM.
 Before publishing, run:
 
 ```bash
+npm run sync:plugin
 npm run release:check
 npm pack --dry-run
 ```
