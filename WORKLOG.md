@@ -1,5 +1,17 @@
 # Worklog
 
+## 2026-06-22 - Fix Codex plugin resolution + wire credentials
+
+**What changed**: Codex was dropping the `ynab-mcp-server` marketplace entirely (`codex plugin list` showed zero plugins under it; `codex plugin add` returned "plugin not found"), so YNAB was non-functional in Codex. Root cause: `.agents/plugins/marketplace.json` declared the plugin `source.path` as `"./"` (the marketplace root), which Codex cannot resolve. Moved the Codex plugin into a `codex/` subdirectory and repointed the source to `./codex` (`f1a1d83`). Then replaced a dead `env_vars` passthrough with `${VAR}` substitution in the Codex MCP `env`, which Codex resolves from `[shell_environment_policy.set]` (`f54ccb9`).
+
+**Decisions made**: Confirmed the subdir requirement with a throwaway local-marketplace probe before touching the repo. Left Claude (`.claude-plugin`, source `"./"`, which works there), Antigravity, and Hermes packaging untouched. Verified the YNAB token against the live API (HTTP 200).
+
+**Left off at**: `ynab-mcp-server@ynab-mcp-server` now resolves as `installed, enabled 3.0.0` in Codex (enabled-plugin count 43 -> 44). A Codex restart is needed to spawn the server from the refreshed snapshot.
+
+**Open questions**: If a YNAB call errors in Codex, confirm `[shell_environment_policy]` env actually propagates to MCP subprocesses on the current Codex build.
+
+---
+
 ## 2026-06-18 - Standalone YNAB marketplace replaces ames-connectors
 
 **What changed**: Made this repo a standalone plugin marketplace for `ynab-mcp-server` so YNAB no longer depends on the older `ames-connectors` marketplace. Added Claude Code and Codex marketplace/plugin metadata, then added Hermes and Antigravity manifests using the existing host-specific shapes: Claude uses `.claude-plugin/marketplace.json` plus `.mcp.json`, Codex uses `.agents/plugins/marketplace.json` plus `.codex-plugin/mcp.json`, Hermes uses a flat `.hermes-plugin/mcp.json`, and Antigravity uses `.antigravity-plugin/mcp_config.json`. Updated `scripts/sync-plugin-metadata.mjs` and `scripts/check-release-consistency.mjs` so future version bumps and release checks cover all four hosts.
