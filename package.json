@@ -43,7 +43,7 @@
     "presmoke:batch-verify": "npm run deps:ensure",
     "smoke:batch-verify": "node scripts/smoke-batch-verify.mjs",
     "sync:plugin": "node scripts/sync-plugin-metadata.mjs",
-    "version": "npm run sync:plugin && git add .agents/plugins/marketplace.json .claude-plugin/marketplace.json .claude-plugin/plugin.json .codex-plugin/plugin.json .codex-plugin/mcp.json .hermes-plugin/marketplace.json .hermes-plugin/plugin.json .hermes-plugin/mcp.json .antigravity-plugin/marketplace.json .antigravity-plugin/plugin.json .antigravity-plugin/mcp_config.json .mcp.json",
+    "version": "npm run sync:plugin && git add .agents/plugins/marketplace.json .claude-plugin/marketplace.json .claude-plugin/plugin.json codex/.codex-plugin/plugin.json codex/.codex-plugin/mcp.json .hermes-plugin/marketplace.json .hermes-plugin/plugin.json .hermes-plugin/mcp.json .antigravity-plugin/marketplace.json .antigravity-plugin/plugin.json .antigravity-plugin/mcp_config.json .mcp.json",
     "release:check": "node scripts/check-release-consistency.mjs",
     "release:check:registry": "node scripts/check-release-consistency.mjs --registry",
     "build:mcpb": "node scripts/build-mcpb.mjs",
