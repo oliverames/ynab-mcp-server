@@ -7,14 +7,11 @@
         "@oliverames/mcp-server-for-ynab@latest"
       ],
       "env": {
+        "YNAB_API_TOKEN": "${YNAB_API_TOKEN}",
+        "YNAB_BUDGET_ID": "${YNAB_BUDGET_ID}",
+        "OP_SERVICE_ACCOUNT_TOKEN": "${OP_SERVICE_ACCOUNT_TOKEN}",
         "YNAB_ALLOW_WRITES": "1"
-      },
-      "env_vars": [
-        "YNAB_API_TOKEN",
-        "YNAB_BUDGET_ID",
-        "YNAB_OP_PATH",
-        "OP_SERVICE_ACCOUNT_TOKEN"
-      ]
+      }
     }
   }
 }
