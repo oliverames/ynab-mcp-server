@@ -14,7 +14,7 @@ import * as ynab from "ynab";
 const BASE_URL = "https://api.ynab.com/v1";
 const YNAB_API_HOST = "api.ynab.com";
 const MAX_TOKEN_FILE_BYTES = 4096;
-const MAX_RESPONSE_BYTES = Number.parseInt(process.env.YNAB_MAX_RESPONSE_BYTES || "8388608", 10);
+const MAX_RESPONSE_BYTES = Math.floor(envNumber("YNAB_MAX_RESPONSE_BYTES", 8388608, { min: 1 }));
 const YNAB_RUNTIME_KEYS = [
   "YNAB_API_TOKEN",
   "YNAB_API_TOKEN_FILE",
@@ -40,6 +40,16 @@ const api = new ynab.API(effectiveApiToken, BASE_URL);
 api._configuration.config = { accessToken: effectiveApiToken, basePath: BASE_URL, fetchApi: secureFetch };
 
 // --- Helpers ---
+
+// Parse a numeric env var, falling back when it is unset, empty, non-numeric,
+// or below `min`. Prevents NaN from silently disabling limits (or busy-looping
+// the rate limiter) when a value is mistyped.
+function envNumber(name, fallback, { min = 0 } = {}) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "") return fallback;
+  const parsed = Number.parseFloat(raw);
+  return Number.isFinite(parsed) && parsed >= min ? parsed : fallback;
+}
 
 function resolveYnabRuntimeConfig() {
   const sources = loadYnabSettingSources();
@@ -620,12 +630,12 @@ function sanitizeErrorMessage(value) {
 }
 
 function createYnabRateLimiter() {
-  const requestsPerHour = Number.parseFloat(process.env.YNAB_RATE_LIMIT_PER_HOUR || "190");
-  if (!Number.isFinite(requestsPerHour) || requestsPerHour <= 0) {
+  const requestsPerHour = envNumber("YNAB_RATE_LIMIT_PER_HOUR", 190);
+  if (requestsPerHour <= 0) {
     return async () => {};
   }
 
-  const burst = Math.max(1, Number.parseInt(process.env.YNAB_RATE_LIMIT_BURST || "10", 10));
+  const burst = Math.max(1, Math.floor(envNumber("YNAB_RATE_LIMIT_BURST", 10, { min: 1 })));
   const refillMs = 3600000 / requestsPerHour;
   let tokens = burst;
   let updatedAt = Date.now();
@@ -654,12 +664,64 @@ function assertYnabApiUrl(url) {
   }
 }
 
+const RETRYABLE_HTTP_STATUSES = new Set([429, 502, 503, 504]);
+
+function isIdempotentRequest(init) {
+  const method = (init.method || "GET").toUpperCase();
+  return method === "GET" || method === "HEAD";
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function backoffDelayMs(attempt) {
+  return Math.min(1000 * 2 ** attempt, 30000);
+}
+
+function retryDelayMs(res, attempt) {
+  const retryAfter = Number.parseFloat(res.headers.get("retry-after") || "");
+  if (Number.isFinite(retryAfter) && retryAfter >= 0) {
+    return Math.min(retryAfter * 1000, 120000);
+  }
+  return backoffDelayMs(attempt);
+}
+
 async function secureFetch(input, init = {}) {
   const url = input instanceof URL ? input : new URL(typeof input === "string" ? input : input.url);
   assertYnabApiUrl(url);
-  await ynabRateLimit();
 
-  const timeoutMs = Number.parseInt(process.env.YNAB_HTTP_TIMEOUT_MS || "30000", 10);
+  const maxRetries = Math.floor(envNumber("YNAB_HTTP_RETRIES", 2));
+  for (let attempt = 0; ; attempt += 1) {
+    await ynabRateLimit();
+
+    let res;
+    try {
+      res = await fetchOnce(url, init);
+    } catch (e) {
+      // A network failure can leave a non-idempotent request in an unknown
+      // state on the server, so only reads are retried on thrown errors.
+      if (attempt < maxRetries && isIdempotentRequest(init)) {
+        await sleep(backoffDelayMs(attempt));
+        continue;
+      }
+      throw e;
+    }
+
+    // 429 means YNAB rejected the request without processing it, so any
+    // method is safe to retry; other retryable statuses are reads-only.
+    const retryable = res.status === 429
+      || (RETRYABLE_HTTP_STATUSES.has(res.status) && isIdempotentRequest(init));
+    if (retryable && attempt < maxRetries) {
+      await sleep(retryDelayMs(res, attempt));
+      continue;
+    }
+    return res;
+  }
+}
+
+async function fetchOnce(url, init) {
+  const timeoutMs = Math.floor(envNumber("YNAB_HTTP_TIMEOUT_MS", 30000));
   const controller = !init.signal && timeoutMs > 0 ? new AbortController() : null;
   const timeout = controller
     ? setTimeout(() => controller.abort(new Error(`YNAB request timed out after ${timeoutMs}ms`)), timeoutMs)
@@ -716,11 +778,27 @@ async function ynabFetch(path, { method = "GET", body, query } = {}) {
 
 const server = new McpServer({
   name: "mcp-server-for-ynab",
-  version: "3.0.0",
+  version: "3.1.0",
 });
 
 const registeredTools = new Map();
 const toolCatalog = new Map();
+
+// Validate executor input against the target tool's schema. Direct MCP calls
+// are validated by the SDK; the ynab_tool_execute / ynab_write_tool_execute
+// passthroughs would otherwise hand raw JSON to handlers unchecked.
+function parseToolExecuteInput(toolName, input) {
+  const shape = toolCatalog.get(toolName)?.config?.inputSchema;
+  if (!shape) return input ?? {};
+  const parsed = z.object(shape).safeParse(input ?? {});
+  if (!parsed.success) {
+    const issues = parsed.error.issues
+      .map((issue) => `${issue.path.join(".") || "(input)"}: ${issue.message}`)
+      .join("; ");
+    throw new Error(`Invalid input for ${toolName}: ${issues}`);
+  }
+  return parsed.data;
+}
 
 function registerTool(name, config, handler) {
   const registration = server.registerTool(name, config, handler);
@@ -2068,8 +2146,11 @@ registerTool(
     run(async () => {
       const bid = resolveBudgetId(budgetId);
 
-      // Fetch unapproved transactions
-      const { data: unapprovedData } = await api.transactions.getTransactions(bid, undefined, "unapproved");
+      // Fetch unapproved transactions across all history. YNAB defaults an
+      // omitted since_date to one year ago, which would silently hide older
+      // unapproved transactions from the review queue (approve_transactions
+      // already fetches full history; keep the two views consistent).
+      const { data: unapprovedData } = await api.transactions.getTransactions(bid, allHistorySinceDate(), "unapproved");
       const txns = unapprovedData.transactions.map(formatTransaction);
       const unapprovedIds = new Set(txns.map((t) => t.id));
 
@@ -2285,7 +2366,16 @@ registerTool(
         content: [{ type: "text", text: `Unknown YNAB tool: ${toolName}` }],
       };
     }
-    return tool.handler(input);
+    let parsedInput;
+    try {
+      parsedInput = parseToolExecuteInput(toolName, input);
+    } catch (e) {
+      return {
+        isError: true,
+        content: [{ type: "text", text: `Error: ${e.message}` }],
+      };
+    }
+    return tool.handler(parsedInput);
   }
 );
 
@@ -2325,9 +2415,40 @@ registerTool(
     ].includes(toolName) && input.confirmed === undefined
       ? { ...input, confirmed: true }
       : input;
-    return tool.handler(confirmedInput);
+    let parsedInput;
+    try {
+      parsedInput = parseToolExecuteInput(toolName, confirmedInput);
+    } catch (e) {
+      return {
+        isError: true,
+        content: [{ type: "text", text: `Error: ${e.message}` }],
+      };
+    }
+    return tool.handler(parsedInput);
   }
 );
+
+// --- Exports (unit tests) ---
+
+export {
+  dollars,
+  milliunits,
+  round2,
+  dollarsMap,
+  resolveBudgetId,
+  normalizeTransactionId,
+  mapTransactionInput,
+  mapTransactionUpdate,
+  transactionUpdateMismatches,
+  updateFieldMatches,
+  parseSimpleTomlSections,
+  stripTomlComment,
+  buildYnabUrl,
+  buildTransactionListPath,
+  sanitizeErrorMessage,
+  withWriteGateDescription,
+  parseToolExecuteInput,
+};
 
 // --- Start ---
 
@@ -2336,5 +2457,14 @@ process.on("uncaughtException", (err) => {
   process.exit(1);
 });
 
-const transport = new StdioServerTransport();
-await server.connect(transport);
+process.on("unhandledRejection", (reason) => {
+  console.error("Unhandled promise rejection:", reason);
+  process.exit(1);
+});
+
+// YNAB_MCP_NO_AUTOSTART=1 lets tests import this module for its exported
+// helpers without binding an MCP server to stdio.
+if (process.env.YNAB_MCP_NO_AUTOSTART !== "1") {
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+}

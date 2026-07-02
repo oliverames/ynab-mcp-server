@@ -77,7 +77,7 @@ The repository also carries host-specific marketplace and plugin manifests for H
 | Host | Marketplace | Plugin manifest | MCP config |
 |---|---|---|---|
 | Claude Code | `.claude-plugin/marketplace.json` | `.claude-plugin/plugin.json` | `.mcp.json` |
-| Codex | `.agents/plugins/marketplace.json` | `.codex-plugin/plugin.json` | `.codex-plugin/mcp.json` |
+| Codex | `.agents/plugins/marketplace.json` | `codex/.codex-plugin/plugin.json` | `codex/.codex-plugin/mcp.json` |
 | Hermes | `.hermes-plugin/marketplace.json` | `.hermes-plugin/plugin.json` | `.hermes-plugin/mcp.json` |
 | Antigravity | `.antigravity-plugin/marketplace.json` | `.antigravity-plugin/plugin.json` | `.antigravity-plugin/mcp_config.json` |
 
@@ -313,7 +313,7 @@ YNAB_API_TOKEN=your-token-here npm run smoke:review-unapproved -- --published
 - **Verified batch updates** - `update_transactions` refetches every requested transaction after the bulk API call, retries mismatched fields once through `update_transaction`, and returns a `verification` block so approval counts cannot hide failed category writes.
 - **Fetch-then-merge updates** - scheduled transaction updates (which use PUT semantics) automatically fetch the current state and merge your changes, so you only specify what changed.
 - **Fuzzy search** - `search_categories` and `search_payees` do case-insensitive partial matching across all entries.
-- **Approval workflow with anomaly flags** - `review_unapproved` groups transactions into "ready to approve" (categorized, split, or transfer) and "needs attention" (uncategorized), and attaches a `flags` array to each transaction surfacing anomalies: `manually_entered` (not bank-imported), `match_broken` (stale match reference), `scheduled_transaction_realized`, `new_payee`, `no_prior_amount_match` (novel amount for this payee), and `category_drift:was_X` (payee categorized differently in the prior 60 days). Group-level flags aggregate the union of all transaction flags. Bulk approval requires `confirmed: true`.
+- **Approval workflow with anomaly flags** - `review_unapproved` scans the full transaction history for unapproved entries (YNAB's API defaults to the last year, which would silently hide older stragglers) and groups transactions into "ready to approve" (categorized, split, or transfer) and "needs attention" (uncategorized), and attaches a `flags` array to each transaction surfacing anomalies: `manually_entered` (not bank-imported), `match_broken` (stale match reference), `scheduled_transaction_realized`, `new_payee`, `no_prior_amount_match` (novel amount for this payee), and `category_drift:was_X` (payee categorized differently in the prior 60 days). Group-level flags aggregate the union of all transaction flags. Bulk approval requires `confirmed: true`.
 - **Nullable updates** - update tools accept `null` for clearable fields (`memo`, `payeeName`, `categoryId`, `flagColor`) to distinguish "don't change" (omit) from "clear this field" (`null`).
 - **Target behavior support** - category create/update tools expose `goalNeedsWholeAmount` for YNAB's "Set aside another" vs. "Refill up to" goal behavior.
 - **Delta request support** - high-volume list tools accept `lastKnowledgeOfServer` and return `server_knowledge` when that parameter is provided.
@@ -486,7 +486,8 @@ Manual YNAB transfer fixes can replace one side of the pair with a new transacti
 | `YNAB_DISABLE_AGENT_CONFIG_FALLBACK` | No | `0` | Set to `1` to stop the server from reading `~/.codex/config.toml` and `~/.claude/settings.json`. Intended for tests and tightly controlled runtimes. |
 | `YNAB_RATE_LIMIT_PER_HOUR` | No | `190` | Client-side rate limiter. Set to `0` to disable for controlled tests. |
 | `YNAB_RATE_LIMIT_BURST` | No | `10` | Maximum burst size before rate limiting pauses requests. |
-| `YNAB_HTTP_TIMEOUT_MS` | No | `30000` | Per-request timeout in milliseconds. |
+| `YNAB_HTTP_TIMEOUT_MS` | No | `30000` | Per-request timeout in milliseconds. Set to `0` to disable the timeout. |
+| `YNAB_HTTP_RETRIES` | No | `2` | Automatic retries for retryable failures. HTTP 429 (rate limited) retries any request because YNAB rejected it before processing; 502/503/504 and network errors retry reads (`GET`/`HEAD`) only. Honors `Retry-After`. Set to `0` to disable. |
 | `YNAB_MAX_RESPONSE_BYTES` | No | `8388608` | Maximum direct-fetch response size for newer endpoints. |
 
 *`YNAB_API_TOKEN` is required unless `YNAB_API_TOKEN_FILE` or `YNAB_OP_PATH` is set. These values may come from direct process env, Codex config, or Claude settings.
@@ -530,6 +531,8 @@ All amounts in tool inputs and outputs are in **dollars** (e.g., `-12.34` for a 
 
 The YNAB API allows **200 requests per hour** per access token, enforced on a rolling window. This server applies a client-side limiter at 190 requests per hour with a burst of 10 by default. Each tool call typically uses one API request, except tools that deliberately verify or merge writes (`update_transactions`, `update_scheduled_transaction`) which perform additional reads.
 
+If a request still hits YNAB's limit (HTTP 429), the server waits for the `Retry-After` interval and retries automatically (up to `YNAB_HTTP_RETRIES` times). Transient 502/503/504 responses and network failures are retried for read requests only, since a failed write may have partially applied on the server.
+
 Set `YNAB_RATE_LIMIT_PER_HOUR=0` only for controlled local tests or smoke checks where you know you will stay under YNAB's API limit.
 
 ---
@@ -565,6 +568,19 @@ This repository is production-ready as a local owner-run stdio MCP package. For 
 ---
 
 ## Testing
+
+### Offline Tests (no YNAB account required)
+
+Unit tests cover the pure helpers (amount conversion, ID normalization, update verification, config parsing, URL safety, executor input validation), and the safety-model tests boot the real server over stdio to verify the read-only default, write-tool gating, annotations, and credential fallback behavior:
+
+```bash
+npm run test:unit
+npm run test:safety
+```
+
+Both run in CI (`.github/workflows/ci.yml`) on Node 18, 20, and 22 for every push and pull request, along with `release:check` and a credential-free MCP smoke test.
+
+### Live Integration Tests
 
 The integration test suite runs against a live YNAB budget. Most write tests create temporary transactions and delete or restore them, but category and category group creation is not reversible through the public API and is skipped unless explicitly enabled.
 
@@ -625,6 +641,8 @@ npm pack --dry-run
 ```
 
 After publishing, run `npm run release:check:registry` to verify the npm `latest` dist-tag and repo metadata agree on the same version. `npm run build:mcpb` remains available for an explicit local bundle, but the normal install path is direct MCP registration through npm.
+
+Pushing a `v*` tag triggers the release workflow (`.github/workflows/release.yml`), which verifies the tag against `package.json`, re-runs the offline tests and consistency checks, builds the MCPB bundle, and publishes a GitHub release with the bundle attached.
 
 ---
 

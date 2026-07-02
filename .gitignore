@@ -13,3 +13,6 @@ secrets.json
 *.pem
 *.p12
 *.key
+
+# Session tooling artifacts
+.a5c/
