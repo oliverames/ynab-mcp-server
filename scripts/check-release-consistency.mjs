@@ -84,7 +84,7 @@ assert(
 );
 
 const claudePlugin = readJson(".claude-plugin/plugin.json");
-const codexPlugin = readJson(".codex-plugin/plugin.json");
+const codexPlugin = readJson("codex/.codex-plugin/plugin.json");
 const hermesPlugin = readJson(".hermes-plugin/plugin.json");
 const antigravityPlugin = readJson(".antigravity-plugin/plugin.json");
 const claudeMarketplace = readJson(".claude-plugin/marketplace.json");
@@ -92,7 +92,7 @@ const codexMarketplace = readJson(".agents/plugins/marketplace.json");
 const hermesMarketplace = readJson(".hermes-plugin/marketplace.json");
 const antigravityMarketplace = readJson(".antigravity-plugin/marketplace.json");
 const claudeMcp = readJson(".mcp.json");
-const codexMcp = readJson(".codex-plugin/mcp.json");
+const codexMcp = readJson("codex/.codex-plugin/mcp.json");
 const hermesMcp = readJson(".hermes-plugin/mcp.json");
 const antigravityMcp = readJson(".antigravity-plugin/mcp_config.json");
 const claudeMarketplacePlugin = claudeMarketplace.plugins?.find((plugin) => plugin.name === pluginName);
@@ -118,6 +118,7 @@ assert(hermesMarketplacePlugin?.version === version, `Hermes marketplace plugin 
 assert(antigravityMarketplacePlugin?.version === version, `Antigravity marketplace plugin version matches ${version}`);
 assert(claudePlugin.mcpServers === "./.mcp.json", "Claude plugin mcpServers points to ./.mcp.json");
 assert(codexPlugin.mcpServers === "./.codex-plugin/mcp.json", "Codex plugin mcpServers points to ./.codex-plugin/mcp.json");
+assert(codexMarketplacePlugin?.source?.path === "./codex", "Codex marketplace plugin source path is ./codex (Codex cannot resolve the marketplace root)");
 assert(hermesPlugin.mcpServers === "./.hermes-plugin/mcp.json", "Hermes plugin mcpServers points to ./.hermes-plugin/mcp.json");
 assert(claudeMcpServer?.args?.includes(packageInstallTarget), `Claude MCP config launches ${packageInstallTarget}`);
 assert(codexMcpServer?.args?.includes(packageInstallTarget), `Codex MCP config launches ${packageInstallTarget}`);

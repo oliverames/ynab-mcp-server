@@ -1,6 +1,6 @@
 {
   "name": "@oliverames/mcp-server-for-ynab",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "description": "Local MCP server for YNAB budget operations",
   "license": "MIT",
   "repository": {
@@ -36,6 +36,8 @@
     "deps:ensure": "node --input-type=module -e \"await import('@modelcontextprotocol/sdk/client/index.js')\" >/dev/null 2>&1 || npm ci --silent --no-audit --no-fund",
     "pretest": "npm run deps:ensure",
     "test": "node test.js",
+    "pretest:unit": "npm run deps:ensure",
+    "test:unit": "node --test test/unit.test.mjs",
     "presmoke:list-tools": "npm run deps:ensure",
     "smoke:list-tools": "node scripts/smoke-list-tools.mjs",
     "presmoke:review-unapproved": "npm run deps:ensure",

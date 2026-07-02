@@ -15,7 +15,7 @@ const packageInstallTarget = `${packageName}@latest`;
 
 const pluginManifestPaths = [
   ".claude-plugin/plugin.json",
-  ".codex-plugin/plugin.json",
+  "codex/.codex-plugin/plugin.json",
   ".hermes-plugin/plugin.json",
   ".antigravity-plugin/plugin.json",
 ];
@@ -29,7 +29,7 @@ const marketplacePaths = [
 
 const mcpConfigPaths = [
   ".mcp.json",
-  ".codex-plugin/mcp.json",
+  "codex/.codex-plugin/mcp.json",
   ".hermes-plugin/mcp.json",
   ".antigravity-plugin/mcp_config.json",
 ];
