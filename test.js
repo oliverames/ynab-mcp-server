@@ -297,9 +297,60 @@ await test("get_transactions (by category)", async () => {
   if (!Array.isArray(txns)) throw new Error("not an array");
 });
 
+await test("get_transactions (by category and month)", async () => {
+  const byMonth = await call("get_transactions", { budgetId: bid, categoryId: testCatId, month: testMonth });
+  if (!Array.isArray(byMonth)) throw new Error("not an array");
+  for (const t of byMonth) {
+    if (t.category_id !== testCatId) throw new Error(`unexpected category ${t.category_id}`);
+    if (!t.date.startsWith(testMonthLabel)) throw new Error(`unexpected date ${t.date}`);
+  }
+
+  const [year, month] = testMonthLabel.split("-").map(Number);
+  const untilDate = new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10);
+  const byDateRange = await call("get_transactions", {
+    budgetId: bid,
+    categoryId: testCatId,
+    sinceDate: testMonth,
+    untilDate,
+  });
+  const monthIds = byMonth.map((t) => t.id).sort();
+  const dateRangeIds = byDateRange.map((t) => t.id).sort();
+  if (JSON.stringify(monthIds) !== JSON.stringify(dateRangeIds)) {
+    throw new Error("category+month did not match category+date-range results");
+  }
+});
+
+await test("get_transactions (by account and month)", async () => {
+  const txns = await call("get_transactions", { budgetId: bid, accountId: testAccountId, month: testMonth });
+  if (!Array.isArray(txns)) throw new Error("not an array");
+  for (const t of txns) {
+    if (t.account_id !== testAccountId) throw new Error(`unexpected account ${t.account_id}`);
+    if (!t.date.startsWith(testMonthLabel)) throw new Error(`unexpected date ${t.date}`);
+  }
+});
+
 await test("get_transactions (by payee)", async () => {
   const txns = await call("get_transactions", { budgetId: bid, payeeId: testPayeeId, sinceDate: "2026-01-01" });
   if (!Array.isArray(txns)) throw new Error("not an array");
+});
+
+await test("get_transactions (by payee and month)", async () => {
+  const txns = await call("get_transactions", { budgetId: bid, payeeId: testPayeeId, month: testMonth });
+  if (!Array.isArray(txns)) throw new Error("not an array");
+  for (const t of txns) {
+    if (t.payee_id !== testPayeeId) throw new Error(`unexpected payee ${t.payee_id}`);
+    if (!t.date.startsWith(testMonthLabel)) throw new Error(`unexpected date ${t.date}`);
+  }
+});
+
+await test("get_transactions rejects month with explicit date range", async () => {
+  try {
+    await call("get_transactions", { budgetId: bid, categoryId: testCatId, month: testMonth, sinceDate: testMonth });
+  } catch (e) {
+    if (!e.message.includes("either month or sinceDate/untilDate")) throw e;
+    return;
+  }
+  throw new Error("expected validation error");
 });
 
 await test("get_transaction (single)", async () => {

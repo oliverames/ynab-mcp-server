@@ -561,6 +561,16 @@ function allHistorySinceDate() {
   return "1970-01-01";
 }
 
+function endOfMonth(month) {
+  const match = /^(\d{4})-(\d{2})-01$/.exec(month);
+  if (!match) {
+    throw new Error("month must be in YYYY-MM-DD format and use the first day of the month.");
+  }
+  const year = Number(match[1]);
+  const monthIndex = Number(match[2]) - 1;
+  return new Date(Date.UTC(year, monthIndex + 1, 0)).toISOString().slice(0, 10);
+}
+
 function buildTransactionListPath({ budgetId, accountId, categoryId, payeeId, month }) {
   const bid = pathSegment(resolveBudgetId(budgetId));
   if (accountId) return `/plans/${bid}/accounts/${pathSegment(accountId)}/transactions`;
@@ -581,10 +591,15 @@ async function fetchTransactions({
   month,
   lastKnowledgeOfServer,
 }) {
-  return ynabFetch(buildTransactionListPath({ budgetId, accountId, categoryId, payeeId, month }), {
+  const hasResourceFilter = Boolean(accountId || categoryId || payeeId);
+  const effectiveMonth = hasResourceFilter ? undefined : month;
+  const effectiveSinceDate = month && hasResourceFilter ? month : sinceDate;
+  const effectiveUntilDate = month && hasResourceFilter ? endOfMonth(month) : untilDate;
+
+  return ynabFetch(buildTransactionListPath({ budgetId, accountId, categoryId, payeeId, month: effectiveMonth }), {
     query: {
-      since_date: sinceDate,
-      until_date: untilDate,
+      since_date: effectiveSinceDate,
+      until_date: effectiveUntilDate,
       type,
       last_knowledge_of_server: lastKnowledgeOfServer,
     },
@@ -1569,7 +1584,7 @@ function formatTransaction(t) {
 
 registerTool(
   "get_transactions",
-  { description: "Get transactions with optional filters. Use type='unapproved' or type='uncategorized' to filter. Optionally filter by account, category, payee, or month. Each returned transaction includes 'import_payee_name_original' — the raw merchant string from the bank import (e.g. 'AplPay LS ONION RIVEMONTPELIER VT') — which encodes processor flag, merchant name (often longer than the cleaned payee_name), and city+state. This is the primary disambiguation field when payee_name is truncated or ambiguous. YNAB now defaults omitted sinceDate to one year ago; pass an explicit older sinceDate to retrieve older history. Note: large date ranges (6+ months on a busy budget) can return 50KB+ of data; narrow with categoryId/payeeId/month/sinceDate/untilDate filters when possible.", inputSchema: {
+  { description: "Get transactions with optional filters. Use type='unapproved' or type='uncategorized' to filter. Optionally filter by account, category, payee, or month. You may combine one of accountId/categoryId/payeeId with month to fetch that resource's transactions for a specific month. Each returned transaction includes 'import_payee_name_original' — the raw merchant string from the bank import (e.g. 'AplPay LS ONION RIVEMONTPELIER VT') — which encodes processor flag, merchant name (often longer than the cleaned payee_name), and city+state. This is the primary disambiguation field when payee_name is truncated or ambiguous. YNAB now defaults omitted sinceDate to one year ago; pass an explicit older sinceDate to retrieve older history. Note: large date ranges (6+ months on a busy budget) can return 50KB+ of data; narrow with categoryId/payeeId/month/sinceDate/untilDate filters when possible.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     sinceDate: z.string().optional().describe("Only return transactions on or after this date (YYYY-MM-DD). If omitted, YNAB defaults to one year ago."),
     untilDate: z.string().optional().describe("Only return transactions on or before this date (YYYY-MM-DD)"),
@@ -1582,9 +1597,12 @@ registerTool(
   } },
   ({ budgetId, sinceDate, untilDate, type, accountId, categoryId, payeeId, month, lastKnowledgeOfServer }) =>
     run(async () => {
-      const resourceFilters = [accountId, categoryId, payeeId, month].filter((value) => value !== undefined && value !== null && value !== "");
+      const resourceFilters = [accountId, categoryId, payeeId].filter((value) => value !== undefined && value !== null && value !== "");
       if (resourceFilters.length > 1) {
-        throw new Error("Provide only one of accountId, categoryId, payeeId, or month.");
+        throw new Error("Provide only one of accountId, categoryId, or payeeId. You may combine one of these with month.");
+      }
+      if (month && (sinceDate || untilDate)) {
+        throw new Error("Provide either month or sinceDate/untilDate, not both.");
       }
 
       const data = await fetchTransactions({
