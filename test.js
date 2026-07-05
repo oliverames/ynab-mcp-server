@@ -21,7 +21,7 @@ await client.connect(transport);
   const authResult = await client.callTool({ name: "ynab_auth_status", arguments: {} });
   const auth = JSON.parse(authResult.content[0].text);
   if (!auth.authenticated) {
-    console.error("SKIP: test.js requires a real YNAB_API_TOKEN (live integration suite). Run `npm run test:unit` for the offline tests.");
+    console.error("test.js requires a real YNAB_API_TOKEN (live integration suite) and none was found; exiting with failure. Run `npm run test:unit` for the offline tests.");
     await client.close();
     process.exit(1);
   }

@@ -245,6 +245,7 @@ test("verifyBulkTransactionUpdates verifies a batch with a single list refetch",
     { id: "t1", date: "2026-06-01", amount: -10000, approved: true, deleted: false },
     { id: "t2", date: "2026-06-02", amount: -20000, approved: true, deleted: false },
   ];
+  const realFetch = globalThis.fetch;
   globalThis.fetch = async (url) => {
     requests.push(String(url));
     return new Response(JSON.stringify({ data: { transactions: listTransactions } }), {
@@ -252,7 +253,7 @@ test("verifyBulkTransactionUpdates verifies a batch with a single list refetch",
       headers: { "content-type": "application/json" },
     });
   };
-  t.after(() => { delete globalThis.fetch; });
+  t.after(() => { globalThis.fetch = realFetch; });
 
   const responseTxns = listTransactions.map((tx) => ({ ...tx }));
   const requested = [

@@ -547,10 +547,16 @@ async function prefetchUpdatedTransactions(budgetId, requestedUpdates, responseT
     const windowStart = new Date(Date.now() - VERIFY_REFETCH_WINDOW_DAYS * 24 * 60 * 60 * 1000)
       .toISOString().slice(0, 10);
     const sinceDate = minDate > windowStart ? minDate : windowStart;
-    const data = await fetchTransactions({ budgetId, sinceDate });
-    for (const t of data.transactions) {
-      const id = normalizeTransactionId(t.id);
-      if (wantedIds.has(id)) byId.set(id, formatTransaction(t));
+    try {
+      const data = await fetchTransactions({ budgetId, sinceDate });
+      for (const t of data.transactions) {
+        const id = normalizeTransactionId(t.id);
+        if (wantedIds.has(id)) byId.set(id, formatTransaction(t));
+      }
+    } catch {
+      // The write already succeeded; a failed bulk refetch (e.g. a response
+      // over MAX_RESPONSE_BYTES on a very busy budget) must not fail the tool
+      // call. Fall through to per-transaction GETs below.
     }
   }
 
@@ -580,7 +586,11 @@ async function verifyBulkTransactionUpdates(budgetId, requestedUpdates, response
   const mismatched = results.filter((r) => r.mismatches.length > 0);
   if (mismatched.length > 0) {
     verification.retried = mismatched.map((r) => ({ id: r.requested.id, mismatches: r.mismatches }));
-    const retryRequests = mismatched.map((r) => r.requested);
+    // Drop subtransactions from the retry payload: the first PATCH already
+    // converted the transaction into a split, and YNAB rejects subtransaction
+    // updates on existing splits. Splits are not among the verified fields,
+    // so the retry only needs to re-send the scalar fields that mismatched.
+    const retryRequests = mismatched.map((r) => ({ ...r.requested, subtransactions: undefined }));
     const { data } = await api.transactions.updateTransactions(budgetId, {
       transactions: retryRequests.map((r) => ({ id: normalizeTransactionId(r.id), ...mapTransactionUpdate(r) })),
     });
@@ -603,8 +613,15 @@ function normalizeTransactionId(id) {
   return id.replace(/_\d{4}-\d{2}-\d{2}$/, "");
 }
 
+// Pretty-print small payloads for readability; large ones (e.g. full budget
+// exports) are emitted compactly — indentation inflates a multi-MB result by
+// ~30% for no benefit to a machine consumer.
+const PRETTY_PRINT_MAX_BYTES = 65536;
+
 function ok(data) {
-  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+  const compact = JSON.stringify(data);
+  const text = compact.length > PRETTY_PRINT_MAX_BYTES ? compact : JSON.stringify(data, null, 2);
+  return { content: [{ type: "text", text }] };
 }
 
 function collection(data, key, items, lastKnowledgeOfServer) {
@@ -1086,7 +1103,7 @@ registerTool(
 
 registerTool(
   "get_budget",
-  { description: "Get a budget summary including name, currency format, and account/category/payee counts. Pass lastKnowledgeOfServer to get a delta export instead: every entity (accounts, payees, categories, months, transactions, scheduled transactions, ...) that changed since that server knowledge, plus the new server_knowledge for the next delta request. A delta request with lastKnowledgeOfServer: 0 returns the full budget export, which can be very large.", inputSchema: {
+  { description: "Get a budget summary including name, currency format, and account/category/payee counts. Pass lastKnowledgeOfServer to get a delta export instead: every entity (accounts, payees, categories, months, transactions, scheduled transactions, ...) that changed since that server knowledge, plus the new server_knowledge for the next delta request. A delta request with lastKnowledgeOfServer: 0 returns the full budget export, which can be very large — responses over the YNAB_MAX_RESPONSE_BYTES cap (default 8 MB) are rejected; on big budgets prefer incremental deltas or the dedicated list tools.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     lastKnowledgeOfServer: z.number().int().nonnegative().optional().describe("Delta request server knowledge. When provided, returns changed entities and server_knowledge instead of the summary."),
   } },
@@ -1934,7 +1951,7 @@ registerTool(
       const resolved = txns.map((t) => (t.id !== undefined ? t : { ...t, id: byImportId.get(t.importId) }));
       const unresolved = resolved.filter((t) => !t.id).map((t) => t.importId);
       if (unresolved.length > 0) {
-        throw new Error(`YNAB did not return updated transactions for import ids: ${unresolved.join(", ")}`);
+        throw new Error(`The bulk update was submitted, but YNAB did not return updated transactions for import ids: ${unresolved.join(", ")}. Verification could not run for those rows; inspect them with get_transactions before retrying.`);
       }
       const { verification, verified } = await verifyBulkTransactionUpdates(bid, resolved, data.transactions);
       if (verification.failed.length > 0) {
