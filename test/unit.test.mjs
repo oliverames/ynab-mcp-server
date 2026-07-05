@@ -26,6 +26,7 @@ const {
   sanitizeErrorMessage,
   withWriteGateDescription,
   parseToolExecuteInput,
+  verifyBulkTransactionUpdates,
 } = await import("../index.js");
 
 test("dollars converts milliunits and passes null through", () => {
@@ -93,6 +94,50 @@ test("mapTransactionUpdate is sparse: only provided fields appear", () => {
     memo: null,
   });
   assert.deepEqual(mapTransactionUpdate({ amount: -1.5 }), { amount: -1500 });
+});
+
+test("mapTransactionUpdate converts subtransactions when provided", () => {
+  const mapped = mapTransactionUpdate({
+    subtransactions: [
+      { amount: -15, categoryId: "c1" },
+      { amount: -10, categoryId: "c2", payeeName: "Split payee", memo: "part 2" },
+    ],
+  });
+  assert.deepEqual(mapped, {
+    subtransactions: [
+      { amount: -15000, category_id: "c1", payee_id: undefined, payee_name: undefined, memo: undefined },
+      { amount: -10000, category_id: "c2", payee_id: undefined, payee_name: "Split payee", memo: "part 2" },
+    ],
+  });
+  assert.equal(mapTransactionUpdate({ approved: true }).subtransactions, undefined);
+});
+
+test("parseToolExecuteInput accepts importId-based bulk updates and enforces limits", () => {
+  const parsed = parseToolExecuteInput("update_transactions", {
+    transactions: [{ importId: "YNAB:-25000:2026-01-02:1", approved: true }],
+  });
+  assert.equal(parsed.transactions[0].importId, "YNAB:-25000:2026-01-02:1");
+  assert.throws(
+    () => parseToolExecuteInput("update_transactions", {
+      transactions: [{ id: "t1", payeeName: "x".repeat(201) }],
+    }),
+    /Invalid input for update_transactions/,
+  );
+});
+
+test("parseToolExecuteInput accepts get_budget delta and list_budgets includeAccounts params", () => {
+  assert.deepEqual(
+    parseToolExecuteInput("get_budget", { lastKnowledgeOfServer: 0 }),
+    { lastKnowledgeOfServer: 0 },
+  );
+  assert.deepEqual(
+    parseToolExecuteInput("list_budgets", { includeAccounts: true }),
+    { includeAccounts: true },
+  );
+  assert.throws(
+    () => parseToolExecuteInput("get_budget", { lastKnowledgeOfServer: -1 }),
+    /Invalid input for get_budget/,
+  );
 });
 
 test("updateFieldMatches compares numbers with tolerance and others strictly", () => {
@@ -192,6 +237,39 @@ test("withWriteGateDescription appends the gate note exactly once", () => {
   const gated = withWriteGateDescription("Create a transaction.");
   assert.match(gated, /YNAB_ALLOW_WRITES=1/);
   assert.equal(withWriteGateDescription(gated), gated);
+});
+
+test("verifyBulkTransactionUpdates verifies a batch with a single list refetch", async (t) => {
+  const requests = [];
+  const listTransactions = [
+    { id: "t1", date: "2026-06-01", amount: -10000, approved: true, deleted: false },
+    { id: "t2", date: "2026-06-02", amount: -20000, approved: true, deleted: false },
+  ];
+  globalThis.fetch = async (url) => {
+    requests.push(String(url));
+    return new Response(JSON.stringify({ data: { transactions: listTransactions } }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  t.after(() => { delete globalThis.fetch; });
+
+  const responseTxns = listTransactions.map((tx) => ({ ...tx }));
+  const requested = [
+    { id: "t1", approved: true },
+    { id: "t2", approved: true },
+  ];
+  const { verification, verified } = await verifyBulkTransactionUpdates("plan-1", requested, responseTxns);
+
+  assert.equal(verification.checked, 2);
+  assert.deepEqual(verification.retried, []);
+  assert.deepEqual(verification.failed, []);
+  assert.equal(verified.length, 2);
+  assert.equal(verified[0].approved, true);
+  // The whole batch must be verified with exactly one list request —
+  // one GET per transaction starves the shared YNAB rate budget.
+  assert.equal(requests.length, 1);
+  assert.match(requests[0], /\/plans\/plan-1\/transactions\?since_date=2026-06-01/);
 });
 
 test("parseToolExecuteInput validates against the target tool schema", () => {

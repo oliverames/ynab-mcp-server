@@ -14,6 +14,19 @@ const transport = new StdioClientTransport({
 const client = new Client({ name: "test", version: "1.0.0" });
 await client.connect(transport);
 
+// This suite exercises the live YNAB API; without credentials every call
+// returns the discovery-mode auth payload and the assertions below would
+// fail with confusing type errors. Bail out early with a clear message.
+{
+  const authResult = await client.callTool({ name: "ynab_auth_status", arguments: {} });
+  const auth = JSON.parse(authResult.content[0].text);
+  if (!auth.authenticated) {
+    console.error("SKIP: test.js requires a real YNAB_API_TOKEN (live integration suite). Run `npm run test:unit` for the offline tests.");
+    await client.close();
+    process.exit(1);
+  }
+}
+
 const bid = process.env.YNAB_TEST_BUDGET_ID || process.env.YNAB_BUDGET_ID || "last-used";
 const runNonReversibleTests = process.env.YNAB_RUN_NONREVERSIBLE_TESTS === "1";
 
