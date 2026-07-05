@@ -880,7 +880,7 @@ async function ynabFetch(path, { method = "GET", body, query } = {}) {
 
 const server = new McpServer({
   name: "mcp-server-for-ynab",
-  version: "3.1.0",
+  version: "3.2.0",
 });
 
 const registeredTools = new Map();
