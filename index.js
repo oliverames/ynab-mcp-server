@@ -37,7 +37,16 @@ if (!API_TOKEN) {
 const ynabRateLimit = createYnabRateLimiter();
 const effectiveApiToken = API_TOKEN || "missing-token-for-tool-discovery";
 const api = new ynab.API(effectiveApiToken, BASE_URL);
+// The ynab SDK's Configuration exposes a `config` setter that replaces its
+// inner options object; this is how every SDK request is routed through
+// secureFetch (host pinning, rate limiting, retries, timeout).
 api._configuration.config = { accessToken: effectiveApiToken, basePath: BASE_URL, fetchApi: secureFetch };
+if (api._configuration.fetchApi !== secureFetch) {
+  // The public Configuration.fetchApi getter is exactly what the SDK's request
+  // path reads. Fail loudly rather than silently issuing unprotected requests
+  // if a future SDK version changes this contract.
+  throw new Error("ynab SDK configuration shape changed: secure fetch wiring did not take effect. Refusing to start.");
+}
 
 // --- Helpers ---
 
@@ -412,6 +421,24 @@ function withCurrencyFields(out, source, fields) {
   return out;
 }
 
+const subtransactionInputSchema = z.object({
+  amount: z.number().describe("Subtransaction amount in dollars"),
+  categoryId: z.string().optional().describe("Category ID"),
+  payeeId: z.string().optional().describe("Payee ID"),
+  payeeName: z.string().max(200).optional().describe("Payee name"),
+  memo: z.string().optional().describe("Memo"),
+});
+
+function mapSubtransactions(subtransactions) {
+  return subtransactions.map((s) => ({
+    amount: milliunits(s.amount),
+    category_id: s.categoryId,
+    payee_id: s.payeeId,
+    payee_name: s.payeeName,
+    memo: s.memo,
+  }));
+}
+
 function mapTransactionInput(t) {
   const out = {
     account_id: t.accountId,
@@ -427,13 +454,7 @@ function mapTransactionInput(t) {
     import_id: t.importId,
   };
   if (t.subtransactions) {
-    out.subtransactions = t.subtransactions.map((s) => ({
-      amount: milliunits(s.amount),
-      category_id: s.categoryId,
-      payee_id: s.payeeId,
-      payee_name: s.payeeName,
-      memo: s.memo,
-    }));
+    out.subtransactions = mapSubtransactions(t.subtransactions);
   }
   return out;
 }
@@ -451,6 +472,9 @@ function mapTransactionUpdate(t) {
   if (t.cleared    !== undefined) out.cleared        = t.cleared;
   if (t.approved   !== undefined) out.approved       = t.approved;
   if (t.flagColor  !== undefined) out.flag_color     = t.flagColor;
+  if (t.subtransactions !== undefined) {
+    out.subtransactions = mapSubtransactions(t.subtransactions);
+  }
   return out;
 }
 
@@ -500,41 +524,87 @@ async function getFormattedTransaction(budgetId, transactionId) {
   return formatTransaction(data.transaction);
 }
 
-async function verifyBulkTransactionUpdates(budgetId, requestedUpdates) {
+// Refetch all updated transactions in a single list request instead of one
+// GET per transaction. Verification previously issued N+1 requests, which
+// starved the shared YNAB rate budget (~190 req/hour) on large batches; a
+// 100-row approval cost 100 extra GETs. One request now covers the batch,
+// with a per-transaction GET fallback only for rows the list did not return.
+// Keep the verification list request bounded: a single old transaction in a
+// batch must not turn the refetch into a full-history download (which could
+// exceed MAX_RESPONSE_BYTES and fail the tool call after the write already
+// succeeded). Rows older than the window fall back to per-transaction GETs.
+const VERIFY_REFETCH_WINDOW_DAYS = 90;
+
+async function prefetchUpdatedTransactions(budgetId, requestedUpdates, responseTransactions = []) {
+  const wantedIds = new Set(requestedUpdates.map((r) => r.id && normalizeTransactionId(r.id)).filter(Boolean));
+  const dates = [];
+  for (const t of responseTransactions) if (t?.date) dates.push(t.date);
+  for (const r of requestedUpdates) if (r.date) dates.push(r.date);
+
+  const byId = new Map();
+  if (dates.length > 0) {
+    const minDate = dates.reduce((min, d) => (d < min ? d : min));
+    const windowStart = new Date(Date.now() - VERIFY_REFETCH_WINDOW_DAYS * 24 * 60 * 60 * 1000)
+      .toISOString().slice(0, 10);
+    const sinceDate = minDate > windowStart ? minDate : windowStart;
+    try {
+      const data = await fetchTransactions({ budgetId, sinceDate });
+      for (const t of data.transactions) {
+        const id = normalizeTransactionId(t.id);
+        if (wantedIds.has(id)) byId.set(id, formatTransaction(t));
+      }
+    } catch {
+      // The write already succeeded; a failed bulk refetch (e.g. a response
+      // over MAX_RESPONSE_BYTES on a very busy budget) must not fail the tool
+      // call. Fall through to per-transaction GETs below.
+    }
+  }
+
+  // Fetch stragglers (outside the window, or absent from the list response)
+  // concurrently; the shared rate limiter still meters the actual requests.
+  const missingIds = [...wantedIds].filter((id) => !byId.has(id));
+  await Promise.all(missingIds.map(async (id) => {
+    byId.set(id, await getFormattedTransaction(budgetId, id));
+  }));
+  return byId;
+}
+
+async function verifyBulkTransactionUpdates(budgetId, requestedUpdates, responseTransactions) {
   const verification = {
     checked: requestedUpdates.length,
     retried: [],
     failed: [],
   };
-  const verified = [];
+  const prefetched = await prefetchUpdatedTransactions(budgetId, requestedUpdates, responseTransactions);
+  const results = requestedUpdates.map((requested) => {
+    const refetched = prefetched.get(normalizeTransactionId(requested.id));
+    return { requested, refetched, mismatches: transactionUpdateMismatches(requested, refetched) };
+  });
 
-  for (const requested of requestedUpdates) {
-    let refetched = await getFormattedTransaction(budgetId, requested.id);
-    let mismatches = transactionUpdateMismatches(requested, refetched);
-
-    if (mismatches.length > 0) {
-      verification.retried.push({
-        id: requested.id,
-        mismatches,
-      });
-      const { data } = await api.transactions.updateTransaction(budgetId, requested.id, {
-        transaction: mapTransactionUpdate(requested),
-      });
-      refetched = formatTransaction(data.transaction);
-      mismatches = transactionUpdateMismatches(requested, refetched);
+  // Retry every mismatched row in one bulk PATCH (not one request per row),
+  // then independently refetch just those rows to confirm persistence.
+  const mismatched = results.filter((r) => r.mismatches.length > 0);
+  if (mismatched.length > 0) {
+    verification.retried = mismatched.map((r) => ({ id: r.requested.id, mismatches: r.mismatches }));
+    // Drop subtransactions from the retry payload: the first PATCH already
+    // converted the transaction into a split, and YNAB rejects subtransaction
+    // updates on existing splits. Splits are not among the verified fields,
+    // so the retry only needs to re-send the scalar fields that mismatched.
+    const retryRequests = mismatched.map((r) => ({ ...r.requested, subtransactions: undefined }));
+    const { data } = await api.transactions.updateTransactions(budgetId, {
+      transactions: retryRequests.map((r) => ({ id: normalizeTransactionId(r.id), ...mapTransactionUpdate(r) })),
+    });
+    const reprefetched = await prefetchUpdatedTransactions(budgetId, retryRequests, data.transactions);
+    for (const r of mismatched) {
+      r.refetched = reprefetched.get(normalizeTransactionId(r.requested.id));
+      r.mismatches = transactionUpdateMismatches(r.requested, r.refetched);
+      if (r.mismatches.length > 0) {
+        verification.failed.push({ id: r.requested.id, mismatches: r.mismatches });
+      }
     }
-
-    if (mismatches.length > 0) {
-      verification.failed.push({
-        id: requested.id,
-        mismatches,
-      });
-    }
-
-    verified.push(refetched);
   }
 
-  return { verification, verified };
+  return { verification, verified: results.map((r) => r.refetched) };
 }
 
 // YNAB scheduled transactions that realize get composite IDs like `uuid_YYYY-MM-DD`.
@@ -543,8 +613,15 @@ function normalizeTransactionId(id) {
   return id.replace(/_\d{4}-\d{2}-\d{2}$/, "");
 }
 
+// Pretty-print small payloads for readability; large ones (e.g. full budget
+// exports) are emitted compactly — indentation inflates a multi-MB result by
+// ~30% for no benefit to a machine consumer.
+const PRETTY_PRINT_MAX_BYTES = 65536;
+
 function ok(data) {
-  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+  const compact = JSON.stringify(data);
+  const text = compact.length > PRETTY_PRINT_MAX_BYTES ? compact : JSON.stringify(data, null, 2);
+  return { content: [{ type: "text", text }] };
 }
 
 function collection(data, key, items, lastKnowledgeOfServer) {
@@ -731,8 +808,42 @@ async function secureFetch(input, init = {}) {
       await sleep(retryDelayMs(res, attempt));
       continue;
     }
-    return res;
+
+    // Cheap early guard: the header can lie (absent under chunked transfer,
+    // compressed size under gzip), so the decoded body is capped below too.
+    const contentLength = Number.parseInt(res.headers.get("content-length") || "", 10);
+    if (Number.isFinite(contentLength) && contentLength > MAX_RESPONSE_BYTES) {
+      throw new Error(`YNAB response exceeded ${MAX_RESPONSE_BYTES} bytes`);
+    }
+    return enforceResponseSizeCap(res);
   }
+}
+
+const BODYLESS_HTTP_STATUSES = new Set([204, 205, 304]);
+
+// Read the decoded body with a hard byte cap and hand callers an equivalent
+// Response. Enforcing this inside secureFetch bounds every request path —
+// SDK-mediated calls buffer and parse res.json() with no cap of their own.
+async function enforceResponseSizeCap(res) {
+  if (!res.body || BODYLESS_HTTP_STATUSES.has(res.status)) return res;
+  const reader = res.body.getReader();
+  const chunks = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > MAX_RESPONSE_BYTES) {
+      await reader.cancel();
+      throw new Error(`YNAB response exceeded ${MAX_RESPONSE_BYTES} bytes`);
+    }
+    chunks.push(value);
+  }
+  return new Response(Buffer.concat(chunks), {
+    status: res.status,
+    statusText: res.statusText,
+    headers: res.headers,
+  });
 }
 
 async function fetchOnce(url, init) {
@@ -772,14 +883,7 @@ async function ynabFetch(path, { method = "GET", body, query } = {}) {
   };
   if (body) opts.body = JSON.stringify(body);
   const res = await secureFetch(url, opts);
-  const contentLength = Number.parseInt(res.headers.get("content-length") || "0", 10);
-  if (Number.isFinite(contentLength) && contentLength > MAX_RESPONSE_BYTES) {
-    throw new Error(`YNAB response exceeded ${MAX_RESPONSE_BYTES} bytes`);
-  }
   const text = await res.text();
-  if (Buffer.byteLength(text, "utf8") > MAX_RESPONSE_BYTES) {
-    throw new Error(`YNAB response exceeded ${MAX_RESPONSE_BYTES} bytes`);
-  }
   const json = text ? JSON.parse(text) : {};
   if (!res.ok) {
     const err = new Error(sanitizeErrorMessage(json?.error?.detail || `HTTP ${res.status}`));
@@ -793,7 +897,7 @@ async function ynabFetch(path, { method = "GET", body, query } = {}) {
 
 const server = new McpServer({
   name: "mcp-server-for-ynab",
-  version: "3.1.0",
+  version: "3.2.0",
 });
 
 const registeredTools = new Map();
@@ -961,16 +1065,34 @@ registerTool(
   })
 );
 
+function formatBudgetSummary(b) {
+  return {
+    id: b.id,
+    name: b.name,
+    last_modified_on: b.last_modified_on,
+    first_month: b.first_month,
+    last_month: b.last_month,
+    date_format: b.date_format,
+    currency_format: b.currency_format,
+  };
+}
+
 registerTool(
   "list_budgets",
-  { description: "List all budgets. Use a budget ID from the results in other tools, or omit budgetId to use the last-used budget." },
-  () =>
+  { description: "List all budgets. Use a budget ID from the results in other tools, or omit budgetId to use the last-used budget.", inputSchema: {
+    includeAccounts: z.boolean().optional().describe("If true, include each budget's account list in the response"),
+  } },
+  ({ includeAccounts } = {}) =>
   run(async () => {
-    const { data } = await api.plans.getPlans();
+    const { data } = await api.plans.getPlans(includeAccounts);
     const plans = data.plans || data.budgets || [];
     const defaultPlan = data.default_plan || data.default_budget;
     const result = {
-      budgets: plans.map((b) => ({ id: b.id, name: b.name, last_modified_on: b.last_modified_on, first_month: b.first_month, last_month: b.last_month, date_format: b.date_format, currency_format: b.currency_format })),
+      budgets: plans.map((b) => {
+        const out = formatBudgetSummary(b);
+        if (includeAccounts && b.accounts) out.accounts = b.accounts.map(formatAccount);
+        return out;
+      }),
     };
     if (defaultPlan) {
       result.default_budget = { id: defaultPlan.id, name: defaultPlan.name };
@@ -981,23 +1103,36 @@ registerTool(
 
 registerTool(
   "get_budget",
-  { description: "Get a budget summary including name, currency format, and account/category/payee counts", inputSchema: { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") } },
-  ({ budgetId }) =>
+  { description: "Get a budget summary including name, currency format, and account/category/payee counts. Pass lastKnowledgeOfServer to get a delta export instead: every entity (accounts, payees, categories, months, transactions, scheduled transactions, ...) that changed since that server knowledge, plus the new server_knowledge for the next delta request. A delta request with lastKnowledgeOfServer: 0 returns the full budget export, which can be very large — responses over the YNAB_MAX_RESPONSE_BYTES cap (default 8 MB) are rejected; on big budgets prefer incremental deltas or the dedicated list tools.", inputSchema: {
+    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+    lastKnowledgeOfServer: z.number().int().nonnegative().optional().describe("Delta request server knowledge. When provided, returns changed entities and server_knowledge instead of the summary."),
+  } },
+  ({ budgetId, lastKnowledgeOfServer }) =>
     run(async () => {
-      const { data } = await api.plans.getPlanById(resolveBudgetId(budgetId));
+      const { data } = await api.plans.getPlanById(resolveBudgetId(budgetId), lastKnowledgeOfServer);
       const b = data.plan || data.budget;
-      return ok({
-        id: b.id,
-        name: b.name,
-        last_modified_on: b.last_modified_on,
-        first_month: b.first_month,
-        last_month: b.last_month,
-        date_format: b.date_format,
-        currency_format: b.currency_format,
-        accounts: b.accounts?.length,
-        categories: b.categories?.length,
-        payees: b.payees?.length,
-      });
+      if (lastKnowledgeOfServer === undefined) {
+        return ok({
+          ...formatBudgetSummary(b),
+          accounts: b.accounts?.length,
+          categories: b.categories?.length,
+          payees: b.payees?.length,
+        });
+      }
+      const budget = {
+        ...formatBudgetSummary(b),
+        accounts: b.accounts?.map(formatAccount),
+        payees: b.payees,
+        payee_locations: b.payee_locations,
+        category_groups: b.category_groups,
+        categories: b.categories?.map(formatCategory),
+        months: b.months?.map(formatMonth),
+        transactions: b.transactions?.map(formatTransaction),
+        subtransactions: b.subtransactions?.map(formatSubtransaction),
+        scheduled_transactions: b.scheduled_transactions?.map(formatScheduledTransaction),
+        scheduled_subtransactions: b.scheduled_subtransactions?.map(formatScheduledSubtransaction),
+      };
+      return ok(collection(data, "budget", budget, lastKnowledgeOfServer));
     })
 );
 
@@ -1327,7 +1462,7 @@ registerTool(
   { description: "Rename a payee", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     payeeId: z.string().describe("Payee ID"),
-    name: z.string().describe("New payee name"),
+    name: z.string().max(500).describe("New payee name (max 500 characters)"),
   } },
   ({ budgetId, payeeId, name }) =>
     run(async () => {
@@ -1394,6 +1529,23 @@ registerTool(
 
 // ==================== Months ====================
 
+function formatMonth(m) {
+  return withCurrencyFields(
+    {
+      month: m.month,
+      note: m.note,
+      income: dollars(m.income),
+      budgeted: dollars(m.budgeted),
+      activity: dollars(m.activity),
+      to_be_budgeted: dollars(m.to_be_budgeted),
+      age_of_money: m.age_of_money,
+      deleted: m.deleted,
+    },
+    m,
+    ["income", "budgeted", "activity", "to_be_budgeted"]
+  );
+}
+
 registerTool(
   "list_months",
   { description: "List all budget months", inputSchema: {
@@ -1403,22 +1555,7 @@ registerTool(
   ({ budgetId, lastKnowledgeOfServer }) =>
     run(async () => {
       const { data } = await api.months.getPlanMonths(resolveBudgetId(budgetId), lastKnowledgeOfServer);
-      const months = data.months.map((m) =>
-          withCurrencyFields(
-            {
-              month: m.month,
-              note: m.note,
-              income: dollars(m.income),
-              budgeted: dollars(m.budgeted),
-              activity: dollars(m.activity),
-              to_be_budgeted: dollars(m.to_be_budgeted),
-              age_of_money: m.age_of_money,
-              deleted: m.deleted,
-            },
-            m,
-            ["income", "budgeted", "activity", "to_be_budgeted"]
-          )
-        );
+      const months = data.months.map(formatMonth);
       return ok(collection(data, "months", months, lastKnowledgeOfServer));
     })
 );
@@ -1434,14 +1571,7 @@ registerTool(
       const { data } = await api.months.getPlanMonth(resolveBudgetId(budgetId), month);
       const m = data.month;
       const out = {
-        month: m.month,
-        note: m.note,
-        income: dollars(m.income),
-        budgeted: dollars(m.budgeted),
-        activity: dollars(m.activity),
-        to_be_budgeted: dollars(m.to_be_budgeted),
-        age_of_money: m.age_of_money,
-        deleted: m.deleted,
+        ...formatMonth(m),
         categories: m.categories?.map((c) =>
           withCurrencyFields(
             {
@@ -1466,7 +1596,7 @@ registerTool(
           )
         ),
       };
-      return ok(withCurrencyFields(out, m, ["income", "budgeted", "activity", "to_be_budgeted"]));
+      return ok(out);
     })
 );
 
@@ -1535,6 +1665,26 @@ registerTool(
 
 // ==================== Transactions ====================
 
+function formatSubtransaction(s) {
+  return withCurrencyFields(
+    {
+      id: s.id,
+      transaction_id: s.transaction_id,
+      amount: dollars(s.amount),
+      memo: s.memo ?? null,
+      payee_id: s.payee_id ?? null,
+      payee_name: s.payee_name ?? null,
+      category_id: s.category_id ?? null,
+      category_name: s.category_name ?? null,
+      transfer_account_id: s.transfer_account_id ?? null,
+      transfer_transaction_id: s.transfer_transaction_id ?? null,
+      deleted: s.deleted,
+    },
+    s,
+    ["amount"]
+  );
+}
+
 function formatTransaction(t) {
   const out = {
     id: t.id,
@@ -1559,25 +1709,7 @@ function formatTransaction(t) {
     import_payee_name_original: t.import_payee_name_original ?? null,
     debt_transaction_type: t.debt_transaction_type ?? null,
     deleted: t.deleted,
-    subtransactions: t.subtransactions?.map((s) =>
-      withCurrencyFields(
-        {
-          id: s.id,
-          transaction_id: s.transaction_id,
-          amount: dollars(s.amount),
-          memo: s.memo ?? null,
-          payee_id: s.payee_id ?? null,
-          payee_name: s.payee_name ?? null,
-          category_id: s.category_id ?? null,
-          category_name: s.category_name ?? null,
-          transfer_account_id: s.transfer_account_id ?? null,
-          transfer_transaction_id: s.transfer_transaction_id ?? null,
-          deleted: s.deleted,
-        },
-        s,
-        ["amount"]
-      )
-    ),
+    subtransactions: t.subtransactions?.map(formatSubtransaction),
   };
   return withCurrencyFields(out, t, ["amount"]);
 }
@@ -1669,20 +1801,14 @@ registerTool(
     date: z.string().describe("Transaction date (YYYY-MM-DD)"),
     amount: z.number().describe("Amount in dollars (negative for outflows, positive for inflows)"),
     payeeId: z.string().optional().describe("Payee ID"),
-    payeeName: z.string().optional().describe("Payee name (creates new payee if no payeeId)"),
+    payeeName: z.string().max(200).optional().describe("Payee name (creates new payee if no payeeId)"),
     categoryId: z.string().optional().describe("Category ID"),
     memo: z.string().optional().describe("Transaction memo"),
     cleared: z.enum(["cleared", "uncleared", "reconciled"]).optional().describe("Cleared status"),
     approved: z.boolean().optional().describe("Whether transaction is approved"),
     flagColor: z.enum(["red", "orange", "yellow", "green", "blue", "purple"]).optional().describe("Flag color"),
     importId: z.string().optional().describe("Unique import ID for deduplication (max 36 chars). If omitted and the transaction is later imported, duplicates may be created."),
-    subtransactions: z.array(z.object({
-      amount: z.number().describe("Subtransaction amount in dollars"),
-      categoryId: z.string().optional().describe("Category ID"),
-      payeeId: z.string().optional().describe("Payee ID"),
-      payeeName: z.string().optional().describe("Payee name"),
-      memo: z.string().optional().describe("Memo"),
-    })).optional().describe("Split transaction into subtransactions. The subtransaction amounts must sum to the total transaction amount."),
+    subtransactions: z.array(subtransactionInputSchema).optional().describe("Split transaction into subtransactions. The subtransaction amounts must sum to the total transaction amount."),
   } },
   ({ budgetId, ...txnFields }) =>
     run(async () => {
@@ -1702,20 +1828,14 @@ registerTool(
       date: z.string().describe("Transaction date (YYYY-MM-DD)"),
       amount: z.number().describe("Amount in dollars (negative for outflows, positive for inflows)"),
       payeeId: z.string().optional().describe("Payee ID"),
-      payeeName: z.string().optional().describe("Payee name (creates new payee if no payeeId)"),
+      payeeName: z.string().max(200).optional().describe("Payee name (creates new payee if no payeeId)"),
       categoryId: z.string().optional().describe("Category ID"),
       memo: z.string().optional().describe("Transaction memo"),
       cleared: z.enum(["cleared", "uncleared", "reconciled"]).optional().describe("Cleared status"),
       approved: z.boolean().optional().describe("Whether transaction is approved"),
       flagColor: z.enum(["red", "orange", "yellow", "green", "blue", "purple"]).optional().describe("Flag color"),
       importId: z.string().optional().describe("Unique import ID for deduplication (max 36 chars)"),
-      subtransactions: z.array(z.object({
-        amount: z.number().describe("Subtransaction amount in dollars"),
-        categoryId: z.string().optional().describe("Category ID"),
-        payeeId: z.string().optional().describe("Payee ID"),
-        payeeName: z.string().optional().describe("Payee name"),
-        memo: z.string().optional().describe("Memo"),
-      })).optional().describe("Split transaction into subtransactions"),
+      subtransactions: z.array(subtransactionInputSchema).optional().describe("Split transaction into subtransactions"),
     })).describe("Array of transactions to create"),
   } },
   ({ budgetId, transactions: txns }) =>
@@ -1732,24 +1852,25 @@ registerTool(
 
 registerTool(
   "update_transaction",
-  { description: "Update an existing transaction. Only provided fields are changed. Amounts in dollars.", inputSchema: {
+  { description: "Update an existing transaction. Only provided fields are changed. Amounts in dollars. Passing subtransactions converts a non-split transaction into a split (updating the subtransactions of an existing split is not supported by the YNAB API).", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     transactionId: z.string().describe("Transaction ID"),
     accountId: z.string().optional().describe("Account ID"),
     date: z.string().optional().describe("Transaction date (YYYY-MM-DD)"),
     amount: z.number().optional().describe("Amount in dollars"),
     payeeId: z.string().nullable().optional().describe("Payee ID (null to remove)"),
-    payeeName: z.string().nullable().optional().describe("Payee name (null to clear)"),
+    payeeName: z.string().max(200).nullable().optional().describe("Payee name (null to clear)"),
     categoryId: z.string().nullable().optional().describe("Category ID (null to uncategorize)"),
     memo: z.string().nullable().optional().describe("Transaction memo (null to clear)"),
     cleared: z.enum(["cleared", "uncleared", "reconciled"]).optional().describe("Cleared status"),
     approved: z.boolean().optional().describe("Whether transaction is approved"),
     flagColor: z.enum(["red", "orange", "yellow", "green", "blue", "purple"]).nullable().optional().describe("Flag color (null to remove)"),
+    subtransactions: z.array(subtransactionInputSchema).optional().describe("Convert the transaction into a split. Amounts must sum to the transaction total. Not supported on transactions that are already splits."),
   } },
-  ({ budgetId, transactionId, accountId, date, amount, payeeId, payeeName, categoryId, memo, cleared, approved, flagColor }) =>
+  ({ budgetId, transactionId, accountId, date, amount, payeeId, payeeName, categoryId, memo, cleared, approved, flagColor, subtransactions }) =>
     run(async () => {
       const { data } = await api.transactions.updateTransaction(resolveBudgetId(budgetId), transactionId, {
-        transaction: mapTransactionUpdate({ accountId, date, amount, payeeId, payeeName, categoryId, memo, cleared, approved, flagColor }),
+        transaction: mapTransactionUpdate({ accountId, date, amount, payeeId, payeeName, categoryId, memo, cleared, approved, flagColor, subtransactions }),
       });
       return ok(formatTransaction(data.transaction));
     })
@@ -1776,17 +1897,19 @@ registerTool(
     transactions: z
       .array(
         z.object({
-          id: z.string().describe("Transaction ID"),
+          id: z.string().min(1).optional().describe("Transaction ID. Provide either id or importId (not both) to identify the transaction."),
+          importId: z.string().min(1).max(36).optional().describe("Import ID used to look up the transaction instead of id. Updating the import_id of an existing transaction is not allowed."),
           accountId: z.string().optional().describe("Account ID"),
           date: z.string().optional().describe("Transaction date (YYYY-MM-DD)"),
           amount: z.number().optional().describe("Amount in dollars"),
           payeeId: z.string().nullable().optional().describe("Payee ID (null to remove)"),
-          payeeName: z.string().nullable().optional().describe("Payee name (null to clear)"),
+          payeeName: z.string().max(200).nullable().optional().describe("Payee name (null to clear)"),
           categoryId: z.string().nullable().optional().describe("Category ID (null to uncategorize)"),
           memo: z.string().nullable().optional().describe("Transaction memo (null to clear)"),
           cleared: z.enum(["cleared", "uncleared", "reconciled"]).optional().describe("Cleared status"),
           approved: z.boolean().optional().describe("Whether transaction is approved"),
           flagColor: z.enum(["red", "orange", "yellow", "green", "blue", "purple"]).nullable().optional().describe("Flag color (null to remove)"),
+          subtransactions: z.array(subtransactionInputSchema).optional().describe("Convert the transaction into a split. Not supported on transactions that are already splits."),
         })
       )
       .describe("Array of transaction updates"),
@@ -1795,11 +1918,42 @@ registerTool(
   ({ budgetId, transactions: txns, returnSummary }) =>
     run(async () => {
       const bid = resolveBudgetId(budgetId);
-      const mapped = txns.map((t) => ({ id: t.id, ...mapTransactionUpdate(t) }));
+      for (const t of txns) {
+        // Same predicate the mapping below uses; a present-but-empty id must
+        // be rejected here, not silently sent to YNAB as the lookup key.
+        if ((t.id !== undefined) === (t.importId !== undefined)) {
+          throw new Error("Each transaction update must provide exactly one of id or importId.");
+        }
+      }
+      const mapped = txns.map((t) => ({
+        ...(t.id !== undefined ? { id: t.id } : { import_id: t.importId }),
+        ...mapTransactionUpdate(t),
+      }));
       const { data } = await api.transactions.updateTransactions(bid, {
         transactions: mapped,
       });
-      const { verification, verified } = await verifyBulkTransactionUpdates(bid, txns);
+      // Resolve importId-only entries to real transaction ids (from the PATCH
+      // response) so post-write verification can refetch them. YNAB import_ids
+      // are only unique per account, so a requested import_id that matches
+      // more than one returned transaction is ambiguous — refuse to verify
+      // (and potentially retry-write) against the wrong transaction.
+      const wantedImportIds = new Set(txns.filter((t) => t.importId !== undefined).map((t) => t.importId));
+      const byImportId = new Map();
+      const ambiguous = new Set();
+      for (const t of data.transactions || []) {
+        if (!t.import_id || !wantedImportIds.has(t.import_id)) continue;
+        if (byImportId.has(t.import_id) && byImportId.get(t.import_id) !== t.id) ambiguous.add(t.import_id);
+        byImportId.set(t.import_id, t.id);
+      }
+      if (ambiguous.size > 0) {
+        throw new Error(`The bulk update was submitted, but these import ids matched multiple updated transactions and cannot be verified safely: ${[...ambiguous].join(", ")}. Inspect them with get_transactions and use transaction ids instead.`);
+      }
+      const resolved = txns.map((t) => (t.id !== undefined ? t : { ...t, id: byImportId.get(t.importId) }));
+      const unresolved = resolved.filter((t) => !t.id).map((t) => t.importId);
+      if (unresolved.length > 0) {
+        throw new Error(`The bulk update was submitted, but YNAB did not return updated transactions for import ids: ${unresolved.join(", ")}. Verification could not run for those rows; inspect them with get_transactions before retrying.`);
+      }
+      const { verification, verified } = await verifyBulkTransactionUpdates(bid, resolved, data.transactions);
       if (verification.failed.length > 0) {
         return {
           content: [{
@@ -1867,7 +2021,7 @@ registerTool(
       const updates = txns.map((t) => ({ id: t.id, approved: true }));
       const mapped = updates.map((t) => ({ id: t.id, ...mapTransactionUpdate(t) }));
       const { data: updData } = await api.transactions.updateTransactions(bid, { transactions: mapped });
-      const { verification, verified } = await verifyBulkTransactionUpdates(bid, updates);
+      const { verification, verified } = await verifyBulkTransactionUpdates(bid, updates, updData.transactions);
       if (verification.failed.length > 0) {
         return {
           content: [{ type: "text", text: `Error: approval verification failed after retry: ${JSON.stringify(verification.failed, null, 2)}` }],
@@ -1914,7 +2068,7 @@ registerTool(
       const updates = txns.map((t) => ({ id: t.id, payeeId: toPayeeId }));
       const mapped = updates.map((t) => ({ id: t.id, ...mapTransactionUpdate(t) }));
       const { data: updData } = await api.transactions.updateTransactions(bid, { transactions: mapped });
-      const { verification, verified } = await verifyBulkTransactionUpdates(bid, updates);
+      const { verification, verified } = await verifyBulkTransactionUpdates(bid, updates, updData.transactions);
       if (verification.failed.length > 0) {
         return {
           content: [{ type: "text", text: `Error: payee reassignment verification failed after retry: ${JSON.stringify(verification.failed, null, 2)}` }],
@@ -1944,6 +2098,25 @@ registerTool(
 
 // ==================== Scheduled Transactions ====================
 
+function formatScheduledSubtransaction(s) {
+  return withCurrencyFields(
+    {
+      id: s.id,
+      scheduled_transaction_id: s.scheduled_transaction_id,
+      amount: dollars(s.amount),
+      memo: s.memo ?? null,
+      payee_id: s.payee_id ?? null,
+      payee_name: s.payee_name ?? null,
+      category_id: s.category_id ?? null,
+      category_name: s.category_name ?? null,
+      transfer_account_id: s.transfer_account_id ?? null,
+      deleted: s.deleted,
+    },
+    s,
+    ["amount"]
+  );
+}
+
 function formatScheduledTransaction(t) {
   const out = {
     id: t.id,
@@ -1962,24 +2135,7 @@ function formatScheduledTransaction(t) {
     category_name: t.category_name ?? null,
     transfer_account_id: t.transfer_account_id ?? null,
     deleted: t.deleted,
-    subtransactions: t.subtransactions?.map((s) =>
-      withCurrencyFields(
-        {
-          id: s.id,
-          scheduled_transaction_id: s.scheduled_transaction_id,
-          amount: dollars(s.amount),
-          memo: s.memo ?? null,
-          payee_id: s.payee_id ?? null,
-          payee_name: s.payee_name ?? null,
-          category_id: s.category_id ?? null,
-          category_name: s.category_name ?? null,
-          transfer_account_id: s.transfer_account_id ?? null,
-          deleted: s.deleted,
-        },
-        s,
-        ["amount"]
-      )
-    ),
+    subtransactions: t.subtransactions?.map(formatScheduledSubtransaction),
   };
   return withCurrencyFields(out, t, ["amount"]);
 }
@@ -2020,7 +2176,7 @@ registerTool(
     frequency: z.enum(["never", "daily", "weekly", "everyOtherWeek", "twiceAMonth", "every4Weeks", "monthly", "everyOtherMonth", "every3Months", "every4Months", "twiceAYear", "yearly", "everyOtherYear"]).describe("Recurrence frequency"),
     amount: z.number().describe("Amount in dollars (negative for outflows)"),
     payeeId: z.string().optional().describe("Payee ID"),
-    payeeName: z.string().optional().describe("Payee name"),
+    payeeName: z.string().max(200).optional().describe("Payee name"),
     categoryId: z.string().optional().describe("Category ID"),
     memo: z.string().optional().describe("Memo"),
     flagColor: z.enum(["red", "orange", "yellow", "green", "blue", "purple"]).optional().describe("Flag color"),
@@ -2054,7 +2210,7 @@ registerTool(
     frequency: z.enum(["never", "daily", "weekly", "everyOtherWeek", "twiceAMonth", "every4Weeks", "monthly", "everyOtherMonth", "every3Months", "every4Months", "twiceAYear", "yearly", "everyOtherYear"]).optional().describe("Recurrence frequency"),
     amount: z.number().optional().describe("Amount in dollars (negative for outflows)"),
     payeeId: z.string().nullable().optional().describe("Payee ID"),
-    payeeName: z.string().nullable().optional().describe("Payee name"),
+    payeeName: z.string().max(200).nullable().optional().describe("Payee name"),
     categoryId: z.string().nullable().optional().describe("Category ID"),
     memo: z.string().nullable().optional().describe("Memo"),
     flagColor: z.enum(["red", "orange", "yellow", "green", "blue", "purple"]).nullable().optional().describe("Flag color"),
@@ -2466,17 +2622,18 @@ export {
   sanitizeErrorMessage,
   withWriteGateDescription,
   parseToolExecuteInput,
+  verifyBulkTransactionUpdates,
 };
 
 // --- Start ---
 
 process.on("uncaughtException", (err) => {
-  console.error("Uncaught exception:", err);
+  console.error("Uncaught exception:", sanitizeErrorMessage(err?.stack || err));
   process.exit(1);
 });
 
 process.on("unhandledRejection", (reason) => {
-  console.error("Unhandled promise rejection:", reason);
+  console.error("Unhandled promise rejection:", sanitizeErrorMessage(reason?.stack || reason));
   process.exit(1);
 });
 

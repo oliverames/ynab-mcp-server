@@ -239,6 +239,17 @@ npm install -g @oliverames/mcp-server-for-ynab
 }
 ```
 
+### Docker (Optional)
+
+The repository ships a `Dockerfile` (also used by registry-hosted builds such as Glama). The container speaks MCP over stdio:
+
+```bash
+docker build -t mcp-server-for-ynab .
+docker run -i --rm -e YNAB_API_TOKEN=your-token-here mcp-server-for-ynab
+```
+
+Add `-e YNAB_ALLOW_WRITES=1` to enable write tools, and `-e YNAB_BUDGET_ID=...` for a default budget.
+
 ### 1Password Token Lookup (Optional)
 
 If your token is stored in 1Password, set `YNAB_OP_PATH` instead of `YNAB_API_TOKEN`. The `op` CLI must be installed and authenticated in the environment that launches the MCP server.
@@ -307,16 +318,16 @@ YNAB_API_TOKEN=your-token-here npm run smoke:review-unapproved -- --published
 - **Smart budget resolution** - set `YNAB_BUDGET_ID` for a default, or omit it to auto-resolve to your last-used budget. Every tool accepts an optional `budgetId` override.
 - **Pinned YNAB host** - all HTTP requests are restricted to `https://api.ynab.com`, redirects are not followed, and API tokens are redacted from surfaced errors.
 - **Agent-aware token fallback** - use direct process env, Codex `~/.codex/config.toml`, Claude `~/.claude/settings.json`, a small token file via `YNAB_API_TOKEN_FILE`, or a 1Password CLI reference via `YNAB_OP_PATH`.
-- **Split transactions** - first-class support for subtransactions in create, read, and format operations.
+- **Split transactions** - first-class support for subtransactions in create, read, and format operations. Updates can also convert a non-split transaction into a split (the YNAB API does not support editing the subtransactions of an existing split).
 - **Current transaction filters** - transaction list tools support `sinceDate`, `untilDate`, type filters, resource filters, and delta requests. YNAB defaults omitted `sinceDate` to one year ago, so pass an explicit older date when you need older history.
-- **Bulk operations** - `create_transactions` and `update_transactions` handle arrays in a single API call.
-- **Verified batch updates** - `update_transactions` refetches every requested transaction after the bulk API call, retries mismatched fields once through `update_transaction`, and returns a `verification` block so approval counts cannot hide failed category writes.
+- **Bulk operations** - `create_transactions` and `update_transactions` handle arrays in a single API call. Bulk updates can look transactions up by `id` or by `importId`.
+- **Verified batch updates** - `update_transactions` refetches the whole batch in a single list request after the bulk API call (instead of one request per transaction, which used to consume the shared rate budget on large batches), retries mismatched fields once through single-transaction updates, and returns a `verification` block so approval counts cannot hide failed category writes.
 - **Fetch-then-merge updates** - scheduled transaction updates (which use PUT semantics) automatically fetch the current state and merge your changes, so you only specify what changed.
 - **Fuzzy search** - `search_categories` and `search_payees` do case-insensitive partial matching across all entries.
 - **Approval workflow with anomaly flags** - `review_unapproved` scans the full transaction history for unapproved entries (YNAB's API defaults to the last year, which would silently hide older stragglers) and groups transactions into "ready to approve" (categorized, split, or transfer) and "needs attention" (uncategorized), and attaches a `flags` array to each transaction surfacing anomalies: `manually_entered` (not bank-imported), `match_broken` (stale match reference), `scheduled_transaction_realized`, `new_payee`, `no_prior_amount_match` (novel amount for this payee), and `category_drift:was_X` (payee categorized differently in the prior 60 days). Group-level flags aggregate the union of all transaction flags. Bulk approval requires `confirmed: true`.
 - **Nullable updates** - update tools accept `null` for clearable fields (`memo`, `payeeName`, `categoryId`, `flagColor`) to distinguish "don't change" (omit) from "clear this field" (`null`).
 - **Target behavior support** - category create/update tools expose `goalNeedsWholeAmount` for YNAB's "Set aside another" vs. "Refill up to" goal behavior.
-- **Delta request support** - high-volume list tools accept `lastKnowledgeOfServer` and return `server_knowledge` when that parameter is provided.
+- **Delta request support** - high-volume list tools accept `lastKnowledgeOfServer` and return `server_knowledge` when that parameter is provided. `get_budget` supports full delta exports: pass `lastKnowledgeOfServer` to receive every entity changed since that knowledge in one response.
 - **Debt account support** - loan and debt accounts include `debt_original_balance`, `debt_interest_rates`, `debt_minimum_payments`, and `debt_escrow_amounts` with correct unit conversion (rates stay as percentages, payments convert from milliunits).
 
 ---
@@ -330,8 +341,8 @@ Read tools are available by default. Tools that create, update, import, or delet
 | Tool | Description |
 |------|-------------|
 | `get_user` | Get the authenticated user |
-| `list_budgets` | List all budgets with IDs, names, date ranges, format settings, and default budget |
-| `get_budget` | Get budget summary (name, currency, account/category/payee counts) |
+| `list_budgets` | List all budgets with IDs, names, date ranges, format settings, and default budget. Pass `includeAccounts: true` to include each budget's accounts. |
+| `get_budget` | Get budget summary (name, currency, account/category/payee counts). Pass `lastKnowledgeOfServer` for a delta export of every changed entity plus the next `server_knowledge`. |
 | `get_budget_settings` | Get currency and date format settings |
 
 ### Accounts
@@ -400,8 +411,8 @@ Read tools are available by default. Tools that create, update, import, or delet
 | `get_transaction` | Get a single transaction by ID (includes subtransactions). Auto-handles composite scheduled-transaction IDs like `uuid_YYYY-MM-DD`; if the underlying matched transaction has been deleted, falls back to returning the active scheduled template wrapped as `{ resource_type: "scheduled_transaction", ... }`. |
 | `create_transaction` | Write tool: create a transaction with optional split (subtransactions must sum to total) |
 | `create_transactions` | Write tool: bulk create multiple transactions in a single API call (supports split transactions) |
-| `update_transaction` | Write tool: partial update - only specified fields change |
-| `update_transactions` | Write tool: batch update multiple transactions at once, then refetch and verify requested fields persisted. Pass `returnSummary: true` for compact counts instead of full objects on large batches (avoids overflowing the tool-result size limit). |
+| `update_transaction` | Write tool: partial update - only specified fields change. Can convert a non-split transaction into a split via `subtransactions`. |
+| `update_transactions` | Write tool: batch update multiple transactions at once (look up each entry by `id` or `importId`), then verify requested fields persisted using a single batch refetch. Pass `returnSummary: true` for compact counts instead of full objects on large batches (avoids overflowing the tool-result size limit). |
 | `approve_transactions` | Write tool: approve unapproved transactions in bulk by filter (`payeeId` / `categoryId` / `accountId`) without hand-listing IDs. Skips uncategorized transactions by default, requires `confirmed: true`, and supports `expectedMatchedCount`. |
 | `reassign_payee_transactions` | Write tool: move all transactions from one payee to another, the merge workaround since the YNAB API has no payee delete/merge endpoint. Requires `confirmed: true` and supports `expectedMatchedCount`. |
 | `delete_transaction` | Write tool: delete a transaction. Requires `confirmed: true`. |
@@ -452,7 +463,7 @@ If `expectedMatchedCount` is provided and the current match count differs, the t
 
 When a batch operation categorizes and approves transactions at the same time, do not use `review_unapproved` counts as the only success check. Approved transactions leave the review queue even if a category write failed, so queue counts can hide approved-but-still-uncategorized transactions.
 
-`update_transactions` now protects this path by refetching every requested transaction after the bulk API call and comparing the persisted fields with the requested fields. If anything differs, it retries that transaction once through `update_transaction`. The response includes:
+`update_transactions` protects this path by refetching the batch after the bulk API call (one list request for the whole batch, not one request per transaction) and comparing the persisted fields with the requested fields. If anything differs, it retries that transaction once through a single-transaction update. The response includes:
 
 ```json
 {
@@ -529,7 +540,7 @@ All amounts in tool inputs and outputs are in **dollars** (e.g., `-12.34` for a 
 
 ## Rate Limiting
 
-The YNAB API allows **200 requests per hour** per access token, enforced on a rolling window. This server applies a client-side limiter at 190 requests per hour with a burst of 10 by default. Each tool call typically uses one API request, except tools that deliberately verify or merge writes (`update_transactions`, `update_scheduled_transaction`) which perform additional reads.
+The YNAB API allows **200 requests per hour** per access token, enforced on a rolling window. This server applies a client-side limiter at 190 requests per hour with a burst of 10 by default. Each tool call typically uses one API request, except tools that deliberately verify or merge writes (`update_transactions`, `approve_transactions`, `reassign_payee_transactions`, `update_scheduled_transaction`) which perform a small, constant number of additional reads — batch verification uses one list request for the whole batch regardless of batch size.
 
 If a request still hits YNAB's limit (HTTP 429), the server waits for the `Retry-After` interval and retries automatically (up to `YNAB_HTTP_RETRIES` times). Transient 502/503/504 responses and network failures are retried for read requests only, since a failed write may have partially applied on the server.
 

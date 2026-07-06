@@ -3247,6 +3247,7 @@ components:
             and goal has not already been configured for category, a monthly goal
             will be created for the category with this target amount.  If goal_type is
             not specified, it will default to 'NEED' or 'MF' for Credit Card Payment categories.
+            When updating a category, passing null removes any existing target.
           format: int64
         goal_target_date:
           type:
