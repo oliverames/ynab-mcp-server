@@ -1,0 +1,9 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Placeholders copied from the public YNAB API documentation"
+condition = "AND"
+regexTarget = "secret"
+paths = ['''docs/api-documentation\.md''', '''docs/api-endpoints\.md''']
+regexes = ['''YOUR_SECRET_TOKEN''', '''8bc63e42-1105-11e8-b642-0ed5f89f718b''', '''0cd3d1c4-1107-11e8-b642-0ed5f89f718b''', '''13ae9632-1107-11e8-b642-0ed5f89f718b''']

@@ -627,6 +627,8 @@ YNAB_API_TOKEN=your-token YNAB_BUDGET_ID=your-budget-id YNAB_ALLOW_WRITES=1 npm 
 
 ## Development
 
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the local checks and pull request guidelines. Report suspected vulnerabilities through the private process in [SECURITY.md](SECURITY.md).
+
 ```bash
 git clone https://github.com/oliverames/ynab-mcp-server.git
 cd ynab-mcp-server
