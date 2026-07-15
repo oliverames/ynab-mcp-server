@@ -36,9 +36,24 @@ const OPAQUE_ID_PATTERN = /^[A-Za-z0-9_-]{32}$/;
 
 const app = new Hono();
 
-function html(c, body, status = 200) {
+function formActionSources(urls) {
+  const sources = new Set(["'self'"]);
+  for (const value of urls) {
+    try {
+      const url = new URL(value);
+      if (url.protocol === "https:" || url.protocol === "http:") {
+        sources.add(url.origin);
+      }
+    } catch {
+      // Non-URL labels, such as the deletion flow description, stay self-only.
+    }
+  }
+  return [...sources].join(" ");
+}
+
+function html(c, body, status = 200, { formActionUrls = [] } = {}) {
   c.header("Cache-Control", "no-store");
-  c.header("Content-Security-Policy", "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
+  c.header("Content-Security-Policy", `default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; form-action ${formActionSources(formActionUrls)}; frame-ancestors 'none'; base-uri 'none'`);
   c.header("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
   c.header("Referrer-Policy", "same-origin");
   c.header("X-Content-Type-Options", "nosniff");
@@ -160,7 +175,12 @@ app.get("/favicon.svg", (c) => worksWithYnabAsset(c, {
   sha256: WORKS_WITH_YNAB_SVG_SHA256,
 }));
 app.get("/privacy", (c) => html(c, privacyPage()));
-app.get("/delete", async (c) => html(c, deletePage({ csrfToken: await issueCsrf(c) })));
+app.get("/delete", async (c) => html(
+  c,
+  deletePage({ csrfToken: await issueCsrf(c) }),
+  200,
+  { formActionUrls: ["https://app.ynab.com"] }
+));
 
 // --- MCP-client-facing consent ---
 
@@ -187,12 +207,17 @@ app.get("/authorize", async (c) => {
     clientName,
     redirectUri,
   }, STATE_TTL_SECONDS);
-  return html(c, consentPage({
-    clientName,
-    redirectUri,
-    consentId,
-    csrfToken,
-  }));
+  return html(
+    c,
+    consentPage({
+      clientName,
+      redirectUri,
+      consentId,
+      csrfToken,
+    }),
+    200,
+    { formActionUrls: ["https://app.ynab.com"] }
+  );
 });
 
 app.post("/authorize", async (c) => {
@@ -322,14 +347,19 @@ app.get("/callback", async (c) => {
     csrfHash,
     encryptedAuthorization,
   }, STATE_TTL_SECONDS);
-  return html(c, finalConsentPage({
-    clientName: record.clientName,
-    redirectUri: record.redirectUri,
-    writesEnabled: !!record.writesEnabled,
-    purpose: record.purpose,
-    finalId,
-    csrfToken,
-  }));
+  return html(
+    c,
+    finalConsentPage({
+      clientName: record.clientName,
+      redirectUri: record.redirectUri,
+      writesEnabled: !!record.writesEnabled,
+      purpose: record.purpose,
+      finalId,
+      csrfToken,
+    }),
+    200,
+    { formActionUrls: [record.redirectUri] }
+  );
 });
 
 app.post("/callback", async (c) => {

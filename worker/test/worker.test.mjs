@@ -173,6 +173,13 @@ test("landing page advertises the connector icon", async () => {
   assert.equal(response.headers.get("referrer-policy"), "same-origin");
 });
 
+test("HTML CSP defaults forms to the connector origin", async () => {
+  const response = await YnabHandler.request("https://ynab.amesvt.com/");
+  const policy = response.headers.get("content-security-policy") ?? "";
+
+  assert.match(policy, /form-action 'self'(?:;|$)/);
+});
+
 test("MCP initialization exposes the connector name and icons", async () => {
   process.env.YNAB_MCP_NO_AUTOSTART = "1";
   process.env.YNAB_DISABLE_AGENT_CONFIG_FALLBACK = "1";
@@ -436,6 +443,10 @@ test("consent request is opaque, single-use, and redirects to YNAB", async () =>
   const getResponse = await YnabHandler.request("https://untrusted-preview.example/authorize", {}, env);
   assert.equal(getResponse.status, 200);
   assert.match(getResponse.headers.get("content-security-policy") ?? "", /default-src 'none'/);
+  assert.match(
+    getResponse.headers.get("content-security-policy") ?? "",
+    /form-action 'self' https:\/\/app\.ynab\.com(?:;|$)/
+  );
   const body = await getResponse.text();
   assert.doesNotMatch(body, /<svg onload/);
   assert.doesNotMatch(body, /client-pkce/);
@@ -757,6 +768,10 @@ test("YNAB callback requires a final same-origin confirmation before creating a 
     env
   );
   assert.equal(callback.status, 200);
+  assert.match(
+    callback.headers.get("content-security-policy") ?? "",
+    /form-action 'self' https:\/\/attacker-client\.example(?:;|$)/
+  );
   const callbackBody = await callback.text();
   assert.match(callbackBody, /Attacker Controlled Client/);
   assert.match(callbackBody, /Read-only access/);
