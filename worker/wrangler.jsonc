@@ -11,7 +11,7 @@
     // OAuthProvider grant/client/token storage (props encrypted; tokens hashed),
     // plus this connector's YNAB token records, OAuth state, and undo journals.
     // The id is filled in after `wrangler kv namespace create OAUTH_KV`.
-    { "binding": "OAUTH_KV", "id": "TO_BE_CREATED" }
+    { "binding": "OAUTH_KV", "id": "eabb2d32169f4fa68e8d58a61cd45190" }
   ],
   "durable_objects": {
     "bindings": [{ "name": "MCP_OBJECT", "class_name": "YnabMCP" }]
