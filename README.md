@@ -11,6 +11,8 @@
 
 <p align="center">
   <code>58 tools with writes enabled</code> &bull;
+  <code>6 guided prompts</code> &bull;
+  <code>undo journal</code> &bull;
   <code>YNAB API v1.85</code> &bull;
   <code>read-only by default</code>
 </p>
@@ -34,7 +36,7 @@
 
 ---
 
-Run YNAB through Claude Code, Codex, Hermes, Antigravity, or any stdio MCP host without a marketplace plugin. This server gives AI assistants a local, rate-aware YNAB API layer that is read-only by default, speaks in dollars instead of milliunits, and exposes write tools only after explicit opt-in.
+Run YNAB through Claude Code, Codex, Hermes, Antigravity, or any stdio MCP host without a marketplace plugin — or deploy it to [Glama](https://glama.ai/mcp/servers/oliverames/ynab-mcp-server) as a remote endpoint for ChatGPT, Le Chat, and claude.ai. This server gives AI assistants a rate-aware YNAB API layer that is read-only by default, speaks in dollars instead of milliunits, exposes write tools only after explicit opt-in, and journals every write so it can be undone.
 
 ## Why This Exists
 
@@ -288,7 +290,12 @@ YNAB_API_TOKEN=your-token-here npm run smoke:review-unapproved -- --published
 | "Categorize all my Amazon orders from this week" | `get_transactions` (filtered) → `update_transactions` (batch) |
 | "Create a 'Side Projects' spending category" | `search_categories` (find group) → `create_category` |
 | "How has my budget been re-allocated this month?" | `get_money_movements_by_month` |
-| "What recurring payments do I have?" | `list_scheduled_transactions` |
+| "What subscriptions am I actually paying for?" | `detect_recurring_charges` finds payee + amount + cadence patterns with annual cost |
+| "How am I doing financially?" | `get_budget_health` scores savings rate, age of money, and overspending green/yellow/red |
+| "Are my credit card payments fully funded?" | `audit_credit_card_payments` compares card balances to payment categories |
+| "Merge my duplicate coffee categories" | `merge_category` moves transactions and budgets in one confirmed call |
+| "Split that Costco charge across three categories" | `prepare_split_for_matching` mirrors the imported transaction for UI matching |
+| "Undo that last batch approval" | `list_undo_history` → `undo_operation` restores the journaled before-state |
 | "Import my latest bank transactions" | `import_transactions` triggers linked account sync |
 
 ---
