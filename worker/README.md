@@ -49,12 +49,34 @@ testing locally).
 New YNAB OAuth apps run in Restricted Mode (25 user authorizations) until a
 "Works with YNAB" review. That limit is fine while this connector stays unlisted.
 
+## Connector identity
+
+The Worker serves YNAB's permitted, unmodified
+["Works with YNAB" mark](https://api.ynab.com/papi/works_with_ynab.svg) at
+`/assets/works-with-ynab.svg` and an equivalent 196x78 PNG rendering at
+`/assets/works-with-ynab.png`. The MCP `initialize` response advertises both
+same-origin URLs in `serverInfo.icons`, with PNG first because MCP icon clients
+must support PNG and only should support SVG. The landing page also publishes
+the same assets as favicons for hosts that discover connector art that way.
+
+YNAB's API Terms permit this integration mark and the "for YNAB" naming form.
+They do not grant general permission to reuse YNAB's consumer app icon or other
+brand artwork, so those are intentionally not bundled. Every hosted page carries
+YNAB's required non-affiliation and trademark language.
+
+Custom connectors may ignore MCP icon metadata or cached favicon changes. A
+Connectors Directory listing has a separate icon field, but public submission is
+not part of deployment and must be handled as its own review and publication
+decision.
+
 ## Verify
 
 ```bash
 npm test
 npx wrangler deploy --dry-run
 curl -I https://ynab.amesvt.com/
+curl -I https://ynab.amesvt.com/assets/works-with-ynab.png
+curl https://ynab.amesvt.com/.well-known/oauth-protected-resource/mcp
 curl https://ynab.amesvt.com/.well-known/oauth-authorization-server
 ```
 

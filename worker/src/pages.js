@@ -1,7 +1,7 @@
 // Static page bodies for the connector. Every page carries non-affiliation
 // language per docs/hosted-oauth-connector.md and YNAB's naming guidance.
 
-const NON_AFFILIATION = "MCP Server for YNAB is an independent open-source project by Oliver Ames. It is not an official YNAB product and is not affiliated with, sponsored by, or endorsed by YNAB (You Need A Budget, LLC).";
+const NON_AFFILIATION = "MCP Server for YNAB is an independent open-source project by Oliver Ames. We are not affiliated, associated, or in any way officially connected with YNAB or any of its subsidiaries or affiliates. The official YNAB website can be found at <a href=\"https://www.ynab.com\">www.ynab.com</a>. The names YNAB and You Need A Budget, as well as related names, tradenames, marks, trademarks, emblems, and images are registered trademarks of YNAB.";
 
 export function escapeHtml(value) {
   return String(value ?? "")
@@ -19,6 +19,12 @@ function layout(title, body) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${title}</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="alternate icon" type="image/png" href="/favicon.png">
+<meta property="og:image" content="https://ynab.amesvt.com/assets/works-with-ynab.png">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:width" content="196">
+<meta property="og:image:height" content="78">
 <style>
   body { font-family: -apple-system, system-ui, sans-serif; max-width: 44rem; margin: 3rem auto; padding: 0 1rem 3rem; line-height: 1.55; color: #1c1c1c; }
   h1 { font-size: 1.5rem; } code { background: #f4f4f4; padding: .1em .35em; border-radius: 4px; }
@@ -26,10 +32,12 @@ function layout(title, body) {
   .accent { color: #b8791f; } .muted { color: #555; font-size: .9rem; }
   button, .btn { background: #f5a542; border: none; border-radius: 8px; padding: .6rem 1.2rem; font-size: 1rem; cursor: pointer; }
   label { display: block; margin: .75rem 0; }
+  .brand { display: block; width: 196px; height: 78px; margin-bottom: 1.5rem; }
   footer { margin-top: 2.5rem; font-size: .85rem; color: #666; border-top: 1px solid #eee; padding-top: 1rem; }
 </style>
 </head>
 <body>
+<img class="brand" src="/assets/works-with-ynab.svg" width="196" height="78" alt="Works with YNAB">
 ${body}
 <footer>${NON_AFFILIATION}<br>Support: <a href="https://github.com/oliverames/ynab-mcp-server/issues">github.com/oliverames/ynab-mcp-server</a> &middot; <a href="/privacy">Privacy</a> &middot; <a href="/delete">Delete my data</a></footer>
 </body>

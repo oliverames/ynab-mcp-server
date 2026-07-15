@@ -16,6 +16,12 @@ import {
   sha256base64url,
   hmacSign,
 } from "./ynab-oauth.js";
+import {
+  WORKS_WITH_YNAB_PNG,
+  WORKS_WITH_YNAB_PNG_SHA256,
+  WORKS_WITH_YNAB_SVG,
+  WORKS_WITH_YNAB_SVG_SHA256,
+} from "./brand-assets.js";
 import { landingPage, consentPage, privacyPage, deletePage, deletedPage, errorPage } from "./pages.js";
 
 const STATE_TTL_SECONDS = 600;
@@ -27,12 +33,25 @@ const app = new Hono();
 
 function html(c, body, status = 200) {
   c.header("Cache-Control", "no-store");
-  c.header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
+  c.header("Content-Security-Policy", "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
   c.header("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
   c.header("Referrer-Policy", "no-referrer");
   c.header("X-Content-Type-Options", "nosniff");
   c.header("X-Frame-Options", "DENY");
   return c.html(body, status);
+}
+
+function worksWithYnabAsset(c, { body, contentType, sha256 }) {
+  const etag = `"sha256-${sha256}"`;
+  c.header("Content-Type", contentType);
+  c.header("Cache-Control", "public, max-age=31536000, immutable");
+  c.header("Content-Security-Policy", "default-src 'none'; sandbox");
+  c.header("Access-Control-Allow-Origin", "*");
+  c.header("Cross-Origin-Resource-Policy", "cross-origin");
+  c.header("X-Content-Type-Options", "nosniff");
+  c.header("ETag", etag);
+  if (c.req.header("If-None-Match") === etag) return c.body(null, 304);
+  return c.body(body);
 }
 
 function setCookie(c, name, value) {
@@ -75,6 +94,31 @@ async function validateCsrf(c, form) {
 }
 
 app.get("/", (c) => html(c, landingPage()));
+app.get("/assets/works-with-ynab.png", (c) => worksWithYnabAsset(c, {
+  body: WORKS_WITH_YNAB_PNG,
+  contentType: "image/png",
+  sha256: WORKS_WITH_YNAB_PNG_SHA256,
+}));
+app.get("/assets/works-with-ynab.svg", (c) => worksWithYnabAsset(c, {
+  body: WORKS_WITH_YNAB_SVG,
+  contentType: "image/svg+xml; charset=utf-8",
+  sha256: WORKS_WITH_YNAB_SVG_SHA256,
+}));
+app.get("/favicon.ico", (c) => worksWithYnabAsset(c, {
+  body: WORKS_WITH_YNAB_PNG,
+  contentType: "image/png",
+  sha256: WORKS_WITH_YNAB_PNG_SHA256,
+}));
+app.get("/favicon.png", (c) => worksWithYnabAsset(c, {
+  body: WORKS_WITH_YNAB_PNG,
+  contentType: "image/png",
+  sha256: WORKS_WITH_YNAB_PNG_SHA256,
+}));
+app.get("/favicon.svg", (c) => worksWithYnabAsset(c, {
+  body: WORKS_WITH_YNAB_SVG,
+  contentType: "image/svg+xml; charset=utf-8",
+  sha256: WORKS_WITH_YNAB_SVG_SHA256,
+}));
 app.get("/privacy", (c) => html(c, privacyPage()));
 app.get("/delete", async (c) => html(c, deletePage({ csrfToken: await issueCsrf(c) })));
 

@@ -1,6 +1,15 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 
+import {
+  CONNECTOR_MCP_URL,
+  CONNECTOR_RESOURCE_METADATA,
+  REMOTE_SERVER_INFO,
+  WORKS_WITH_YNAB_PNG_SHA256,
+  WORKS_WITH_YNAB_SOURCE_URL,
+  WORKS_WITH_YNAB_SVG_SHA256,
+} from "../src/brand-assets.js";
 import {
   YnabHandler,
   persistTokensAndAuthorize,
@@ -45,6 +54,87 @@ function hiddenValue(html, name) {
   assert.ok(match, `missing hidden input ${name}`);
   return match[1];
 }
+
+test("hosted connector publishes the permitted Works with YNAB mark", async () => {
+  assert.equal(WORKS_WITH_YNAB_SOURCE_URL, "https://api.ynab.com/papi/works_with_ynab.svg");
+  assert.deepEqual(CONNECTOR_RESOURCE_METADATA, {
+    resource: CONNECTOR_MCP_URL,
+    authorization_servers: ["https://ynab.amesvt.com"],
+    scopes_supported: ["read", "write"],
+    bearer_methods_supported: ["header"],
+    resource_name: "MCP Server for YNAB",
+  });
+  assert.deepEqual(REMOTE_SERVER_INFO.icons, [
+    {
+      src: "https://ynab.amesvt.com/assets/works-with-ynab.png",
+      mimeType: "image/png",
+      sizes: ["196x78"],
+    },
+    {
+      src: "https://ynab.amesvt.com/assets/works-with-ynab.svg",
+      mimeType: "image/svg+xml",
+      sizes: ["any"],
+    },
+  ]);
+
+  const assets = [
+    ["/assets/works-with-ynab.png", "image/png", WORKS_WITH_YNAB_PNG_SHA256],
+    ["/assets/works-with-ynab.svg", "image/svg+xml", WORKS_WITH_YNAB_SVG_SHA256],
+    ["/favicon.ico", "image/png", WORKS_WITH_YNAB_PNG_SHA256],
+  ];
+  for (const [path, contentType, expectedSha256] of assets) {
+    const response = await YnabHandler.request(`https://ynab.amesvt.com${path}`);
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get("content-type") ?? "", new RegExp(`^${contentType.replace("+", "\\+")}(?:;|$)`));
+    assert.equal(response.headers.get("cache-control"), "public, max-age=31536000, immutable");
+    assert.equal(response.headers.get("access-control-allow-origin"), "*");
+    assert.equal(response.headers.get("cross-origin-resource-policy"), "cross-origin");
+    assert.match(response.headers.get("content-security-policy") ?? "", /default-src 'none'/);
+    assert.equal(response.headers.get("x-content-type-options"), "nosniff");
+    const body = Buffer.from(await response.arrayBuffer());
+    assert.equal(createHash("sha256").update(body).digest("hex"), expectedSha256);
+
+    const conditional = await YnabHandler.request(`https://ynab.amesvt.com${path}`, {
+      headers: { "If-None-Match": response.headers.get("etag") },
+    });
+    assert.equal(conditional.status, 304);
+    assert.equal((await conditional.arrayBuffer()).byteLength, 0);
+  }
+});
+
+test("landing page advertises the connector icon", async () => {
+  const response = await YnabHandler.request("https://ynab.amesvt.com/");
+  const body = await response.text();
+  assert.match(body, /<link rel="icon" type="image\/svg\+xml" href="\/favicon\.svg">/);
+  assert.match(body, /<link rel="alternate icon" type="image\/png" href="\/favicon\.png">/);
+  assert.match(body, /<meta property="og:image" content="https:\/\/ynab\.amesvt\.com\/assets\/works-with-ynab\.png">/);
+  assert.match(response.headers.get("content-security-policy") ?? "", /img-src 'self'/);
+});
+
+test("MCP initialization exposes the connector name and icons", async () => {
+  process.env.YNAB_MCP_NO_AUTOSTART = "1";
+  process.env.YNAB_DISABLE_AGENT_CONFIG_FALLBACK = "1";
+  const [{ createYnabServer }, { Client }, { InMemoryTransport }] = await Promise.all([
+    import("../../index.js"),
+    import("@modelcontextprotocol/sdk/client/index.js"),
+    import("@modelcontextprotocol/sdk/inMemory.js"),
+  ]);
+  const { server } = createYnabServer({
+    hasCredentials: false,
+    writesEnabled: false,
+    serverInfo: REMOTE_SERVER_INFO,
+  });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: "worker-metadata-test", version: "1.0.0" });
+  try {
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    assert.deepEqual(client.getServerVersion(), REMOTE_SERVER_INFO);
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
 
 test("consent and error pages escape untrusted content", () => {
   const html = consentPage({

@@ -4,6 +4,7 @@
 // (landing, consent, YNAB OAuth dance, privacy, deletion).
 
 import OAuthProvider from "@cloudflare/workers-oauth-provider";
+import { CONNECTOR_RESOURCE_METADATA } from "./brand-assets.js";
 import { YnabMCP } from "./ynab-mcp.js";
 import { YnabHandler } from "./ynab-handler.js";
 
@@ -19,6 +20,7 @@ export default new OAuthProvider({
   tokenEndpoint: "/token",
   clientRegistrationEndpoint: "/register",
   scopesSupported: ["read", "write"],
+  resourceMetadata: CONNECTOR_RESOURCE_METADATA,
   // OAuth 2.1 clients used by Claude, ChatGPT, and Le Chat support S256.
   // Do not advertise or accept unprotected plain PKCE challenges.
   allowPlainPKCE: false,

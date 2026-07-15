@@ -5,6 +5,7 @@
 
 import { McpAgent } from "agents/mcp";
 import { createYnabServer } from "../../index.js";
+import { REMOTE_SERVER_INFO } from "./brand-assets.js";
 import { getFreshAccessToken, createKvJournal } from "./ynab-oauth.js";
 
 export class YnabMCP extends McpAgent {
@@ -24,7 +25,7 @@ export class YnabMCP extends McpAgent {
         sources_checked: [],
         values: {},
       },
-      serverInfo: { name: "mcp-server-for-ynab-remote", version: "5.1.0" },
+      serverInfo: REMOTE_SERVER_INFO,
     });
     this.server = server;
   }
