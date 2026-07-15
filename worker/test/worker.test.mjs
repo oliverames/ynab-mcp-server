@@ -17,7 +17,9 @@ import {
   persistTokensAndAuthorize,
   revokeAllUserGrants,
 } from "../src/ynab-handler.js";
-import { consentPage, errorPage, finalConsentPage } from "../src/pages.js";
+import { allowedMcpOrigins, rejectUntrustedMcpOrigin } from "../src/mcp-origin.js";
+import { consentPage, errorPage, finalConsentPage, privacyPage } from "../src/pages.js";
+import { applyTransportSecurityHeaders } from "../src/response-security.js";
 import {
   buildYnabAuthorizeUrl,
   createKvJournal,
@@ -123,8 +125,10 @@ test("hosted connector separates the requested app icon from the permitted page 
     authorization_servers: ["https://ynab.amesvt.com"],
     scopes_supported: ["read", "write"],
     bearer_methods_supported: ["header"],
-    resource_name: "MCP Server for YNAB",
+    resource_name: "YNAB",
   });
+  assert.equal(REMOTE_SERVER_INFO.name, "YNAB");
+  assert.equal(REMOTE_SERVER_INFO.title, "YNAB");
   assert.deepEqual(REMOTE_SERVER_INFO.icons, [
     {
       src: "https://ynab.amesvt.com/assets/ynab-app-icon.png",
@@ -178,6 +182,65 @@ test("HTML CSP defaults forms to the connector origin", async () => {
   const policy = response.headers.get("content-security-policy") ?? "";
 
   assert.match(policy, /form-action 'self'(?:;|$)/);
+});
+
+test("MCP endpoints reject untrusted browser origins before OAuth", async () => {
+  const env = {
+    CONNECTOR_BASE_URL: "https://ynab.amesvt.com",
+    MCP_ALLOWED_ORIGINS: "https://chatgpt.com, https://claude.ai",
+  };
+
+  assert.deepEqual(
+    allowedMcpOrigins(env),
+    new Set(["https://ynab.amesvt.com", "https://chatgpt.com", "https://claude.ai"])
+  );
+  assert.equal(
+    rejectUntrustedMcpOrigin(new Request("https://ynab.amesvt.com/mcp"), env),
+    null
+  );
+  assert.equal(
+    rejectUntrustedMcpOrigin(new Request("https://ynab.amesvt.com/mcp", {
+      headers: { Origin: "https://chatgpt.com" },
+    }), env), null);
+  assert.equal(
+    rejectUntrustedMcpOrigin(new Request("https://ynab.amesvt.com/privacy", {
+      headers: { Origin: "https://example.invalid" },
+    }), env), null);
+
+  const response = rejectUntrustedMcpOrigin(new Request("https://ynab.amesvt.com/mcp", {
+    method: "POST",
+    headers: { Origin: "https://example.invalid" },
+  }), env);
+  assert.equal(response.status, 403);
+  assert.equal(response.headers.get("access-control-allow-origin"), null);
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  assert.equal(response.headers.get("vary"), "Origin");
+  assert.deepEqual(await response.json(), {
+    error: "invalid_origin",
+    error_description: "Browser Origin is not permitted for this MCP endpoint.",
+  });
+});
+
+test("HTTPS responses carry hostname-scoped HSTS", async () => {
+  const secureRequest = new Request("https://ynab.amesvt.com/privacy");
+  const secureResponse = applyTransportSecurityHeaders(secureRequest, new Response("ok"));
+  assert.equal(secureResponse.headers.get("strict-transport-security"), "max-age=31536000");
+  assert.equal(await secureResponse.text(), "ok");
+
+  const insecureRequest = new Request("http://ynab.amesvt.com/privacy");
+  const insecureResponse = applyTransportSecurityHeaders(insecureRequest, new Response("ok"));
+  assert.equal(insecureResponse.headers.get("strict-transport-security"), null);
+});
+
+test("privacy policy states current retention, hosting, and client delivery", () => {
+  const html = privacyPage();
+
+  assert.match(html, /Last updated:<\/strong> July 15, 2026/);
+  assert.match(html, /Cloudflare hosts the Worker/);
+  assert.match(html, /retained until you use/);
+  assert.match(html, /expires automatically within 10 minutes/);
+  assert.match(html, /returns the result to the MCP client you connected/);
+  assert.doesNotMatch(html, /send data to any host other than/);
 });
 
 test("MCP initialization exposes the connector name and icons", async () => {

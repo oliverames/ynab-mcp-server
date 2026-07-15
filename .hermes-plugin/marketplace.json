@@ -1,7 +1,7 @@
 {
   "name": "ynab-mcp-server",
   "interface": {
-    "displayName": "YNAB MCP"
+    "displayName": "YNAB"
   },
   "metadata": {
     "description": "Standalone YNAB MCP connector marketplace",
@@ -17,7 +17,7 @@
         "path": "."
       },
       "category": "finance",
-      "displayName": "YNAB MCP",
+      "displayName": "YNAB",
       "author": {
         "name": "Oliver Ames",
         "email": "oliverames@gmail.com",

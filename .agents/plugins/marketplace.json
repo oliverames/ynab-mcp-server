@@ -1,7 +1,7 @@
 {
   "name": "ynab-mcp-server",
   "interface": {
-    "displayName": "YNAB MCP"
+    "displayName": "YNAB"
   },
   "metadata": {
     "description": "Standalone YNAB MCP connector marketplace",

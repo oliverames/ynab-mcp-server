@@ -30,8 +30,8 @@ export const CONNECTOR_ICON_PNG_URL =
   `${CONNECTOR_ORIGIN}${CONNECTOR_ICON_PNG_PATH}`;
 
 export const REMOTE_SERVER_INFO = {
-  name: "mcp-server-for-ynab-remote",
-  title: "MCP Server for YNAB",
+  name: "YNAB",
+  title: "YNAB",
   version: "5.1.0",
   description:
     "Independent open-source connector for accessing a user's own YNAB budget. Not affiliated with, sponsored by, or endorsed by YNAB.",
@@ -50,5 +50,5 @@ export const CONNECTOR_RESOURCE_METADATA = {
   authorization_servers: [CONNECTOR_ORIGIN],
   scopes_supported: ["read", "write"],
   bearer_methods_supported: ["header"],
-  resource_name: "MCP Server for YNAB",
+  resource_name: "YNAB",
 };

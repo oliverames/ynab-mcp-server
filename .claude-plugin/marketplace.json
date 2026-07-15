@@ -10,7 +10,7 @@
   "plugins": [
     {
       "name": "ynab-mcp-server",
-      "displayName": "YNAB MCP",
+      "displayName": "YNAB",
       "description": "YNAB MCP connector for budgets, transactions, categories, scheduled transactions, accounts, months, payees, and budget review workflows.",
       "version": "5.1.0",
       "author": {

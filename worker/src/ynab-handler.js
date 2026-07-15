@@ -261,7 +261,7 @@ app.post("/delete", async (c) => {
   }
   return startYnabDance(c, {
     purpose: "delete",
-    clientName: "MCP Server for YNAB",
+    clientName: "YNAB",
     redirectUri: "connector data deletion",
     readOnly: true,
   });

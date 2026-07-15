@@ -53,7 +53,7 @@ copyFile("assets/icon.png");
 writeJson("manifest.json", {
   manifest_version: "0.3",
   name: "mcp-server-for-ynab",
-  display_name: "MCP Server for YNAB",
+  display_name: "YNAB",
   version: pkg.version,
   description: "Local MCP server for YNAB budget operations.",
   author: {

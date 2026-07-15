@@ -19,7 +19,7 @@
   "category": "finance",
   "mcpServers": "./.codex-plugin/mcp.json",
   "interface": {
-    "displayName": "YNAB MCP",
+    "displayName": "YNAB",
     "shortDescription": "Connect Claude and Codex to YNAB budgets and transactions.",
     "longDescription": "A standalone YNAB MCP connector that gives Claude and Codex access to budgets, transactions, categories, scheduled transactions, accounts, months, and payees. Requires YNAB_API_TOKEN unless using the server's YNAB_OP_PATH fallback.",
     "developerName": "Oliver Ames",

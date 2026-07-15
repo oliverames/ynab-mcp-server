@@ -75,7 +75,7 @@ export function consentPage({ clientName, redirectUri, consentId, csrfToken }) {
 
 export function finalConsentPage({ clientName, redirectUri, writesEnabled, purpose, finalId, csrfToken }) {
   const deleting = purpose === "delete";
-  const safeClientName = escapeHtml(clientName || "MCP Server for YNAB");
+  const safeClientName = escapeHtml(clientName || "YNAB");
   const safeRedirectUri = escapeHtml(redirectUri || "connector data deletion");
   const safeFinalId = escapeHtml(finalId);
   const safeCsrfToken = escapeHtml(csrfToken);
@@ -101,11 +101,13 @@ export function finalConsentPage({ clientName, redirectUri, writesEnabled, purpo
 export function privacyPage() {
   return layout("Privacy | MCP Server for YNAB", `
 <h1>Privacy policy</h1>
+<p class="muted"><strong>Last updated:</strong> July 15, 2026</p>
 <div class="card">
-<p><strong>What this connector stores:</strong> your YNAB OAuth access and refresh tokens, your YNAB user ID, your read-only/write choice, and an undo journal of writes this connector performed (transaction IDs and the changed field values needed to reverse them). Tokens and undo entries are encrypted with AES-GCM before they are written to Cloudflare KV.</p>
-<p><strong>What it never does:</strong> store your YNAB password (authentication happens on ynab.com), sell or share data, use budget data for anything other than serving your own MCP requests, or send data to any host other than <code>api.ynab.com</code>.</p>
-<p><strong>Transport:</strong> budget data flows from YNAB through this connector to your MCP client only during your requests; it is not logged or persisted beyond the undo journal described above.</p>
-<p><strong>Deletion:</strong> use <a href="/delete">the deletion page</a> to revoke this connector's grants and erase stored tokens and journal entries, and additionally revoke the application from your YNAB account settings.</p>
+<p><strong>Storage and Cloudflare:</strong> the connector stores your YNAB OAuth access and refresh tokens, YNAB user ID, read-only/write choice, and an undo journal of connector-performed writes (transaction IDs and the changed field values needed to reverse them). Cloudflare hosts the Worker and provides the Durable Objects and Workers KV storage used by the connector. Tokens and undo entries are encrypted with AES-GCM before they are written to Cloudflare KV.</p>
+<p><strong>Retention:</strong> encrypted token records, authorization grants, and undo entries are retained until you use <a href="/delete">the deletion page</a>. Temporary OAuth consent and callback state expires automatically within 10 minutes.</p>
+<p><strong>Data delivery:</strong> when you make an MCP request, the connector exchanges OAuth and budget data with YNAB (including <code>app.ynab.com</code> for sign-in and <code>api.ynab.com</code> for API requests) and returns the result to the MCP client you connected. That client may receive budget data returned by the tool; its handling is governed by its own terms and privacy policy.</p>
+<p><strong>What it does not do:</strong> store your YNAB password, sell your data, use budget data for advertising, or persist ordinary budget results outside the encrypted token and undo records described above.</p>
+<p><strong>Deletion:</strong> use <a href="/delete">the deletion page</a> to revoke this connector's grants and erase stored tokens and journal entries. You can also revoke the application from your YNAB account settings.</p>
 <p><strong>Contact:</strong> file an issue at <a href="https://github.com/oliverames/ynab-mcp-server/issues">github.com/oliverames/ynab-mcp-server</a>.</p>
 </div>`);
 }

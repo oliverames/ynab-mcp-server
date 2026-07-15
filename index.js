@@ -452,7 +452,7 @@ const {
   writesEnabled: allowWrites = false,
   journal = null,
   runtime = {},
-  serverInfo = { name: "mcp-server-for-ynab", version: "5.1.0" },
+  serverInfo = { name: "YNAB", version: "5.1.0" },
 } = options;
 
 // Most-recently-seen access token, kept only so sanitizeErrorMessage can
@@ -2769,7 +2769,7 @@ registerTool(
     inputSchema: {},
   },
   () => ok({
-    server: "mcp-server-for-ynab",
+    server: "YNAB",
     package: "@oliverames/mcp-server-for-ynab",
     auth: ynabAuthStatus(),
     writes_enabled: writesEnabled(),

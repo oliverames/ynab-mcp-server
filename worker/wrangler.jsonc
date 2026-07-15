@@ -2,6 +2,8 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "ynab-mcp-connector",
   "main": "src/index.js",
+  // The public custom domain below is the only supported endpoint.
+  "workers_dev": false,
   "compatibility_date": "2025-03-10",
   "compatibility_flags": ["nodejs_compat"],
   // Custom domain on the amesvt.com zone: Cloudflare creates the DNS record
@@ -27,6 +29,9 @@
   "vars": {
     // Never let the shared stdio module autostart or read local config in the Worker.
     "CONNECTOR_BASE_URL": "https://ynab.amesvt.com",
+    // Explicit browser origins allowed to call the MCP transport. Native and
+    // server-to-server clients omit Origin and remain supported.
+    "MCP_ALLOWED_ORIGINS": "https://chatgpt.com,https://claude.ai,https://chat.mistral.ai,https://lechat.mistral.ai",
     "YNAB_MCP_NO_AUTOSTART": "1",
     "YNAB_DISABLE_AGENT_CONFIG_FALLBACK": "1"
   }
