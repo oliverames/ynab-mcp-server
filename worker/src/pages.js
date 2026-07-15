@@ -74,6 +74,31 @@ export function consentPage({ clientName, redirectUri, consentId, csrfToken }) {
 </div>`);
 }
 
+export function finalConsentPage({ clientName, redirectUri, writesEnabled, purpose, finalId, csrfToken }) {
+  const deleting = purpose === "delete";
+  const safeClientName = escapeHtml(clientName || "MCP Server for YNAB");
+  const safeRedirectUri = escapeHtml(redirectUri || "connector data deletion");
+  const safeFinalId = escapeHtml(finalId);
+  const safeCsrfToken = escapeHtml(csrfToken);
+  const accessLabel = writesEnabled ? "Read and write access" : "Read-only access";
+  const heading = deleting ? "Confirm data deletion" : `Finish connecting <span class="accent">${safeClientName}</span>`;
+  const action = deleting
+    ? "Delete the connector's stored tokens, undo journal, and grants for this YNAB account."
+    : `Create the connector grant for <code>${safeClientName}</code> (redirect: <code>${safeRedirectUri}</code>) with <strong>${accessLabel}</strong>.`;
+  const button = deleting ? "Delete my connector data" : "Finish connecting";
+  return layout("Final confirmation | MCP Server for YNAB", `
+<h1>${heading}</h1>
+<div class="card">
+<p>Your YNAB sign-in succeeded. Review this final connector action before anything is granted to the MCP client.</p>
+<p>${action}</p>
+<form method="post" action="/callback">
+  <input type="hidden" name="finalize" value="${safeFinalId}">
+  <input type="hidden" name="csrf" value="${safeCsrfToken}">
+  <button type="submit">${button}</button>
+</form>
+</div>`);
+}
+
 export function privacyPage() {
   return layout("Privacy | MCP Server for YNAB", `
 <h1>Privacy policy</h1>

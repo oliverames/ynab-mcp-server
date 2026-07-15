@@ -77,7 +77,7 @@ async function dataEncryptionKey(secret) {
   return crypto.subtle.importKey("raw", keyMaterial, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
 }
 
-async function encryptStoredJson(secret, storageKey, value) {
+export async function encryptStoredJson(secret, storageKey, value) {
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const plaintext = new TextEncoder().encode(JSON.stringify(value));
   const ciphertext = await crypto.subtle.encrypt({
@@ -92,7 +92,7 @@ async function encryptStoredJson(secret, storageKey, value) {
   });
 }
 
-async function decryptStoredJson(secret, storageKey, raw) {
+export async function decryptStoredJson(secret, storageKey, raw) {
   const parsed = JSON.parse(raw);
   // One-time migration for values written by the initial deployment before
   // application-layer encryption was added. The next read rewrites them.

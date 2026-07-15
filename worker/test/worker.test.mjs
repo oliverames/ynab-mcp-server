@@ -15,7 +15,7 @@ import {
   persistTokensAndAuthorize,
   revokeAllUserGrants,
 } from "../src/ynab-handler.js";
-import { consentPage, errorPage } from "../src/pages.js";
+import { consentPage, errorPage, finalConsentPage } from "../src/pages.js";
 import {
   buildYnabAuthorizeUrl,
   createKvJournal,
@@ -49,10 +49,51 @@ class MemoryKV {
   }
 }
 
+class MemoryTransientNamespace {
+  constructor() {
+    this.records = new Map();
+    this.queues = new Map();
+  }
+
+  getByName(name) {
+    return {
+      fetch: (input, init) => this.#enqueue(name, async () => {
+        const request = new Request(input, init);
+        const url = new URL(request.url);
+        if (request.method === "PUT" && url.pathname === "/record") {
+          this.records.set(name, await request.json());
+          return new Response(null, { status: 204 });
+        }
+        if (request.method === "POST" && url.pathname === "/consume") {
+          const record = this.records.get(name);
+          this.records.delete(name);
+          if (!record) return new Response(null, { status: 404 });
+          if (record.expiresAt <= Date.now()) return new Response(null, { status: 410 });
+          return Response.json(record.value);
+        }
+        return new Response(null, { status: 404 });
+      }),
+    };
+  }
+
+  #enqueue(name, task) {
+    const queued = (this.queues.get(name) ?? Promise.resolve()).then(task);
+    this.queues.set(name, queued.catch(() => {}));
+    return queued;
+  }
+}
+
 function hiddenValue(html, name) {
   const match = html.match(new RegExp(`name="${name}" value="([^"]+)"`));
   assert.ok(match, `missing hidden input ${name}`);
   return match[1];
+}
+
+function formHeaders(origin = CONNECTOR_MCP_URL.replace(/\/mcp$/, "")) {
+  return {
+    "Content-Type": "application/x-www-form-urlencoded",
+    Origin: origin,
+  };
 }
 
 test("hosted connector publishes the permitted Works with YNAB mark", async () => {
@@ -148,6 +189,17 @@ test("consent and error pages escape untrusted content", () => {
   assert.doesNotMatch(html, /<img src=x/);
   assert.match(html, /&lt;img src=x onerror=&quot;alert\(1\)&quot;&gt;/);
   assert.doesNotMatch(errorPage('<script>alert("error")</script>'), /<script>alert/);
+
+  const finalHtml = finalConsentPage({
+    clientName: '<img src=x onerror="alert(5)">',
+    redirectUri: 'https://client.example/"><script>alert(6)</script>',
+    writesEnabled: true,
+    purpose: "authorize",
+    finalId: 'final"><script>alert(7)</script>',
+    csrfToken: 'csrf"><script>alert(8)</script>',
+  });
+  assert.doesNotMatch(finalHtml, /<script>alert|<img src=x/);
+  assert.match(finalHtml, /Read and write access/);
 });
 
 test("authorize URL uses YNAB PKCE S256 and minimum read-only scope", () => {
@@ -311,6 +363,7 @@ test("failed connector authorization does not overwrite a concurrent token updat
 
 test("consent request is opaque, single-use, and redirects to YNAB", async () => {
   const kv = new MemoryKV();
+  const transient = new MemoryTransientNamespace();
   const oauthReqInfo = {
     responseType: "code",
     clientId: "registered-client",
@@ -326,6 +379,7 @@ test("consent request is opaque, single-use, and redirects to YNAB", async () =>
     CONNECTOR_BASE_URL: "https://ynab.amesvt.com",
     YNAB_CLIENT_ID: "ynab-client-id",
     OAUTH_KV: kv,
+    OAUTH_STATE: transient,
     OAUTH_PROVIDER: {
       async parseAuthRequest() { return oauthReqInfo; },
       async lookupClient() {
@@ -347,11 +401,11 @@ test("consent request is opaque, single-use, and redirects to YNAB", async () =>
   const consentId = hiddenValue(body, "consent");
   const csrf = hiddenValue(body, "csrf");
   assert.equal(getResponse.headers.get("set-cookie"), null);
-  assert.ok(await kv.get(`oauth_consent:${consentId}`));
+  assert.ok(transient.records.has(`consent:${consentId}`));
 
   const postResponse = await YnabHandler.request("https://untrusted-preview.example/authorize", {
     method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    headers: formHeaders(),
     body: new URLSearchParams({ consent: consentId, csrf }),
   }, env);
 
@@ -361,11 +415,11 @@ test("consent request is opaque, single-use, and redirects to YNAB", async () =>
   assert.equal(location.searchParams.get("scope"), "read-only");
   assert.equal(location.searchParams.get("code_challenge_method"), "S256");
   assert.equal(location.searchParams.get("redirect_uri"), "https://ynab.amesvt.com/callback");
-  assert.equal(await kv.get(`oauth_consent:${consentId}`), null);
+  assert.equal(transient.records.has(`consent:${consentId}`), false);
 
   const replay = await YnabHandler.request("https://untrusted-preview.example/authorize", {
     method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    headers: formHeaders(),
     body: new URLSearchParams({ consent: consentId, csrf }),
   }, env);
   assert.equal(replay.status, 400);
@@ -380,6 +434,7 @@ test("server-side consent tokens reject tamper and cross-consent without cookies
     CONNECTOR_BASE_URL: "https://ynab.amesvt.com",
     YNAB_CLIENT_ID: "ynab-client-id",
     OAUTH_KV: kv,
+    OAUTH_STATE: new MemoryTransientNamespace(),
     OAUTH_PROVIDER: {
       async parseAuthRequest() {
         requestNumber += 1;
@@ -410,7 +465,7 @@ test("server-side consent tokens reject tamper and cross-consent without cookies
 
   const crossConsent = await YnabHandler.request(`${origin}/authorize`, {
     method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    headers: formHeaders(),
     body: new URLSearchParams({
       consent: hiddenValue(bodies[1], "consent"),
       csrf: hiddenValue(bodies[0], "csrf"),
@@ -421,7 +476,7 @@ test("server-side consent tokens reject tamper and cross-consent without cookies
 
   const firstValid = await YnabHandler.request(`${origin}/authorize`, {
     method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    headers: formHeaders(),
     body: new URLSearchParams({
       consent: hiddenValue(bodies[0], "consent"),
       csrf: hiddenValue(bodies[0], "csrf"),
@@ -433,7 +488,7 @@ test("server-side consent tokens reject tamper and cross-consent without cookies
   const thirdCsrf = hiddenValue(bodies[2], "csrf");
   const tampered = await YnabHandler.request(`${origin}/authorize`, {
     method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    headers: formHeaders(),
     body: new URLSearchParams({ consent: thirdConsent, csrf: `${thirdCsrf}x` }),
   }, env);
   assert.equal(tampered.status, 400);
@@ -441,11 +496,215 @@ test("server-side consent tokens reject tamper and cross-consent without cookies
 
   const correctAfterTamper = await YnabHandler.request(`${origin}/authorize`, {
     method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    headers: formHeaders(),
     body: new URLSearchParams({ consent: thirdConsent, csrf: thirdCsrf }),
   }, env);
   assert.equal(correctAfterTamper.status, 400);
   assert.match(await correctAfterTamper.text(), /Authorization request expired/);
+});
+
+test("authorization forms require the configured same origin without consuming consent", async () => {
+  const kv = new MemoryKV();
+  const state = new MemoryTransientNamespace();
+  const env = {
+    COOKIE_ENCRYPTION_KEY: COOKIE_KEY,
+    CONNECTOR_BASE_URL: "https://ynab.amesvt.com",
+    YNAB_CLIENT_ID: "ynab-client-id",
+    OAUTH_KV: kv,
+    OAUTH_STATE: state,
+    OAUTH_PROVIDER: {
+      async parseAuthRequest() {
+        return {
+          responseType: "code",
+          clientId: "registered-client",
+          redirectUri: "https://client.example/callback",
+          scope: [],
+          state: "client-state",
+          codeChallenge: "client-pkce",
+          codeChallengeMethod: "S256",
+          resource: CONNECTOR_MCP_URL,
+        };
+      },
+      async lookupClient() { return { clientName: "Trusted MCP Client" }; },
+    },
+  };
+  const origin = CONNECTOR_MCP_URL.replace(/\/mcp$/, "");
+  const page = await YnabHandler.request(`${origin}/authorize`, {}, env);
+  const body = await page.text();
+  const consent = hiddenValue(body, "consent");
+  const csrf = hiddenValue(body, "csrf");
+
+  const crossOrigin = await YnabHandler.request(`${origin}/authorize`, {
+    method: "POST",
+    headers: formHeaders("https://attacker.example"),
+    body: new URLSearchParams({ consent, csrf, writes: "1" }),
+  }, env);
+  assert.equal(crossOrigin.status, 403);
+  assert.match(await crossOrigin.text(), /same connector origin/i);
+
+  const legitimate = await YnabHandler.request(`${origin}/authorize`, {
+    method: "POST",
+    headers: formHeaders(),
+    body: new URLSearchParams({ consent, csrf }),
+  }, env);
+  assert.equal(legitimate.status, 302);
+  assert.equal(new URL(legitimate.headers.get("location")).searchParams.get("scope"), "read-only");
+});
+
+test("atomic transient state allows only one concurrent consent and callback", async () => {
+  const kv = new MemoryKV();
+  const state = new MemoryTransientNamespace();
+  const env = {
+    COOKIE_ENCRYPTION_KEY: COOKIE_KEY,
+    CONNECTOR_BASE_URL: "https://ynab.amesvt.com",
+    YNAB_CLIENT_ID: "ynab-client-id",
+    OAUTH_KV: kv,
+    OAUTH_STATE: state,
+    OAUTH_PROVIDER: {
+      async parseAuthRequest() {
+        return {
+          responseType: "code",
+          clientId: "registered-client",
+          redirectUri: "https://client.example/callback",
+          scope: [],
+          state: "client-state",
+          codeChallenge: "client-pkce",
+          codeChallengeMethod: "S256",
+          resource: CONNECTOR_MCP_URL,
+        };
+      },
+      async lookupClient() { return { clientName: "Concurrent Client" }; },
+    },
+  };
+  const origin = CONNECTOR_MCP_URL.replace(/\/mcp$/, "");
+  const page = await YnabHandler.request(`${origin}/authorize`, {}, env);
+  const body = await page.text();
+  const form = new URLSearchParams({
+    consent: hiddenValue(body, "consent"),
+    csrf: hiddenValue(body, "csrf"),
+  });
+  const approvals = await Promise.all([1, 2].map(() => YnabHandler.request(`${origin}/authorize`, {
+    method: "POST",
+    headers: formHeaders(),
+    body: new URLSearchParams(form),
+  }, env)));
+  assert.deepEqual(approvals.map((response) => response.status).sort(), [302, 400]);
+  const approved = approvals.find((response) => response.status === 302);
+  const oauthState = new URL(approved.headers.get("location")).searchParams.get("state");
+
+  const callbacks = await Promise.all([1, 2].map(() => YnabHandler.request(
+    `${origin}/callback?error=access_denied&state=${encodeURIComponent(oauthState)}`,
+    {},
+    env
+  )));
+  const callbackBodies = await Promise.all(callbacks.map((response) => response.text()));
+  assert.equal(callbackBodies.filter((text) => text.includes("YNAB did not authorize the connector")).length, 1);
+  assert.equal(callbackBodies.filter((text) => text.includes("Authorization state expired or did not match")).length, 1);
+});
+
+test("YNAB callback requires a final same-origin confirmation before creating a grant", async (t) => {
+  const kv = new MemoryKV();
+  const transient = new MemoryTransientNamespace();
+  let completed = 0;
+  const env = {
+    COOKIE_ENCRYPTION_KEY: COOKIE_KEY,
+    DATA_ENCRYPTION_KEY: DATA_KEY,
+    CONNECTOR_BASE_URL: "https://ynab.amesvt.com",
+    YNAB_CLIENT_ID: "ynab-client-id",
+    YNAB_CLIENT_SECRET: "ynab-client-secret",
+    OAUTH_KV: kv,
+    OAUTH_STATE: transient,
+    OAUTH_PROVIDER: {
+      async parseAuthRequest() {
+        return {
+          responseType: "code",
+          clientId: "attacker-controlled-client",
+          redirectUri: "https://attacker-client.example/callback",
+          scope: [],
+          state: "client-state",
+          codeChallenge: "client-pkce",
+          codeChallengeMethod: "S256",
+          resource: CONNECTOR_MCP_URL,
+        };
+      },
+      async lookupClient() { return { clientName: "Attacker Controlled Client" }; },
+      async completeAuthorization() {
+        completed += 1;
+        return { redirectTo: "https://attacker-client.example/callback?code=connector-code" };
+      },
+    },
+  };
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  globalThis.fetch = async (url) => {
+    if (String(url) === "https://app.ynab.com/oauth/token") {
+      return Response.json({
+        access_token: "pending-access-token",
+        refresh_token: "pending-refresh-token",
+        expires_in: 7200,
+      });
+    }
+    if (String(url) === "https://api.ynab.com/v1/user") {
+      return Response.json({ data: { user: { id: "ynab-user-1" } } });
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+
+  const origin = CONNECTOR_MCP_URL.replace(/\/mcp$/, "");
+  const page = await YnabHandler.request(`${origin}/authorize`, {}, env);
+  const consentBody = await page.text();
+  const approval = await YnabHandler.request(`${origin}/authorize`, {
+    method: "POST",
+    headers: formHeaders(),
+    body: new URLSearchParams({
+      consent: hiddenValue(consentBody, "consent"),
+      csrf: hiddenValue(consentBody, "csrf"),
+    }),
+  }, env);
+  const oauthState = new URL(approval.headers.get("location")).searchParams.get("state");
+
+  const callback = await YnabHandler.request(
+    `${origin}/callback?code=ynab-code&state=${encodeURIComponent(oauthState)}`,
+    {},
+    env
+  );
+  assert.equal(callback.status, 200);
+  const callbackBody = await callback.text();
+  assert.match(callbackBody, /Attacker Controlled Client/);
+  assert.match(callbackBody, /Read-only access/);
+  assert.equal(completed, 0);
+  assert.equal(await kv.get(tokenRecordKey("ynab-user-1")), null);
+  assert.doesNotMatch(JSON.stringify([...transient.records.values()]), /pending-access-token|pending-refresh-token/);
+
+  const finalize = hiddenValue(callbackBody, "finalize");
+  const csrf = hiddenValue(callbackBody, "csrf");
+  const crossOrigin = await YnabHandler.request(`${origin}/callback`, {
+    method: "POST",
+    headers: formHeaders("https://attacker.example"),
+    body: new URLSearchParams({ finalize, csrf }),
+  }, env);
+  assert.equal(crossOrigin.status, 403);
+  assert.equal(completed, 0);
+
+  const finish = await YnabHandler.request(`${origin}/callback`, {
+    method: "POST",
+    headers: formHeaders(),
+    body: new URLSearchParams({ finalize, csrf }),
+    redirect: "manual",
+  }, env);
+  assert.equal(finish.status, 302);
+  assert.equal(finish.headers.get("location"), "https://attacker-client.example/callback?code=connector-code");
+  assert.equal(completed, 1);
+  assert.ok(await kv.get(tokenRecordKey("ynab-user-1")));
+
+  const replay = await YnabHandler.request(`${origin}/callback`, {
+    method: "POST",
+    headers: formHeaders(),
+    body: new URLSearchParams({ finalize, csrf }),
+  }, env);
+  assert.equal(replay.status, 400);
+  assert.match(await replay.text(), /Final confirmation expired or invalid/);
+  assert.equal(completed, 1);
 });
 
 test("overlapping YNAB approvals validate cookie-free state and reject replay", async () => {
@@ -456,6 +715,7 @@ test("overlapping YNAB approvals validate cookie-free state and reject replay", 
     CONNECTOR_BASE_URL: "https://ynab.amesvt.com",
     YNAB_CLIENT_ID: "ynab-client-id",
     OAUTH_KV: kv,
+    OAUTH_STATE: new MemoryTransientNamespace(),
     OAUTH_PROVIDER: {
       async parseAuthRequest() {
         requestNumber += 1;
@@ -487,7 +747,7 @@ test("overlapping YNAB approvals validate cookie-free state and reject replay", 
   for (const body of pages) {
     const response = await YnabHandler.request(`${origin}/authorize`, {
       method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      headers: formHeaders(),
       body: new URLSearchParams({
         consent: hiddenValue(body, "consent"),
         csrf: hiddenValue(body, "csrf"),

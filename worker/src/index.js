@@ -6,9 +6,10 @@
 import OAuthProvider from "@cloudflare/workers-oauth-provider";
 import { CONNECTOR_RESOURCE_METADATA } from "./brand-assets.js";
 import { YnabMCP } from "./ynab-mcp.js";
+import { OAuthTransientState } from "./oauth-transient-state.js";
 import { YnabHandler } from "./ynab-handler.js";
 
-export { YnabMCP };
+export { YnabMCP, OAuthTransientState };
 
 export default new OAuthProvider({
   apiHandlers: {

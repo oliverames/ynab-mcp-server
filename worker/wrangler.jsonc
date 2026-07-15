@@ -9,16 +9,20 @@
   "routes": [{ "pattern": "ynab.amesvt.com", "custom_domain": true }],
   "kv_namespaces": [
     // OAuthProvider grant/client/token storage (props encrypted; tokens hashed),
-    // plus this connector's YNAB token records, OAuth state, and undo journals.
+    // plus this connector's encrypted YNAB token records and undo journals.
     // The id is filled in after `wrangler kv namespace create OAUTH_KV`.
     { "binding": "OAUTH_KV", "id": "eabb2d32169f4fa68e8d58a61cd45190" }
   ],
   "durable_objects": {
-    "bindings": [{ "name": "MCP_OBJECT", "class_name": "YnabMCP" }]
+    "bindings": [
+      { "name": "MCP_OBJECT", "class_name": "YnabMCP" },
+      { "name": "OAUTH_STATE", "class_name": "OAuthTransientState" }
+    ]
   },
   "migrations": [
     // SQLite-backed DO class — required for McpAgent and allowed on the free plan.
-    { "tag": "v1", "new_sqlite_classes": ["YnabMCP"] }
+    { "tag": "v1", "new_sqlite_classes": ["YnabMCP"] },
+    { "tag": "v2", "new_sqlite_classes": ["OAuthTransientState"] }
   ],
   "vars": {
     // Never let the shared stdio module autostart or read local config in the Worker.
