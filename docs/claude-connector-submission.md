@@ -16,7 +16,7 @@ user must confirm before anyone submits it.
 - Support: `https://github.com/oliverames/ynab-mcp-server/issues`
 - Company name: `Oliver Ames`
 - Company website: `https://ynab.amesvt.com`
-- Icon: `https://ynab.amesvt.com/assets/works-with-ynab.png`
+- Icon: `https://ynab.amesvt.com/assets/ynab-app-icon.png`
 
 ### Description
 
@@ -63,19 +63,26 @@ credentials.
 - Data deletion: `https://ynab.amesvt.com/delete`.
 - Privacy policy: `https://ynab.amesvt.com/privacy`.
 
-## Icon and trademark basis
+## Icon roles and trademark basis
 
-Use the connector-hosted PNG URL above in Anthropic's icon field. It is a
-196x78 rendering of the exact
+Use the square 1024x1024 connector-hosted PNG URL above in Anthropic's icon
+field. It is the same app-list artwork advertised in MCP `serverInfo.icons` and
+used by other remote connector hosts. The source listing, source artwork URL,
+dimensions, MIME type, and SHA-256 digest are pinned in the Worker source and
+covered by its tests.
+
+Keep the app-list icon separate from the hosted authorization experience. The
+consent, callback, privacy, and deletion pages use the exact
 ["Works with YNAB" integration mark](https://api.ynab.com/papi/works_with_ynab.svg)
 that YNAB permits under section 5.3 of its
-[API Terms](https://api.ynab.com/#terms). The unchanged SVG is also available at
+[API Terms](https://api.ynab.com/#terms). The unchanged SVG is available at
 `https://ynab.amesvt.com/assets/works-with-ynab.svg`.
 
-Do not substitute YNAB's consumer app icon or another YNAB logo. YNAB permits
-the linked integration mark and the "for YNAB" naming form, but says other uses
-of its content are subject to its trademark restrictions. The hosted pages
-include YNAB's required non-affiliation and trademark notice.
+YNAB's terms expressly permit the integration mark and the "for YNAB" naming
+form. They do not expressly grant general permission to reuse YNAB's consumer
+app artwork, so the square app-list icon is documented as a separate branding
+choice rather than as a Terms-permitted integration asset. Every hosted page
+includes YNAB's required non-affiliation and trademark notice.
 
 ## Items still needed before submission
 
