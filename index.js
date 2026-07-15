@@ -12,6 +12,12 @@ import * as ynab from "ynab";
 
 // --- Init ---
 
+// Cloudflare Workers (nodejs_compat) can import this module for the exported
+// createYnabServer factory, but its fs/child_process stubs throw when invoked.
+// Detect Workers so import-time config resolution, the fs undo journal, and
+// the stdio autostart are all skipped there.
+const IS_CLOUDFLARE_WORKERS = globalThis.navigator?.userAgent === "Cloudflare-Workers";
+
 const BASE_URL = "https://api.ynab.com/v1";
 const YNAB_API_HOST = "api.ynab.com";
 const MAX_TOKEN_FILE_BYTES = 4096;
@@ -24,29 +30,28 @@ const YNAB_RUNTIME_KEYS = [
   "YNAB_ALLOW_WRITES",
 ];
 
-const runtimeConfig = resolveYnabRuntimeConfig();
+// In Workers there is no local config to resolve (fs would throw); the Worker
+// consumer passes credentials and runtime info to createYnabServer directly.
+const runtimeConfig = IS_CLOUDFLARE_WORKERS
+  ? {
+      apiToken: undefined,
+      tokenSource: null,
+      values: {},
+      sources_checked: [],
+      config_fallback_disabled: false,
+      detected_agent: "unknown",
+      tokenLookupError: undefined,
+      lookup_errors: [],
+    }
+  : resolveYnabRuntimeConfig();
 const API_TOKEN = runtimeConfig.apiToken;
 const tokenLookupError = runtimeConfig.tokenLookupError;
 const DEFAULT_BUDGET_ID = runtimeConfig.values.YNAB_BUDGET_ID?.value;
-if (!API_TOKEN) {
+if (!API_TOKEN && !IS_CLOUDFLARE_WORKERS) {
   const fallbackMessage = tokenLookupError
     ? ` ${tokenLookupError}.`
     : " Add YNAB_API_TOKEN to the agent config file, set YNAB_API_TOKEN_FILE, or set YNAB_OP_PATH.";
   console.error(`YNAB_API_TOKEN is required.${fallbackMessage} Starting MCP Server for YNAB in discovery-only mode.`);
-}
-
-const ynabRateLimit = createYnabRateLimiter();
-const effectiveApiToken = API_TOKEN || "missing-token-for-tool-discovery";
-const api = new ynab.API(effectiveApiToken, BASE_URL);
-// The ynab SDK's Configuration exposes a `config` setter that replaces its
-// inner options object; this is how every SDK request is routed through
-// secureFetch (host pinning, rate limiting, retries, timeout).
-api._configuration.config = { accessToken: effectiveApiToken, basePath: BASE_URL, fetchApi: secureFetch };
-if (api._configuration.fetchApi !== secureFetch) {
-  // The public Configuration.fetchApi getter is exactly what the SDK's request
-  // path reads. Fail loudly rather than silently issuing unprotected requests
-  // if a future SDK version changes this contract.
-  throw new Error("ynab SDK configuration shape changed: secure fetch wiring did not take effect. Refusing to start.");
 }
 
 // --- Helpers ---
@@ -333,20 +338,7 @@ function detectAgentRuntime() {
   return "unknown";
 }
 
-function publicYnabRuntimeSettings() {
-  return Object.fromEntries(
-    Object.entries(runtimeConfig.values)
-      .filter(([key]) => key !== "YNAB_API_TOKEN")
-      .map(([key, entry]) => [key, {
-        configured: true,
-        source: entry.source,
-        source_label: entry.source_label,
-      }])
-  );
-}
-
-function ynabAuthSetupGuide() {
-  const agent = runtimeConfig.detected_agent;
+function buildYnabAuthSetupGuide(agent) {
   const codexPath = path.join(userHomeDir(), ".codex", "config.toml");
   const claudePath = path.join(userHomeDir(), ".claude", "settings.json");
   const shouldShowCodex = agent === "codex" || agent === "unknown";
@@ -396,8 +388,86 @@ function ynabAuthSetupGuide() {
   };
 }
 
+// --- Undo journal storage (Node fs implementation) ---
+// The factory takes an injected async journal interface; this is the local-fs
+// implementation the stdio bootstrap uses (~/.ynab-mcp-undo.json). The journal
+// lives outside the budget, so it survives restarts but never leaves this machine.
+
+const UNDO_JOURNAL_MAX_ENTRIES = 100;
+
+function undoJournalPath() {
+  return path.join(userHomeDir(), ".ynab-mcp-undo.json");
+}
+
+function readUndoJournal() {
+  try {
+    const parsed = JSON.parse(readFileSync(undoJournalPath(), "utf8"));
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function createFsJournal(filePath) {
+  return {
+    path: filePath,
+    async read() {
+      try {
+        const parsed = JSON.parse(readFileSync(filePath, "utf8"));
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {
+        return [];
+      }
+    },
+    async persist(entries) {
+      writeFileSync(filePath, JSON.stringify(entries.slice(0, UNDO_JOURNAL_MAX_ENTRIES), null, 2));
+    },
+  };
+}
+
+// --- Server factory ---
+// Builds the entire tool/prompt/resource layer around injected credentials,
+// write gating, undo-journal storage, and auth-status runtime info, so the
+// same layer serves both the local stdio process and hosted deployments
+// (e.g. a Cloudflare Worker with per-user OAuth tokens).
+//
+// options:
+//   getAccessToken: async () => string|null — called per outbound YNAB request;
+//     the returned token replaces any Authorization header (see secureFetch).
+//   hasCredentials: boolean — whether a token source exists (gates run()).
+//   defaultBudgetId: string|undefined — fallback budget for tools.
+//   writesEnabled: boolean — registers write tools when true.
+//   journal: { async read(), async persist(entries) } | null — undo storage;
+//     null disables journaling (list_undo_history/undo_operation degrade).
+//   runtime: { tokenSource, detected_agent, config_fallback_disabled,
+//     sources_checked, values, tokenLookupError, setupGuide } — auth-status
+//     reporting only; all fields optional.
+//   serverInfo: { name, version } override.
+export function createYnabServer(options = {}) {
+
+const {
+  getAccessToken = null,
+  hasCredentials = false,
+  defaultBudgetId = undefined,
+  writesEnabled: allowWrites = false,
+  journal = null,
+  runtime = {},
+  serverInfo = { name: "mcp-server-for-ynab", version: "5.0.0" },
+} = options;
+
+// Most-recently-seen access token, kept only so sanitizeErrorMessage can
+// redact it from error text. Seeded eagerly (best effort) and refreshed on
+// every secureFetch call.
+let currentToken = null;
+if (getAccessToken) {
+  Promise.resolve()
+    .then(() => getAccessToken())
+    .then((token) => { if (token) currentToken = token; })
+    .catch(() => {});
+}
+
 function resolveBudgetId(input) {
-  return input || DEFAULT_BUDGET_ID || "last-used";
+  return input || defaultBudgetId || "last-used";
 }
 
 function dollars(milliunits) {
@@ -723,7 +793,7 @@ async function fetchTransactions({
 }
 
 async function run(fn) {
-  if (!API_TOKEN) {
+  if (!hasCredentials) {
     return missingCredentialsResult();
   }
 
@@ -752,8 +822,8 @@ function missingCredentialsResult() {
 
 function sanitizeErrorMessage(value) {
   let message = String(value ?? "");
-  if (API_TOKEN) {
-    message = message.split(API_TOKEN).join("[REDACTED_TOKEN]");
+  if (currentToken) {
+    message = message.split(currentToken).join("[REDACTED_TOKEN]");
   }
   return message
     .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [REDACTED_TOKEN]")
@@ -821,6 +891,17 @@ function retryDelayMs(res, attempt) {
 async function secureFetch(input, init = {}) {
   const url = input instanceof URL ? input : new URL(typeof input === "string" ? input : input.url);
   assertYnabApiUrl(url);
+
+  // Single token-injection choke point for both SDK-mediated calls and
+  // ynabFetch: the injected token replaces whatever Authorization header the
+  // ynab SDK set from its construction-time placeholder token.
+  const accessToken = getAccessToken ? await getAccessToken() : null;
+  if (accessToken) {
+    currentToken = accessToken;
+    const headers = new Headers(init.headers || {});
+    headers.set("Authorization", `Bearer ${accessToken}`);
+    init = { ...init, headers };
+  }
 
   const maxRetries = Math.floor(envNumber("YNAB_HTTP_RETRIES", 2));
   for (let attempt = 0; ; attempt += 1) {
@@ -919,7 +1000,8 @@ async function ynabFetch(path, { method = "GET", body, query } = {}) {
   }
   const opts = {
     method,
-    headers: { Authorization: `Bearer ${effectiveApiToken}`, "Content-Type": "application/json" },
+    // The Authorization header is injected per-request by secureFetch.
+    headers: { "Content-Type": "application/json" },
   };
   if (body) opts.body = JSON.stringify(body);
   const res = await secureFetch(url, opts);
@@ -935,10 +1017,24 @@ async function ynabFetch(path, { method = "GET", body, query } = {}) {
 
 // --- Server ---
 
-const server = new McpServer({
-  name: "mcp-server-for-ynab",
-  version: "5.0.0",
-});
+const ynabRateLimit = createYnabRateLimiter();
+// The real bearer token is injected per-request by secureFetch (from
+// getAccessToken); the SDK is constructed with a placeholder that never
+// reaches the wire.
+const constructionToken = "token-injected-by-secure-fetch";
+const api = new ynab.API(constructionToken, BASE_URL);
+// The ynab SDK's Configuration exposes a `config` setter that replaces its
+// inner options object; this is how every SDK request is routed through
+// secureFetch (host pinning, rate limiting, retries, timeout).
+api._configuration.config = { accessToken: constructionToken, basePath: BASE_URL, fetchApi: secureFetch };
+if (api._configuration.fetchApi !== secureFetch) {
+  // The public Configuration.fetchApi getter is exactly what the SDK's request
+  // path reads. Fail loudly rather than silently issuing unprotected requests
+  // if a future SDK version changes this contract.
+  throw new Error("ynab SDK configuration shape changed: secure fetch wiring did not take effect. Refusing to start.");
+}
+
+const server = new McpServer(serverInfo);
 
 const registeredTools = new Map();
 const toolCatalog = new Map();
@@ -977,7 +1073,7 @@ function listRegisteredYnabTools() {
       let status = "available";
       if (isWrite && !writesEnabled()) {
         status = "hidden_requires_YNAB_ALLOW_WRITES_1";
-      } else if (!API_TOKEN) {
+      } else if (!hasCredentials) {
         status = "discoverable_requires_credentials";
       }
       return {
@@ -1020,24 +1116,40 @@ const WRITE_TOOL_METADATA = {
 };
 
 function writesEnabled() {
-  return runtimeConfig.values.YNAB_ALLOW_WRITES?.value === "1";
+  return !!allowWrites;
+}
+
+function publicYnabRuntimeSettings() {
+  return Object.fromEntries(
+    Object.entries(runtime.values ?? {})
+      .filter(([key]) => key !== "YNAB_API_TOKEN")
+      .map(([key, entry]) => [key, {
+        configured: true,
+        source: entry.source,
+        source_label: entry.source_label,
+      }])
+  );
+}
+
+function ynabAuthSetupGuide() {
+  return runtime.setupGuide ?? buildYnabAuthSetupGuide(runtime.detected_agent ?? "unknown");
 }
 
 function ynabAuthStatus() {
-  const authenticated = !!API_TOKEN;
+  const authenticated = !!hasCredentials;
   const writeToolsAvailable = authenticated && writesEnabled();
   return {
     authenticated,
-    default_budget_id_configured: !!DEFAULT_BUDGET_ID,
+    default_budget_id_configured: !!defaultBudgetId,
     writes_enabled: writesEnabled(),
     write_tools_available: writeToolsAvailable,
-    credential_source: runtimeConfig.tokenSource?.source ?? null,
-    credential_source_label: runtimeConfig.tokenSource?.source_label ?? null,
-    detected_agent: runtimeConfig.detected_agent,
-    config_fallback_disabled: runtimeConfig.config_fallback_disabled,
+    credential_source: runtime.tokenSource?.source ?? null,
+    credential_source_label: runtime.tokenSource?.source_label ?? null,
+    detected_agent: runtime.detected_agent ?? null,
+    config_fallback_disabled: runtime.config_fallback_disabled ?? null,
     configured_settings: publicYnabRuntimeSettings(),
-    credential_sources_checked: runtimeConfig.sources_checked,
-    lookup_error: authenticated ? null : tokenLookupError ?? null,
+    credential_sources_checked: runtime.sources_checked ?? [],
+    lookup_error: authenticated ? null : runtime.tokenLookupError ?? null,
     setup: authenticated ? null : ynabAuthSetupGuide(),
     message: authenticated
       ? "MCP Server for YNAB has an API token configured."
@@ -1861,7 +1973,7 @@ registerTool(
         transaction: mapTransactionInput(txnFields),
       });
       const created = formatTransaction(data.transaction);
-      appendUndoEntry({
+      await appendUndoEntry({
         tool: "create_transaction",
         budget_id: bid,
         description: `Created transaction ${created.id} (${created.payee_name ?? "no payee"}, ${created.amount})`,
@@ -1899,7 +2011,7 @@ registerTool(
       });
       const created = data.transactions?.map(formatTransaction) ?? [];
       if (created.length > 0) {
-        appendUndoEntry({
+        await appendUndoEntry({
           tool: "create_transactions",
           budget_id: bid,
           description: `Created ${created.length} transactions`,
@@ -1945,7 +2057,7 @@ registerTool(
       const { data } = await api.transactions.updateTransaction(bid, transactionId, {
         transaction: mapTransactionUpdate(requested),
       });
-      journalTransactionUpdates(
+      await journalTransactionUpdates(
         "update_transaction",
         bid,
         [requested],
@@ -1968,7 +2080,7 @@ registerTool(
       const bid = resolveBudgetId(budgetId);
       const { data } = await api.transactions.deleteTransaction(bid, transactionId);
       const deleted = formatTransaction(data.transaction);
-      appendUndoEntry({
+      await appendUndoEntry({
         tool: "delete_transaction",
         budget_id: bid,
         description: `Deleted transaction ${deleted.id} (${deleted.payee_name ?? "no payee"}, ${deleted.amount})`,
@@ -2045,7 +2157,7 @@ registerTool(
       if (unresolved.length > 0) {
         throw new Error(`The bulk update was submitted, but YNAB did not return updated transactions for import ids: ${unresolved.join(", ")}. Verification could not run for those rows; inspect them with get_transactions before retrying.`);
       }
-      journalTransactionUpdates(
+      await journalTransactionUpdates(
         "update_transactions",
         bid,
         resolved,
@@ -2121,7 +2233,7 @@ registerTool(
       const mapped = updates.map((t) => ({ id: t.id, ...mapTransactionUpdate(t) }));
       const { data: updData } = await api.transactions.updateTransactions(bid, { transactions: mapped });
       // The pre-write fetch above is the before-state: every row was unapproved.
-      journalTransactionUpdates(
+      await journalTransactionUpdates(
         "approve_transactions",
         bid,
         updates,
@@ -2175,7 +2287,7 @@ registerTool(
       const updates = txns.map((t) => ({ id: t.id, payeeId: toPayeeId }));
       const mapped = updates.map((t) => ({ id: t.id, ...mapTransactionUpdate(t) }));
       const { data: updData } = await api.transactions.updateTransactions(bid, { transactions: mapped });
-      journalTransactionUpdates(
+      await journalTransactionUpdates(
         "reassign_payee_transactions",
         bid,
         updates,
@@ -2617,10 +2729,10 @@ registerTool(
     package: "@oliverames/mcp-server-for-ynab",
     auth: ynabAuthStatus(),
     writes_enabled: writesEnabled(),
-    writes_available: writesEnabled() && !!API_TOKEN,
+    writes_available: writesEnabled() && !!hasCredentials,
     tools: listRegisteredYnabTools(),
     execute_with: "ynab_tool_execute",
-    write_execute_with: writesEnabled() && !!API_TOKEN ? "ynab_write_tool_execute" : null,
+    write_execute_with: writesEnabled() && !!hasCredentials ? "ynab_write_tool_execute" : null,
   })
 );
 
@@ -2717,34 +2829,21 @@ registerTool(
 );
 
 // ==================== Undo Journal ====================
-// Every transaction-level write is journaled locally with enough before-state
-// to reverse it (pattern adapted from Maronato/ynab-mcp and jeangnc/ynab-mcp-server).
-// The journal lives outside the budget, so it survives restarts but never
-// leaves this machine. Category/payee/scheduled writes are journaled without
-// undo data (undoable: false) — reversing those safely needs human judgment.
+// Every transaction-level write is journaled with enough before-state to
+// reverse it (pattern adapted from Maronato/ynab-mcp and jeangnc/ynab-mcp-server).
+// Storage is the injected async journal interface (local file for stdio, KV
+// for hosted deployments); a null journal disables journaling entirely.
+// Category/payee/scheduled writes are journaled without undo data
+// (undoable: false) — reversing those safely needs human judgment.
 
-const UNDO_JOURNAL_MAX_ENTRIES = 100;
-
-function undoJournalPath() {
-  return path.join(userHomeDir(), ".ynab-mcp-undo.json");
-}
-
-function readUndoJournal() {
-  try {
-    const parsed = JSON.parse(readFileSync(undoJournalPath(), "utf8"));
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
-function appendUndoEntry(entry) {
+async function appendUndoEntry(entry) {
+  if (!journal) return null;
   // A journaling failure must never fail the write it describes.
   try {
-    const journal = readUndoJournal();
-    journal.unshift({ id: randomUUID(), at: new Date().toISOString(), ...entry });
-    writeFileSync(undoJournalPath(), JSON.stringify(journal.slice(0, UNDO_JOURNAL_MAX_ENTRIES), null, 2));
-    return journal[0].id;
+    const entries = await journal.read();
+    entries.unshift({ id: randomUUID(), at: new Date().toISOString(), ...entry });
+    await journal.persist(entries.slice(0, UNDO_JOURNAL_MAX_ENTRIES));
+    return entries[0].id;
   } catch (e) {
     console.error(`Could not write undo journal: ${sanitizeErrorMessage(e?.message || e)}`);
     return null;
@@ -2791,7 +2890,7 @@ async function fetchTransactionsByIds(budgetId, ids) {
   return byId;
 }
 
-function journalTransactionUpdates(tool, budgetId, requestedUpdates, beforeById, description) {
+async function journalTransactionUpdates(tool, budgetId, requestedUpdates, beforeById, description) {
   const rows = [];
   let missingBefore = 0;
   for (const requested of requestedUpdates) {
@@ -2818,12 +2917,15 @@ registerTool(
   { description: "List the local undo journal: every write this MCP server performed (most recent first), with per-entry undo capability. Read-only; reads a local journal file, never the YNAB API. Use this to review what changed before calling undo_operation, or to audit a session's writes. Entries with undoable:false are recorded for audit only and cannot be reversed automatically.", inputSchema: {
     limit: z.number().int().positive().max(UNDO_JOURNAL_MAX_ENTRIES).optional().describe("Maximum entries to return (default 20, newest first)"),
   } },
-  ({ limit }) => {
-    const journal = readUndoJournal().slice(0, limit ?? 20);
+  async ({ limit }) => {
+    if (!journal) {
+      return ok({ count: 0, journal_path: null, entries: [], note: "undo journal unavailable in this deployment" });
+    }
+    const entries = (await journal.read()).slice(0, limit ?? 20);
     return ok({
-      count: journal.length,
-      journal_path: undoJournalPath(),
-      entries: journal.map((e) => ({
+      count: entries.length,
+      journal_path: journal.path ?? null,
+      entries: entries.map((e) => ({
         id: e.id,
         at: e.at,
         tool: e.tool,
@@ -2843,8 +2945,9 @@ registerTool(
   } },
   ({ entryId }) =>
     run(async () => {
-      const journal = readUndoJournal();
-      const entry = journal.find((e) => e.id === entryId);
+      if (!journal) throw new Error("The undo journal is unavailable in this deployment, so undo_operation cannot run.");
+      const entries = await journal.read();
+      const entry = entries.find((e) => e.id === entryId);
       if (!entry) throw new Error(`No undo journal entry with id ${entryId}. Use list_undo_history to find entry IDs.`);
       if (entry.undone) throw new Error(`Entry ${entryId} was already undone at ${entry.undone_at}.`);
       if (!entry.undoable || !entry.undo) throw new Error(`Entry ${entryId} (${entry.tool}) is journaled for audit only and cannot be undone automatically.`);
@@ -2888,11 +2991,11 @@ registerTool(
       entry.undone = true;
       entry.undone_at = new Date().toISOString();
       try {
-        writeFileSync(undoJournalPath(), JSON.stringify(journal.slice(0, UNDO_JOURNAL_MAX_ENTRIES), null, 2));
+        await journal.persist(entries.slice(0, UNDO_JOURNAL_MAX_ENTRIES));
       } catch (e) {
         console.error(`Could not mark undo entry as undone: ${sanitizeErrorMessage(e?.message || e)}`);
       }
-      appendUndoEntry({
+      await appendUndoEntry({
         tool: "undo_operation",
         budget_id: bid,
         description: `Undid entry ${entryId} (${entry.tool}: ${entry.description})`,
@@ -2987,7 +3090,7 @@ registerTool(
       const bid = resolveBudgetId(budgetId);
       const reassigned = await reassignCategoryTransactions(bid, fromCategoryId, toCategoryId);
       if (reassigned.before_categories) {
-        journalTransactionUpdates(
+        await journalTransactionUpdates(
           "merge_category",
           bid,
           reassigned.before_categories.map((t) => ({ id: normalizeTransactionId(t.id), categoryId: toCategoryId })),
@@ -3022,7 +3125,7 @@ registerTool(
       const bid = resolveBudgetId(budgetId);
       const reassigned = await reassignCategoryTransactions(bid, categoryId, replacementCategoryId);
       if (reassigned.before_categories) {
-        journalTransactionUpdates(
+        await journalTransactionUpdates(
           "retire_category",
           bid,
           reassigned.before_categories.map((t) => ({ id: normalizeTransactionId(t.id), categoryId: replacementCategoryId })),
@@ -3071,7 +3174,7 @@ registerTool(
         }),
       });
       const created = formatTransaction(data.transaction);
-      appendUndoEntry({
+      await appendUndoEntry({
         tool: "prepare_split_for_matching",
         budget_id: bid,
         description: `Created mirror split ${created.id} for imported transaction ${transactionId}`,
@@ -3551,7 +3654,93 @@ for (const [slug, description, text] of YNAB_PROMPTS) {
   server.registerPrompt(slug, { title: slug.replace(/-/g, " "), description }, promptText(text));
 }
 
+return {
+  server,
+  internals: {
+    dollars,
+    milliunits,
+    round2,
+    dollarsMap,
+    resolveBudgetId,
+    normalizeTransactionId,
+    mapTransactionInput,
+    mapTransactionUpdate,
+    transactionUpdateMismatches,
+    updateFieldMatches,
+    parseSimpleTomlSections,
+    stripTomlComment,
+    buildYnabUrl,
+    buildTransactionListPath,
+    sanitizeErrorMessage,
+    withWriteGateDescription,
+    parseToolExecuteInput,
+    verifyBulkTransactionUpdates,
+    beforeFieldsForUpdate,
+    summarizeIncomeExpenseByMonth,
+    detectRecurringFromTransactions,
+    csvEscape,
+    buildTransactionsCsv,
+    readUndoJournal,
+    undoJournalPath,
+    ynabRequestsRemaining,
+    currentBudgetMonth,
+  },
+};
+
+}
+
+// --- Default stdio instance ---
+// Identical behavior to the pre-factory single-instance server: credentials,
+// budget, and write gating come from the Node config resolution above, and
+// the undo journal is the local ~/.ynab-mcp-undo.json file.
+
+const defaultInstance = createYnabServer({
+  getAccessToken: async () => API_TOKEN || null,
+  hasCredentials: !!API_TOKEN,
+  defaultBudgetId: DEFAULT_BUDGET_ID,
+  writesEnabled: runtimeConfig.values.YNAB_ALLOW_WRITES?.value === "1",
+  journal: IS_CLOUDFLARE_WORKERS ? null : createFsJournal(undoJournalPath()),
+  runtime: {
+    tokenSource: runtimeConfig.tokenSource,
+    detected_agent: runtimeConfig.detected_agent,
+    config_fallback_disabled: runtimeConfig.config_fallback_disabled,
+    sources_checked: runtimeConfig.sources_checked,
+    values: runtimeConfig.values,
+    tokenLookupError: tokenLookupError,
+  },
+});
+
+const server = defaultInstance.server;
+
 // --- Exports (unit tests) ---
+// Re-export the default instance's internals under the pre-factory names so
+// test/unit.test.mjs and downstream importers work unchanged.
+
+const {
+  dollars,
+  milliunits,
+  round2,
+  dollarsMap,
+  resolveBudgetId,
+  normalizeTransactionId,
+  mapTransactionInput,
+  mapTransactionUpdate,
+  transactionUpdateMismatches,
+  updateFieldMatches,
+  buildYnabUrl,
+  buildTransactionListPath,
+  sanitizeErrorMessage,
+  withWriteGateDescription,
+  parseToolExecuteInput,
+  verifyBulkTransactionUpdates,
+  beforeFieldsForUpdate,
+  summarizeIncomeExpenseByMonth,
+  detectRecurringFromTransactions,
+  csvEscape,
+  buildTransactionsCsv,
+  ynabRequestsRemaining,
+  currentBudgetMonth,
+} = defaultInstance.internals;
 
 export {
   dollars,
@@ -3581,23 +3770,28 @@ export {
   undoJournalPath,
   ynabRequestsRemaining,
   currentBudgetMonth,
+  createFsJournal,
 };
 
 // --- Start ---
+// In Cloudflare Workers there is no stdio to bind and process-level handlers
+// are meaningless; the Worker consumer calls createYnabServer itself.
 
-process.on("uncaughtException", (err) => {
-  console.error("Uncaught exception:", sanitizeErrorMessage(err?.stack || err));
-  process.exit(1);
-});
+if (!IS_CLOUDFLARE_WORKERS) {
+  process.on("uncaughtException", (err) => {
+    console.error("Uncaught exception:", sanitizeErrorMessage(err?.stack || err));
+    process.exit(1);
+  });
 
-process.on("unhandledRejection", (reason) => {
-  console.error("Unhandled promise rejection:", sanitizeErrorMessage(reason?.stack || reason));
-  process.exit(1);
-});
+  process.on("unhandledRejection", (reason) => {
+    console.error("Unhandled promise rejection:", sanitizeErrorMessage(reason?.stack || reason));
+    process.exit(1);
+  });
 
-// YNAB_MCP_NO_AUTOSTART=1 lets tests import this module for its exported
-// helpers without binding an MCP server to stdio.
-if (process.env.YNAB_MCP_NO_AUTOSTART !== "1") {
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
+  // YNAB_MCP_NO_AUTOSTART=1 lets tests import this module for its exported
+  // helpers without binding an MCP server to stdio.
+  if (process.env.YNAB_MCP_NO_AUTOSTART !== "1") {
+    const transport = new StdioServerTransport();
+    await server.connect(transport);
+  }
 }

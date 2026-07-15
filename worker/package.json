@@ -1,0 +1,20 @@
+{
+  "name": "ynab-mcp-connector",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Hosted OAuth remote MCP connector for YNAB on Cloudflare Workers (ynab.amesvt.com). Not affiliated with YNAB.",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "types": "wrangler types"
+  },
+  "dependencies": {
+    "@cloudflare/workers-oauth-provider": "~0.8.1",
+    "agents": "~0.17.4",
+    "hono": "^4.12.27"
+  },
+  "devDependencies": {
+    "wrangler": "^4.103.0"
+  }
+}

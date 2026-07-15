@@ -1,0 +1,5 @@
+# Copy to .dev.vars for `wrangler dev` (never commit .dev.vars).
+# Values live in 1Password (Development vault).
+YNAB_CLIENT_ID=your-ynab-oauth-client-id
+YNAB_CLIENT_SECRET=your-ynab-oauth-client-secret
+COOKIE_ENCRYPTION_KEY=any-random-32-plus-byte-string

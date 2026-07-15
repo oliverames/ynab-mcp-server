@@ -16,3 +16,8 @@ secrets.json
 
 # Session tooling artifacts
 .a5c/
+
+# Worker (hosted connector)
+worker/node_modules/
+worker/.dev.vars
+worker/.wrangler/

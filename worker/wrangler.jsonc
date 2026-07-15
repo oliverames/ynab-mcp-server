@@ -1,0 +1,32 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "ynab-mcp-connector",
+  "main": "src/index.js",
+  "compatibility_date": "2025-03-10",
+  "compatibility_flags": ["nodejs_compat"],
+  // Custom domain on the amesvt.com zone: Cloudflare creates the DNS record
+  // and certificate automatically at deploy time.
+  "routes": [{ "pattern": "ynab.amesvt.com", "custom_domain": true }],
+  "kv_namespaces": [
+    // OAuthProvider grant/client/token storage (props encrypted; tokens hashed),
+    // plus this connector's YNAB token records, OAuth state, and undo journals.
+    // The id is filled in after `wrangler kv namespace create OAUTH_KV`.
+    { "binding": "OAUTH_KV", "id": "TO_BE_CREATED" }
+  ],
+  "durable_objects": {
+    "bindings": [{ "name": "MCP_OBJECT", "class_name": "YnabMCP" }]
+  },
+  "migrations": [
+    // SQLite-backed DO class — required for McpAgent and allowed on the free plan.
+    { "tag": "v1", "new_sqlite_classes": ["YnabMCP"] }
+  ],
+  "vars": {
+    // Never let the shared stdio module autostart or read local config in the Worker.
+    "YNAB_MCP_NO_AUTOSTART": "1",
+    "YNAB_DISABLE_AGENT_CONFIG_FALLBACK": "1"
+  }
+  // Secrets (set with `wrangler secret put`, never in this file):
+  //   YNAB_CLIENT_ID          — YNAB OAuth application client id
+  //   YNAB_CLIENT_SECRET      — YNAB OAuth application secret
+  //   COOKIE_ENCRYPTION_KEY   — random 32+ byte key for signing consent/state cookies
+}
