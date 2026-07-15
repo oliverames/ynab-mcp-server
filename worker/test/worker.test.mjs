@@ -295,7 +295,7 @@ test("YNAB user lookup rejects a successful response without a user id", async (
   const originalFetch = globalThis.fetch;
   t.after(() => { globalThis.fetch = originalFetch; });
   globalThis.fetch = async (_url, init) => {
-    assert.equal(init.redirect, "error");
+    assert.equal(init.redirect, "manual");
     return Response.json({ data: { user: {} } });
   };
   await assert.rejects(fetchYnabUserId("token"), /missing a user id/i);
@@ -305,7 +305,7 @@ test("refresh keeps the prior rotating token when YNAB omits a replacement", asy
   const originalFetch = globalThis.fetch;
   t.after(() => { globalThis.fetch = originalFetch; });
   globalThis.fetch = async (_url, init) => {
-    assert.equal(init.redirect, "error");
+    assert.equal(init.redirect, "manual");
     return Response.json({ access_token: "new-access", expires_in: 7200 });
   };
 
@@ -315,6 +315,27 @@ test("refresh keeps the prior rotating token when YNAB omits a replacement", asy
   }, "existing-refresh");
   assert.equal(refreshed.accessToken, "new-access");
   assert.equal(refreshed.refreshToken, "existing-refresh");
+});
+
+test("YNAB requests reject manual redirect responses without following them", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  let requests = 0;
+  globalThis.fetch = async (_url, init) => {
+    requests += 1;
+    assert.equal(init.redirect, "manual");
+    return new Response(null, {
+      status: 302,
+      headers: { Location: "https://attacker.example/credential-capture" },
+    });
+  };
+
+  await assert.rejects(refreshTokens({
+    YNAB_CLIENT_ID: "client",
+    YNAB_CLIENT_SECRET: "secret",
+  }, "refresh-token"), /unexpected redirect/i);
+  await assert.rejects(fetchYnabUserId("access-token"), /unexpected redirect/i);
+  assert.equal(requests, 2);
 });
 
 test("all connector grants are revoked across pagination", async () => {
@@ -696,7 +717,14 @@ test("YNAB callback requires a final same-origin confirmation before creating a 
   };
   const originalFetch = globalThis.fetch;
   t.after(() => { globalThis.fetch = originalFetch; });
-  globalThis.fetch = async (url) => {
+  const upstreamRequests = [];
+  globalThis.fetch = async (url, init = {}) => {
+    // Simulate the Workers fetch validation that caused the production callback
+    // failure: only the platform-supported redirect modes may reach upstream.
+    if (init.redirect !== "follow" && init.redirect !== "manual") {
+      throw new TypeError(`Invalid redirect value: ${init.redirect}`);
+    }
+    upstreamRequests.push({ url: String(url), redirect: init.redirect });
     if (String(url) === "https://app.ynab.com/oauth/token") {
       return Response.json({
         access_token: "pending-access-token",
@@ -732,6 +760,10 @@ test("YNAB callback requires a final same-origin confirmation before creating a 
   const callbackBody = await callback.text();
   assert.match(callbackBody, /Attacker Controlled Client/);
   assert.match(callbackBody, /Read-only access/);
+  assert.deepEqual(upstreamRequests, [
+    { url: "https://app.ynab.com/oauth/token", redirect: "manual" },
+    { url: "https://api.ynab.com/v1/user", redirect: "manual" },
+  ]);
   assert.equal(completed, 0);
   assert.equal(await kv.get(tokenRecordKey("ynab-user-1")), null);
   assert.doesNotMatch(JSON.stringify([...transient.records.values()]), /pending-access-token|pending-refresh-token/);

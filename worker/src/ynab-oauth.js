@@ -11,6 +11,16 @@ const YNAB_API_BASE = "https://api.ynab.com/v1";
 // Refresh when within this window of expiry (docs/hosted-oauth-connector.md).
 const REFRESH_SAFETY_WINDOW_MS = 60000;
 
+function assertNoUpstreamRedirect(response, endpointName) {
+  if (
+    response.redirected
+    || response.type === "opaqueredirect"
+    || (response.status >= 300 && response.status < 400)
+  ) {
+    throw new Error(`${endpointName} returned an unexpected redirect`);
+  }
+}
+
 export function tokenRecordKey(ynabUserId) {
   return `ynab_token:${ynabUserId}`;
 }
@@ -130,8 +140,12 @@ async function ynabTokenRequest(env, params) {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body,
-    redirect: "error",
+    // Workers supports "follow" and "manual", but not the browser-standard
+    // "error" mode. Keep OAuth credentials pinned to the exact endpoint by
+    // returning redirect responses to this code and rejecting them below.
+    redirect: "manual",
   });
+  assertNoUpstreamRedirect(res, "YNAB token endpoint");
   if (!res.ok) {
     // Never surface response bodies here: they can echo request parameters.
     throw new Error(`YNAB token endpoint returned HTTP ${res.status}`);
@@ -170,8 +184,9 @@ export function refreshTokens(env, refreshToken) {
 export async function fetchYnabUserId(accessToken) {
   const res = await fetch(`${YNAB_API_BASE}/user`, {
     headers: { Authorization: `Bearer ${accessToken}` },
-    redirect: "error",
+    redirect: "manual",
   });
+  assertNoUpstreamRedirect(res, "YNAB /user");
   if (!res.ok) throw new Error(`YNAB /user returned HTTP ${res.status}`);
   const json = await res.json();
   const userId = json?.data?.user?.id;
