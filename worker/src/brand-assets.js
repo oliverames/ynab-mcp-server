@@ -2,8 +2,13 @@ import {
   WORKS_WITH_YNAB_PNG,
   WORKS_WITH_YNAB_PNG_SHA256,
 } from "./brand-assets-png.js";
+import {
+  YNAB_APP_ICON_PNG,
+  YNAB_APP_ICON_PNG_SHA256,
+} from "./ynab-app-icon-png.js";
 
 export { WORKS_WITH_YNAB_PNG, WORKS_WITH_YNAB_PNG_SHA256 };
+export { YNAB_APP_ICON_PNG, YNAB_APP_ICON_PNG_SHA256 };
 
 // The YNAB API Terms expressly permit integrations to use this exact
 // "Works with YNAB" asset. Keep the decoded SVG bytes unchanged.
@@ -16,12 +21,13 @@ export const WORKS_WITH_YNAB_SVG = "<svg width=\"196\" height=\"78\" viewBox=\"0
 
 export const CONNECTOR_ORIGIN = "https://ynab.amesvt.com";
 export const CONNECTOR_MCP_URL = `${CONNECTOR_ORIGIN}/mcp`;
-export const CONNECTOR_ICON_PNG_PATH = "/assets/works-with-ynab.png";
+export const YNAB_APP_ICON_LISTING_URL =
+  "https://apps.apple.com/us/app/ynab/id1010865877";
+export const YNAB_APP_ICON_SOURCE_URL =
+  "https://is1-ssl.mzstatic.com/image/thumb/Purple221/v4/71/e6/94/71e694ee-3cf3-44f9-bdcd-d399806ed040/AppIcon-0-0-1x_U007epad-0-1-sRGB-85-220.png/1024x1024bb.png";
+export const CONNECTOR_ICON_PNG_PATH = "/assets/ynab-app-icon.png";
 export const CONNECTOR_ICON_PNG_URL =
   `${CONNECTOR_ORIGIN}${CONNECTOR_ICON_PNG_PATH}`;
-export const CONNECTOR_ICON_SVG_PATH = "/assets/works-with-ynab.svg";
-export const CONNECTOR_ICON_SVG_URL =
-  `${CONNECTOR_ORIGIN}${CONNECTOR_ICON_SVG_PATH}`;
 
 export const REMOTE_SERVER_INFO = {
   name: "mcp-server-for-ynab-remote",
@@ -33,12 +39,7 @@ export const REMOTE_SERVER_INFO = {
     {
       src: CONNECTOR_ICON_PNG_URL,
       mimeType: "image/png",
-      sizes: ["196x78"],
-    },
-    {
-      src: CONNECTOR_ICON_SVG_URL,
-      mimeType: "image/svg+xml",
-      sizes: ["any"],
+      sizes: ["1024x1024"],
     },
   ],
   websiteUrl: CONNECTOR_ORIGIN,

@@ -21,6 +21,8 @@ import {
 } from "./ynab-oauth.js";
 import { putTransientState, consumeTransientState } from "./transient-state.js";
 import {
+  YNAB_APP_ICON_PNG,
+  YNAB_APP_ICON_PNG_SHA256,
   WORKS_WITH_YNAB_PNG,
   WORKS_WITH_YNAB_PNG_SHA256,
   WORKS_WITH_YNAB_SVG,
@@ -137,15 +139,20 @@ app.get("/assets/works-with-ynab.svg", (c) => worksWithYnabAsset(c, {
   contentType: "image/svg+xml; charset=utf-8",
   sha256: WORKS_WITH_YNAB_SVG_SHA256,
 }));
-app.get("/favicon.ico", (c) => worksWithYnabAsset(c, {
-  body: WORKS_WITH_YNAB_PNG,
+app.get("/assets/ynab-app-icon.png", (c) => worksWithYnabAsset(c, {
+  body: YNAB_APP_ICON_PNG,
   contentType: "image/png",
-  sha256: WORKS_WITH_YNAB_PNG_SHA256,
+  sha256: YNAB_APP_ICON_PNG_SHA256,
+}));
+app.get("/favicon.ico", (c) => worksWithYnabAsset(c, {
+  body: YNAB_APP_ICON_PNG,
+  contentType: "image/png",
+  sha256: YNAB_APP_ICON_PNG_SHA256,
 }));
 app.get("/favicon.png", (c) => worksWithYnabAsset(c, {
-  body: WORKS_WITH_YNAB_PNG,
+  body: YNAB_APP_ICON_PNG,
   contentType: "image/png",
-  sha256: WORKS_WITH_YNAB_PNG_SHA256,
+  sha256: YNAB_APP_ICON_PNG_SHA256,
 }));
 app.get("/favicon.svg", (c) => worksWithYnabAsset(c, {
   body: WORKS_WITH_YNAB_SVG,

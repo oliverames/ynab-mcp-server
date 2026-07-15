@@ -19,12 +19,11 @@ function layout(title, body) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${title}</title>
-<link rel="icon" type="image/svg+xml" href="/favicon.svg">
-<link rel="alternate icon" type="image/png" href="/favicon.png">
-<meta property="og:image" content="https://ynab.amesvt.com/assets/works-with-ynab.png">
+<link rel="icon" type="image/png" sizes="1024x1024" href="/assets/ynab-app-icon.png">
+<meta property="og:image" content="https://ynab.amesvt.com/assets/ynab-app-icon.png">
 <meta property="og:image:type" content="image/png">
-<meta property="og:image:width" content="196">
-<meta property="og:image:height" content="78">
+<meta property="og:image:width" content="1024">
+<meta property="og:image:height" content="1024">
 <style>
   body { font-family: -apple-system, system-ui, sans-serif; max-width: 44rem; margin: 3rem auto; padding: 0 1rem 3rem; line-height: 1.55; color: #1c1c1c; }
   h1 { font-size: 1.5rem; } code { background: #f4f4f4; padding: .1em .35em; border-radius: 4px; }

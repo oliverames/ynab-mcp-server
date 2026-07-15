@@ -6,6 +6,8 @@ import {
   CONNECTOR_MCP_URL,
   CONNECTOR_RESOURCE_METADATA,
   REMOTE_SERVER_INFO,
+  YNAB_APP_ICON_PNG_SHA256,
+  YNAB_APP_ICON_SOURCE_URL,
   WORKS_WITH_YNAB_PNG_SHA256,
   WORKS_WITH_YNAB_SOURCE_URL,
   WORKS_WITH_YNAB_SVG_SHA256,
@@ -109,7 +111,12 @@ function sameOriginNavigationHeaders({ origin } = {}) {
   return headers;
 }
 
-test("hosted connector publishes the permitted Works with YNAB mark", async () => {
+test("hosted connector separates the requested app icon from the permitted page mark", async () => {
+  assert.equal(
+    YNAB_APP_ICON_SOURCE_URL,
+    "https://is1-ssl.mzstatic.com/image/thumb/Purple221/v4/71/e6/94/71e694ee-3cf3-44f9-bdcd-d399806ed040/AppIcon-0-0-1x_U007epad-0-1-sRGB-85-220.png/1024x1024bb.png"
+  );
+  assert.equal(YNAB_APP_ICON_PNG_SHA256, "b1b3180d79d59548fea1ddff1b58622ce66c3ffd1951d416ab4f5d9b63324e0a");
   assert.equal(WORKS_WITH_YNAB_SOURCE_URL, "https://api.ynab.com/papi/works_with_ynab.svg");
   assert.deepEqual(CONNECTOR_RESOURCE_METADATA, {
     resource: CONNECTOR_MCP_URL,
@@ -120,21 +127,18 @@ test("hosted connector publishes the permitted Works with YNAB mark", async () =
   });
   assert.deepEqual(REMOTE_SERVER_INFO.icons, [
     {
-      src: "https://ynab.amesvt.com/assets/works-with-ynab.png",
+      src: "https://ynab.amesvt.com/assets/ynab-app-icon.png",
       mimeType: "image/png",
-      sizes: ["196x78"],
-    },
-    {
-      src: "https://ynab.amesvt.com/assets/works-with-ynab.svg",
-      mimeType: "image/svg+xml",
-      sizes: ["any"],
+      sizes: ["1024x1024"],
     },
   ]);
 
   const assets = [
     ["/assets/works-with-ynab.png", "image/png", WORKS_WITH_YNAB_PNG_SHA256],
     ["/assets/works-with-ynab.svg", "image/svg+xml", WORKS_WITH_YNAB_SVG_SHA256],
-    ["/favicon.ico", "image/png", WORKS_WITH_YNAB_PNG_SHA256],
+    ["/assets/ynab-app-icon.png", "image/png", YNAB_APP_ICON_PNG_SHA256],
+    ["/favicon.ico", "image/png", YNAB_APP_ICON_PNG_SHA256],
+    ["/favicon.png", "image/png", YNAB_APP_ICON_PNG_SHA256],
   ];
   for (const [path, contentType, expectedSha256] of assets) {
     const response = await YnabHandler.request(`https://ynab.amesvt.com${path}`);
@@ -159,9 +163,12 @@ test("hosted connector publishes the permitted Works with YNAB mark", async () =
 test("landing page advertises the connector icon", async () => {
   const response = await YnabHandler.request("https://ynab.amesvt.com/");
   const body = await response.text();
-  assert.match(body, /<link rel="icon" type="image\/svg\+xml" href="\/favicon\.svg">/);
-  assert.match(body, /<link rel="alternate icon" type="image\/png" href="\/favicon\.png">/);
-  assert.match(body, /<meta property="og:image" content="https:\/\/ynab\.amesvt\.com\/assets\/works-with-ynab\.png">/);
+  assert.match(body, /<link rel="icon" type="image\/png" sizes="1024x1024" href="\/assets\/ynab-app-icon\.png">/);
+  assert.doesNotMatch(body, /rel="icon"[^>]+favicon\.svg/);
+  assert.match(body, /<meta property="og:image" content="https:\/\/ynab\.amesvt\.com\/assets\/ynab-app-icon\.png">/);
+  assert.match(body, /<meta property="og:image:width" content="1024">/);
+  assert.match(body, /<meta property="og:image:height" content="1024">/);
+  assert.match(body, /<img class="brand" src="\/assets\/works-with-ynab\.svg"/);
   assert.match(response.headers.get("content-security-policy") ?? "", /img-src 'self'/);
   assert.equal(response.headers.get("referrer-policy"), "same-origin");
 });
