@@ -1040,6 +1040,46 @@ const server = new McpServer(serverInfo);
 const registeredTools = new Map();
 const toolCatalog = new Map();
 
+function humanizeToolName(name) {
+  return name
+    .split("_")
+    .map((part) => part.toLowerCase() === "ynab"
+      ? "YNAB"
+      : `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
+    .join(" ");
+}
+
+function completeToolConfig(name, config = {}) {
+  const title = config.title ?? humanizeToolName(name);
+  return {
+    ...config,
+    title,
+    inputSchema: config.inputSchema ?? {},
+    outputSchema: config.outputSchema ?? {
+      result: z.unknown().describe(`Structured result returned by ${title}.`),
+    },
+  };
+}
+
+function resultValueFromContent(content = []) {
+  const text = content.find((item) => item?.type === "text" && typeof item.text === "string")?.text;
+  if (text === undefined) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}
+
+async function withStructuredContent(handler, args, extra) {
+  const result = await handler(args, extra);
+  if (!result || result.isError || result.structuredContent) return result;
+  return {
+    ...result,
+    structuredContent: { result: resultValueFromContent(result.content) },
+  };
+}
+
 // Validate executor input against the target tool's schema. Direct MCP calls
 // are validated by the SDK; the ynab_tool_execute / ynab_write_tool_execute
 // passthroughs would otherwise hand raw JSON to handlers unchecked.
@@ -1057,10 +1097,11 @@ function parseToolExecuteInput(toolName, input) {
 }
 
 function registerTool(name, config, handler) {
-  const registration = server.registerTool(name, config, handler);
-  toolCatalog.set(name, { config });
+  const completedConfig = completeToolConfig(name, config);
+  const registration = server.registerTool(name, completedConfig, handler);
+  toolCatalog.set(name, { config: completedConfig });
   if (registration !== undefined) {
-    registeredTools.set(name, { config, handler });
+    registeredTools.set(name, { config: completedConfig, handler });
   }
   return registration;
 }
@@ -1082,6 +1123,7 @@ function listRegisteredYnabTools() {
         title: config?.title ?? name,
         description: isWrite ? withWriteGateDescription(config?.description ?? "") : config?.description ?? "",
         has_input_schema: !!config?.inputSchema,
+        has_output_schema: !!config?.outputSchema,
         is_write: isWrite,
         registered: registeredTools.has(name),
         status,
@@ -1183,9 +1225,10 @@ server.registerTool = (name, config, handler) => {
         ...config.annotations,
         readOnlyHint: true,
         destructiveHint: false,
-        openWorldHint: true,
+        idempotentHint: true,
+        openWorldHint: false,
       },
-    }, handler);
+    }, (args, extra) => withStructuredContent(handler, args, extra));
   }
 
   if (!writesEnabled()) {
@@ -1200,13 +1243,13 @@ server.registerTool = (name, config, handler) => {
       readOnlyHint: false,
       destructiveHint: writeMetadata.destructiveHint,
       idempotentHint: writeMetadata.idempotentHint,
-      openWorldHint: true,
+      openWorldHint: false,
     },
-  }, (args, extra) => {
+  }, async (args, extra) => {
     if (!writesEnabled()) {
       return writeDisabledResult(name);
     }
-    return handler(args, extra);
+    return withStructuredContent(handler, args, extra);
   });
 };
 

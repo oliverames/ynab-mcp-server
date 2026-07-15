@@ -99,6 +99,7 @@ async function callJsonTool(name, overrides = {}, input = {}) {
     return {
       isError: !!response.isError,
       payload: JSON.parse(textItem.text),
+      structuredContent: response.structuredContent,
     };
   });
 }
@@ -135,6 +136,14 @@ for (const tool of readOnlyTools) {
     true,
     `expected ${tool.name} to be annotated read-only`,
   );
+  assert.equal(
+    tool.annotations?.openWorldHint,
+    false,
+    `expected ${tool.name} to be annotated as bounded to the private YNAB account`,
+  );
+  assert.ok(tool.title, `expected ${tool.name} to expose a human-readable title`);
+  assert.ok(tool.inputSchema, `expected ${tool.name} to expose an input schema`);
+  assert.ok(tool.outputSchema, `expected ${tool.name} to expose an output schema`);
 }
 
 assert.ok(
@@ -154,6 +163,23 @@ for (const tool of writableTools.filter((tool) => writeTools.includes(tool.name)
     tool.annotations?.readOnlyHint,
     false,
     `expected ${tool.name} to be annotated writable`,
+  );
+  assert.equal(
+    tool.annotations?.openWorldHint,
+    false,
+    `expected ${tool.name} to be annotated as bounded to the private YNAB account`,
+  );
+  assert.ok(tool.title, `expected ${tool.name} to expose a human-readable title`);
+  assert.ok(tool.inputSchema, `expected ${tool.name} to expose an input schema`);
+  assert.ok(tool.outputSchema, `expected ${tool.name} to expose an output schema`);
+}
+
+{
+  const { payload, structuredContent } = await callJsonTool("ynab_auth_status");
+  assert.deepEqual(
+    structuredContent,
+    { result: payload },
+    "expected successful tools to return structured content matching the declared output schema",
   );
 }
 
