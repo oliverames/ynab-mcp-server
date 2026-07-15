@@ -38,7 +38,7 @@ function html(c, body, status = 200) {
   c.header("Cache-Control", "no-store");
   c.header("Content-Security-Policy", "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
   c.header("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
-  c.header("Referrer-Policy", "no-referrer");
+  c.header("Referrer-Policy", "same-origin");
   c.header("X-Content-Type-Options", "nosniff");
   c.header("X-Frame-Options", "DENY");
   return c.html(body, status);
@@ -87,7 +87,29 @@ function canonicalOrigin(c) {
 }
 
 function isSameOriginPost(c) {
-  return c.req.header("Origin") === canonicalOrigin(c);
+  const expectedOrigin = canonicalOrigin(c);
+  const origin = c.req.header("Origin");
+
+  // Browsers normally send Origin on form POSTs. If one is present, it is
+  // authoritative: never let other request metadata override a mismatch or
+  // an opaque `Origin: null` value.
+  if (origin !== undefined) return origin === expectedOrigin;
+
+  // Some embedded OAuth browsers omit Origin for a same-origin document
+  // navigation. Fetch Metadata headers are browser-controlled (page scripts
+  // cannot set them), and the same-origin referrer is emitted because these
+  // HTML responses use Referrer-Policy: same-origin.
+  if (c.req.header("Sec-Fetch-Site") !== "same-origin") return false;
+  if (c.req.header("Sec-Fetch-Mode") !== "navigate") return false;
+  if (c.req.header("Sec-Fetch-Dest") !== "document") return false;
+
+  const referer = c.req.header("Referer");
+  if (!referer) return false;
+  try {
+    return new URL(referer).origin === expectedOrigin;
+  } catch {
+    return false;
+  }
 }
 
 async function issueCsrf(c, cookieName = CSRF_COOKIE) {

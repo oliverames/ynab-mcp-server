@@ -96,6 +96,19 @@ function formHeaders(origin = CONNECTOR_MCP_URL.replace(/\/mcp$/, "")) {
   };
 }
 
+function sameOriginNavigationHeaders({ origin } = {}) {
+  const connectorOrigin = CONNECTOR_MCP_URL.replace(/\/mcp$/, "");
+  const headers = {
+    "Content-Type": "application/x-www-form-urlencoded",
+    "Sec-Fetch-Site": "same-origin",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Dest": "document",
+    Referer: `${connectorOrigin}/authorize`,
+  };
+  if (origin !== undefined) headers.Origin = origin;
+  return headers;
+}
+
 test("hosted connector publishes the permitted Works with YNAB mark", async () => {
   assert.equal(WORKS_WITH_YNAB_SOURCE_URL, "https://api.ynab.com/papi/works_with_ynab.svg");
   assert.deepEqual(CONNECTOR_RESOURCE_METADATA, {
@@ -150,6 +163,7 @@ test("landing page advertises the connector icon", async () => {
   assert.match(body, /<link rel="alternate icon" type="image\/png" href="\/favicon\.png">/);
   assert.match(body, /<meta property="og:image" content="https:\/\/ynab\.amesvt\.com\/assets\/works-with-ynab\.png">/);
   assert.match(response.headers.get("content-security-policy") ?? "", /img-src 'self'/);
+  assert.equal(response.headers.get("referrer-policy"), "same-origin");
 });
 
 test("MCP initialization exposes the connector name and icons", async () => {
@@ -542,9 +556,48 @@ test("authorization forms require the configured same origin without consuming c
   assert.equal(crossOrigin.status, 403);
   assert.match(await crossOrigin.text(), /same connector origin/i);
 
+  const forgedOrigin = await YnabHandler.request(`${origin}/authorize`, {
+    method: "POST",
+    headers: sameOriginNavigationHeaders({ origin: "https://attacker.example" }),
+    body: new URLSearchParams({ consent, csrf, writes: "1" }),
+  }, env);
+  assert.equal(forgedOrigin.status, 403);
+
+  const crossSiteWithoutOrigin = await YnabHandler.request(`${origin}/authorize`, {
+    method: "POST",
+    headers: {
+      ...sameOriginNavigationHeaders(),
+      "Sec-Fetch-Site": "cross-site",
+      Referer: "https://attacker.example/",
+    },
+    body: new URLSearchParams({ consent, csrf, writes: "1" }),
+  }, env);
+  assert.equal(crossSiteWithoutOrigin.status, 403);
+
+  const opaqueSiteWithoutOrigin = await YnabHandler.request(`${origin}/authorize`, {
+    method: "POST",
+    headers: {
+      ...sameOriginNavigationHeaders(),
+      "Sec-Fetch-Site": "none",
+    },
+    body: new URLSearchParams({ consent, csrf, writes: "1" }),
+  }, env);
+  assert.equal(opaqueSiteWithoutOrigin.status, 403);
+
+  const nonNavigationWithoutOrigin = await YnabHandler.request(`${origin}/authorize`, {
+    method: "POST",
+    headers: {
+      ...sameOriginNavigationHeaders(),
+      "Sec-Fetch-Mode": "cors",
+      "Sec-Fetch-Dest": "empty",
+    },
+    body: new URLSearchParams({ consent, csrf, writes: "1" }),
+  }, env);
+  assert.equal(nonNavigationWithoutOrigin.status, 403);
+
   const legitimate = await YnabHandler.request(`${origin}/authorize`, {
     method: "POST",
-    headers: formHeaders(),
+    headers: sameOriginNavigationHeaders(),
     body: new URLSearchParams({ consent, csrf }),
   }, env);
   assert.equal(legitimate.status, 302);
@@ -686,9 +739,47 @@ test("YNAB callback requires a final same-origin confirmation before creating a 
   assert.equal(crossOrigin.status, 403);
   assert.equal(completed, 0);
 
+  const forgedOrigin = await YnabHandler.request(`${origin}/callback`, {
+    method: "POST",
+    headers: {
+      ...sameOriginNavigationHeaders({ origin: "https://attacker.example" }),
+      Referer: `${origin}/callback`,
+    },
+    body: new URLSearchParams({ finalize, csrf }),
+  }, env);
+  assert.equal(forgedOrigin.status, 403);
+  assert.equal(completed, 0);
+
+  const crossSiteWithoutOrigin = await YnabHandler.request(`${origin}/callback`, {
+    method: "POST",
+    headers: {
+      ...sameOriginNavigationHeaders(),
+      "Sec-Fetch-Site": "cross-site",
+      Referer: "https://attacker.example/",
+    },
+    body: new URLSearchParams({ finalize, csrf }),
+  }, env);
+  assert.equal(crossSiteWithoutOrigin.status, 403);
+  assert.equal(completed, 0);
+
+  const opaqueSiteWithoutOrigin = await YnabHandler.request(`${origin}/callback`, {
+    method: "POST",
+    headers: {
+      ...sameOriginNavigationHeaders(),
+      "Sec-Fetch-Site": "none",
+      Referer: `${origin}/callback`,
+    },
+    body: new URLSearchParams({ finalize, csrf }),
+  }, env);
+  assert.equal(opaqueSiteWithoutOrigin.status, 403);
+  assert.equal(completed, 0);
+
   const finish = await YnabHandler.request(`${origin}/callback`, {
     method: "POST",
-    headers: formHeaders(),
+    headers: {
+      ...sameOriginNavigationHeaders(),
+      Referer: `${origin}/callback`,
+    },
     body: new URLSearchParams({ finalize, csrf }),
     redirect: "manual",
   }, env);
