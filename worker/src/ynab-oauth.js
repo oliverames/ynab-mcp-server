@@ -51,6 +51,23 @@ export async function hmacSign(secret, text) {
   return base64url(new Uint8Array(sig));
 }
 
+export async function hmacVerify(secret, text, signature) {
+  if (!secret || typeof signature !== "string" || !signature) return false;
+  try {
+    const key = await crypto.subtle.importKey(
+      "raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["verify"]
+    );
+    return crypto.subtle.verify(
+      "HMAC",
+      key,
+      base64urlDecode(signature),
+      new TextEncoder().encode(text)
+    );
+  } catch {
+    return false;
+  }
+}
+
 async function dataEncryptionKey(secret) {
   if (!secret) throw new Error("DATA_ENCRYPTION_KEY is required");
   const keyMaterial = await crypto.subtle.digest(

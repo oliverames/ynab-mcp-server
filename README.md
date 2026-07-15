@@ -626,6 +626,12 @@ When the trailing-hour budget drops to 50 requests or fewer, tool responses appe
 
 The hosted OAuth connector runs on Cloudflare Workers at [`ynab.amesvt.com`](https://ynab.amesvt.com). Its implementation notes are in [worker/README.md](worker/README.md) and [docs/hosted-oauth-connector.md](docs/hosted-oauth-connector.md). For data handling details for the local package, see [docs/privacy.md](docs/privacy.md).
 
+The Cloudflare connector is separate from the private Glama deployment below.
+YNAB initially places OAuth applications in Restricted Mode: the owner is
+exempt, while the app may obtain at most 25 access tokens for other users before
+new authorizations are blocked. YNAB says removal review takes 2 to 4 weeks.
+No review or public directory submission is part of the current deployment.
+
 ### Glama Hosting
 
 The repo is ready for [Glama](https://glama.ai) MCP hosting: the root [`glama.json`](glama.json) claims the registry listing (per [Glama's glama.json spec](https://glama.ai/blog/2025-07-08-what-is-glamajson)), and the [`Dockerfile`](Dockerfile) is what Glama's GitHub integration builds. To deploy: Glama dashboard → MCP Hosting → deploy from GitHub → select this repo, then set environment variables `YNAB_API_TOKEN` (required), `YNAB_BUDGET_ID` (recommended), and `YNAB_DISABLE_AGENT_CONFIG_FALLBACK=1` (no agent config files exist in the container). Leave `YNAB_ALLOW_WRITES` unset until you have verified the deployment read-only, and keep the deployment **private** because its env vars hold your personal token. `YNAB_OP_PATH` is unsupported in hosted containers (no 1Password CLI); the server reports this explicitly and falls back to discovery-only mode rather than crashing. Glama wraps the stdio transport as a Streamable HTTP Gateway endpoint automatically.

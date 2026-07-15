@@ -85,8 +85,11 @@ include YNAB's required non-affiliation and trademark notice.
   credentials in this repository.
 - A final end-to-end test in Claude.ai that connects through OAuth, confirms the
   tool list, and runs representative read-only calls.
-- Confirmation that the current YNAB OAuth app's 25-user Restricted Mode is
-  acceptable for launch, or completion of YNAB's review to remove that limit.
+- A Restricted Mode rollout decision. YNAB exempts the application owner but
+  limits the app to 25 access tokens for other users, then prohibits new
+  authorizations. Its current documentation says review takes 2 to 4 weeks.
+  Do not submit that review or this directory listing without Oliver's explicit
+  approval.
 
 Anthropic's [submission guide](https://claude.com/docs/connectors/building/submission)
 was checked on July 15, 2026. It says the portal has a dedicated icon field and

@@ -29,6 +29,6 @@
   // Secrets (set with `wrangler secret put`, never in this file):
   //   YNAB_CLIENT_ID          — YNAB OAuth application client id
   //   YNAB_CLIENT_SECRET      — YNAB OAuth application secret
-  //   COOKIE_ENCRYPTION_KEY   — random 32+ byte key for signing consent/state cookies
+  //   COOKIE_ENCRYPTION_KEY   — random 32+ byte key for consent/state HMACs and deletion CSRF
   //   DATA_ENCRYPTION_KEY     — separate random 32+ byte key for YNAB tokens/journals
 }

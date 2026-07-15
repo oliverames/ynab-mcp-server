@@ -34,7 +34,7 @@ Required Worker values:
 |---|---|
 | `YNAB_CLIENT_ID` | YNAB OAuth application client ID (Worker secret). |
 | `YNAB_CLIENT_SECRET` | YNAB OAuth application secret (Worker secret). |
-| `COOKIE_ENCRYPTION_KEY` | HMAC key for consent and state cookies (Worker secret). |
+| `COOKIE_ENCRYPTION_KEY` | HMAC key for one-time consent and callback state, plus the deletion-form CSRF cookie (Worker secret). |
 | `DATA_ENCRYPTION_KEY` | AES-GCM key material for YNAB tokens and undo journals (Worker secret). |
 | `CONNECTOR_BASE_URL` | Public connector origin used to build the exact callback URI. |
 | `OAUTH_KV` | KV binding for connector grants, OAuth state, encrypted YNAB tokens, and encrypted undo journals. |
@@ -53,16 +53,22 @@ Carry the local safety model into the hosted connector:
 
 ## OAuth State Handling
 
-The authorization flow should bind state to both server-side storage and a browser cookie:
+Embedded OAuth browsers do not reliably preserve first-party cookies between
+the connector consent page and its form submission. The hosted authorization
+flow therefore keeps consent and callback state server-side:
 
-1. Generate a random OAuth `state`.
-2. Generate a PKCE verifier and `S256` challenge.
-3. Store `{ state, verifier, redirect_uri, client_id, scope }` with a 10-minute TTL.
-4. Set an HttpOnly, Secure, SameSite=Lax cookie containing a keyed HMAC of `state`.
-5. On `/callback`, require the query `state`, the stored state record, and the cookie HMAC to match.
-6. Delete the state record after first use.
+1. Generate separate 192-bit opaque values for the consent record, hidden CSRF token, and YNAB OAuth `state`.
+2. Store the parsed MCP authorization request with a keyed hash bound to the consent ID and hidden CSRF token. Use a 10-minute TTL.
+3. On consent submission, fetch and delete the record before validation, then verify the submitted hidden token with the stored keyed hash.
+4. Generate a PKCE verifier and `S256` challenge for YNAB.
+5. Store the MCP authorization request, verifier, access choice, and keyed state hash under the opaque OAuth state. Use a 10-minute TTL.
+6. On `/callback`, fetch and delete the state record before validation, then verify its keyed hash before exchanging the YNAB code.
 
-This prevents replay and cross-tab confusion while keeping the YNAB token exchange server-side.
+The one-time records prevent sequential replay and keep concurrent client flows
+separate without depending on browser cookies. Cloudflare KV does not provide a
+compare-and-swap primitive, so the design also relies on unguessable 192-bit
+record identifiers and the short TTL rather than claiming transactional
+consumption.
 
 ## Token Lifecycle
 

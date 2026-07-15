@@ -1,5 +1,17 @@
 # Worklog
 
+## 2026-07-15 - Embedded-browser OAuth no longer depends on cookies
+
+**What changed**: Replaced the hosted connector's consent and YNAB callback cookie bindings after live Mistral Work acceptance proved its embedded OAuth browser did not return the first-party cookie even on a fresh, single consent flow. Consent now uses a 192-bit opaque record ID and a separate 192-bit hidden CSRF token whose keyed hash is stored with the parsed MCP authorization request. The POST fetches and deletes that one-time record before validating the token. YNAB callback state is also 192-bit, HMAC-verified, tied to the original dynamic-client request and access choice, stored for 10 minutes, and deleted before callback validation. PKCE S256, the fixed callback URI, CSP `form-action 'self'`, read-only default, and encrypted YNAB tokens are unchanged.
+
+**Decisions made**: Kept the existing `COOKIE_ENCRYPTION_KEY` secret name to avoid an unnecessary credential migration, but it now signs server-side consent and state records as well as the separate deletion-form cookie. Cloudflare KV has no compare-and-swap operation, so the implementation does not claim atomic consumption; sequential replay is rejected, records have unguessable 192-bit identifiers, invalid submissions consume their record, and the TTL remains 10 minutes. Added no-cookie, replay, tamper, cross-consent, and overlapping-callback regressions. Restricted Mode is documented as a separate rollout constraint: YNAB exempts the app owner, permits 25 access tokens for other users, blocks new authorizations at the cap, and says removal review takes 2 to 4 weeks. No review form or public directory submission was made.
+
+**Left off at**: Deployment and signed-in client acceptance are pending the final release gates in this session.
+
+**Open questions**: Repeat signed-in read-only acceptance from fresh Claude.ai and Mistral Work connector flows after deployment. Write and undo acceptance still requires explicit approval for the exact financial operation.
+
+---
+
 ## 2026-07-15 - Concurrent OAuth tabs no longer overwrite security cookies
 
 **What changed**: Fixed the live Claude.ai and Mistral Work acceptance failure where a fresh consent form returned “Consent form expired or invalid” on its first submit. The connector used one origin-wide CSRF cookie and one origin-wide upstream OAuth state cookie. Opening authorization pages for two MCP clients at once made the later tab overwrite the earlier tab's cookie. Consent CSRF cookies are now namespaced by the opaque consent ID, and YNAB callback cookies are namespaced by the opaque OAuth state. Abandoned cookies retain the existing 10-minute expiry.
