@@ -18,4 +18,8 @@ export default new OAuthProvider({
   authorizeEndpoint: "/authorize",
   tokenEndpoint: "/token",
   clientRegistrationEndpoint: "/register",
+  scopesSupported: ["read", "write"],
+  // OAuth 2.1 clients used by Claude, ChatGPT, and Le Chat support S256.
+  // Do not advertise or accept unprotected plain PKCE challenges.
+  allowPlainPKCE: false,
 });

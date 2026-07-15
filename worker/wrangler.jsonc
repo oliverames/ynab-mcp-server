@@ -22,6 +22,7 @@
   ],
   "vars": {
     // Never let the shared stdio module autostart or read local config in the Worker.
+    "CONNECTOR_BASE_URL": "https://ynab.amesvt.com",
     "YNAB_MCP_NO_AUTOSTART": "1",
     "YNAB_DISABLE_AGENT_CONFIG_FALLBACK": "1"
   }
@@ -29,4 +30,5 @@
   //   YNAB_CLIENT_ID          — YNAB OAuth application client id
   //   YNAB_CLIENT_SECRET      — YNAB OAuth application secret
   //   COOKIE_ENCRYPTION_KEY   — random 32+ byte key for signing consent/state cookies
+  //   DATA_ENCRYPTION_KEY     — separate random 32+ byte key for YNAB tokens/journals
 }

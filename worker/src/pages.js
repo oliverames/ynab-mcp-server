@@ -3,6 +3,15 @@
 
 const NON_AFFILIATION = "MCP Server for YNAB is an independent open-source project by Oliver Ames. It is not an official YNAB product and is not affiliated with, sponsored by, or endorsed by YNAB (You Need A Budget, LLC).";
 
+export function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
 function layout(title, body) {
   return `<!doctype html>
 <html lang="en">
@@ -28,36 +37,40 @@ ${body}
 }
 
 export function landingPage() {
-  return layout("MCP Server for YNAB — Remote Connector", `
-<h1><span class="accent">MCP Server for YNAB</span> — remote connector</h1>
+  return layout("MCP Server for YNAB | Remote Connector", `
+<h1><span class="accent">MCP Server for YNAB</span>: remote connector</h1>
 <div class="card">
-<p>This is a remote <a href="https://modelcontextprotocol.io">Model Context Protocol</a> endpoint for YNAB budgets. Add it to an MCP-capable AI client and authorize with your own YNAB account — no personal access token to copy anywhere.</p>
+<p>This is a remote <a href="https://modelcontextprotocol.io">Model Context Protocol</a> endpoint for YNAB budgets. Add it to an MCP-capable AI client and authorize with your own YNAB account. There is no personal access token to copy anywhere.</p>
 <p><strong>Endpoint:</strong> <code>https://ynab.amesvt.com/mcp</code> (streamable HTTP; legacy SSE at <code>/sse</code>)</p>
 <p>Your AI client will walk you through YNAB's own sign-in and consent. You choose at consent time whether the connection can write to your budget or stay read-only.</p>
 <p class="muted">Source code, tool reference, and the local stdio version: <a href="https://github.com/oliverames/ynab-mcp-server">oliverames/ynab-mcp-server</a>.</p>
 </div>`);
 }
 
-export function consentPage({ clientName, redirectUri, encodedReqInfo, csrfToken }) {
-  return layout("Authorize access — MCP Server for YNAB", `
-<h1>Authorize <span class="accent">${clientName}</span></h1>
+export function consentPage({ clientName, redirectUri, consentId, csrfToken }) {
+  const safeClientName = escapeHtml(clientName);
+  const safeRedirectUri = escapeHtml(redirectUri);
+  const safeConsentId = escapeHtml(consentId);
+  const safeCsrfToken = escapeHtml(csrfToken);
+  return layout("Authorize access | MCP Server for YNAB", `
+<h1>Authorize <span class="accent">${safeClientName}</span></h1>
 <div class="card">
-<p>The MCP client <code>${clientName}</code> (redirect: <code>${redirectUri}</code>) is asking to access your YNAB budget through this connector.</p>
+<p>The MCP client <code>${safeClientName}</code> (redirect: <code>${safeRedirectUri}</code>) is asking to access your YNAB budget through this connector.</p>
 <p>Continuing sends you to <strong>YNAB's own sign-in page</strong>. Your YNAB credentials and tokens stay server-side; the AI client only ever receives this connector's own token.</p>
 <form method="post" action="/authorize">
-  <input type="hidden" name="req" value="${encodedReqInfo}">
-  <input type="hidden" name="csrf" value="${csrfToken}">
-  <label><input type="checkbox" name="writes" value="1"> Allow <strong>write access</strong> (create, edit, approve, and delete transactions — destructive tools still require per-call confirmation). Leave unchecked for read-only.</label>
+  <input type="hidden" name="consent" value="${safeConsentId}">
+  <input type="hidden" name="csrf" value="${safeCsrfToken}">
+  <label><input type="checkbox" name="writes" value="1"> Allow <strong>write access</strong> (create, edit, approve, and delete transactions; destructive tools still require per-call confirmation). Leave unchecked for read-only.</label>
   <button type="submit">Continue to YNAB</button>
 </form>
 </div>`);
 }
 
 export function privacyPage() {
-  return layout("Privacy — MCP Server for YNAB", `
+  return layout("Privacy | MCP Server for YNAB", `
 <h1>Privacy policy</h1>
 <div class="card">
-<p><strong>What this connector stores:</strong> your YNAB OAuth access and refresh tokens (encrypted at rest), your YNAB user ID, your read-only/write choice, and an undo journal of writes this connector performed (transaction IDs and the changed field values needed to reverse them). Nothing else is retained.</p>
+<p><strong>What this connector stores:</strong> your YNAB OAuth access and refresh tokens, your YNAB user ID, your read-only/write choice, and an undo journal of writes this connector performed (transaction IDs and the changed field values needed to reverse them). Tokens and undo entries are encrypted with AES-GCM before they are written to Cloudflare KV.</p>
 <p><strong>What it never does:</strong> store your YNAB password (authentication happens on ynab.com), sell or share data, use budget data for anything other than serving your own MCP requests, or send data to any host other than <code>api.ynab.com</code>.</p>
 <p><strong>Transport:</strong> budget data flows from YNAB through this connector to your MCP client only during your requests; it is not logged or persisted beyond the undo journal described above.</p>
 <p><strong>Deletion:</strong> use <a href="/delete">the deletion page</a> to revoke this connector's grants and erase stored tokens and journal entries, and additionally revoke the application from your YNAB account settings.</p>
@@ -65,12 +78,13 @@ export function privacyPage() {
 </div>`);
 }
 
-export function deletePage() {
-  return layout("Delete my data — MCP Server for YNAB", `
+export function deletePage({ csrfToken } = {}) {
+  return layout("Delete my data | MCP Server for YNAB", `
 <h1>Delete my data</h1>
 <div class="card">
 <p>To erase everything this connector stores about you (tokens, undo journal, authorization grants), verify ownership by signing in with YNAB once more:</p>
 <form method="post" action="/delete">
+  <input type="hidden" name="csrf" value="${escapeHtml(csrfToken)}">
   <button type="submit">Sign in with YNAB and delete my data</button>
 </form>
 <p>Also revoke the application in YNAB: <strong>Account Settings → Apps / Developer Settings</strong> → revoke “MCP Server for YNAB”.</p>
@@ -78,7 +92,7 @@ export function deletePage() {
 }
 
 export function deletedPage() {
-  return layout("Data deleted — MCP Server for YNAB", `
+  return layout("Data deleted | MCP Server for YNAB", `
 <h1>Data deleted</h1>
 <div class="card">
 <p>All stored tokens, undo journal entries, and authorization grants for your YNAB user have been removed. Remember to also revoke the application in YNAB's Account Settings.</p>
@@ -86,7 +100,7 @@ export function deletedPage() {
 }
 
 export function errorPage(message) {
-  return layout("Error — MCP Server for YNAB", `
+  return layout("Error | MCP Server for YNAB", `
 <h1>Something went wrong</h1>
-<div class="card"><p>${message}</p><p><a href="/">Back to the landing page</a></p></div>`);
+<div class="card"><p>${escapeHtml(message)}</p><p><a href="/">Back to the landing page</a></p></div>`);
 }

@@ -34,6 +34,7 @@ function assert(condition, message) {
 const pkg = readJson("package.json");
 const lock = readJson("package-lock.json");
 const indexJs = readText("index.js");
+const workerMcpJs = readText("worker/src/ynab-mcp.js");
 const readme = readText("README.md");
 const version = pkg.version;
 const pluginName = "ynab-mcp-server";
@@ -43,6 +44,7 @@ const packageInstallTarget = `${pkg.name}@latest`;
 assert(lock.version === version, `package-lock root version matches ${version}`);
 assert(lock.packages?.[""]?.version === version, `package-lock package version matches ${version}`);
 assert(indexJs.includes(`version: "${version}"`), `index.js McpServer version matches ${version}`);
+assert(workerMcpJs.includes(`version: "${version}"`), `Worker McpServer version matches ${version}`);
 
 const registeredToolNames = [...indexJs.matchAll(/^\s*registerTool\(\s*\n\s*"([^"]+)"/gm)]
   .map((match) => match[1]);

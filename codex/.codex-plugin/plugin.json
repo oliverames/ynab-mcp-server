@@ -1,6 +1,6 @@
 {
   "name": "ynab-mcp-server",
-  "version": "5.0.0",
+  "version": "5.1.0",
   "description": "YNAB MCP connector for budgets, transactions, categories, scheduled transactions, accounts, months, payees, and budget review workflows.",
   "author": {
     "name": "Oliver Ames",

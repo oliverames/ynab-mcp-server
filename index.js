@@ -452,7 +452,7 @@ const {
   writesEnabled: allowWrites = false,
   journal = null,
   runtime = {},
-  serverInfo = { name: "mcp-server-for-ynab", version: "5.0.0" },
+  serverInfo = { name: "mcp-server-for-ynab", version: "5.1.0" },
 } = options;
 
 // Most-recently-seen access token, kept only so sanitizeErrorMessage can
@@ -896,12 +896,13 @@ async function secureFetch(input, init = {}) {
   // ynabFetch: the injected token replaces whatever Authorization header the
   // ynab SDK set from its construction-time placeholder token.
   const accessToken = getAccessToken ? await getAccessToken() : null;
-  if (accessToken) {
-    currentToken = accessToken;
-    const headers = new Headers(init.headers || {});
-    headers.set("Authorization", `Bearer ${accessToken}`);
-    init = { ...init, headers };
+  if (!accessToken) {
+    throw new Error("YNAB access token is unavailable or expired. Reconnect this MCP server to YNAB and try again.");
   }
+  currentToken = accessToken;
+  const headers = new Headers(init.headers || {});
+  headers.set("Authorization", `Bearer ${accessToken}`);
+  init = { ...init, headers };
 
   const maxRetries = Math.floor(envNumber("YNAB_HTTP_RETRIES", 2));
   for (let attempt = 0; ; attempt += 1) {

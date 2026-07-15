@@ -31,6 +31,13 @@ export function base64url(bytes) {
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
+function base64urlDecode(value) {
+  const base64 = value.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = base64.padEnd(Math.ceil(base64.length / 4) * 4, "=");
+  const binary = atob(padded);
+  return Uint8Array.from(binary, (char) => char.charCodeAt(0));
+}
+
 export async function sha256base64url(text) {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
   return base64url(new Uint8Array(digest));
@@ -42,6 +49,45 @@ export async function hmacSign(secret, text) {
   );
   const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(text));
   return base64url(new Uint8Array(sig));
+}
+
+async function dataEncryptionKey(secret) {
+  if (!secret) throw new Error("DATA_ENCRYPTION_KEY is required");
+  const keyMaterial = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(`ynab-mcp-data-v1:${secret}`)
+  );
+  return crypto.subtle.importKey("raw", keyMaterial, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+}
+
+async function encryptStoredJson(secret, storageKey, value) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const plaintext = new TextEncoder().encode(JSON.stringify(value));
+  const ciphertext = await crypto.subtle.encrypt({
+    name: "AES-GCM",
+    iv,
+    additionalData: new TextEncoder().encode(storageKey),
+  }, await dataEncryptionKey(secret), plaintext);
+  return JSON.stringify({
+    v: 1,
+    iv: base64url(iv),
+    ciphertext: base64url(new Uint8Array(ciphertext)),
+  });
+}
+
+async function decryptStoredJson(secret, storageKey, raw) {
+  const parsed = JSON.parse(raw);
+  // One-time migration for values written by the initial deployment before
+  // application-layer encryption was added. The next read rewrites them.
+  if (parsed?.v !== 1 || !parsed.iv || !parsed.ciphertext) {
+    return { value: parsed, legacy: true };
+  }
+  const plaintext = await crypto.subtle.decrypt({
+    name: "AES-GCM",
+    iv: base64urlDecode(parsed.iv),
+    additionalData: new TextEncoder().encode(storageKey),
+  }, await dataEncryptionKey(secret), base64urlDecode(parsed.ciphertext));
+  return { value: JSON.parse(new TextDecoder().decode(plaintext)), legacy: false };
 }
 
 export function buildYnabAuthorizeUrl({ clientId, redirectUri, state, codeChallenge, readOnly }) {
@@ -67,12 +113,16 @@ async function ynabTokenRequest(env, params) {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body,
+    redirect: "error",
   });
   if (!res.ok) {
     // Never surface response bodies here: they can echo request parameters.
     throw new Error(`YNAB token endpoint returned HTTP ${res.status}`);
   }
   const json = await res.json();
+  if (typeof json.access_token !== "string" || !json.access_token) {
+    throw new Error("YNAB token endpoint response was missing an access token");
+  }
   return {
     accessToken: json.access_token,
     refreshToken: json.refresh_token ?? null,
@@ -91,25 +141,43 @@ export function exchangeCodeForTokens(env, { code, redirectUri, codeVerifier }) 
 }
 
 export function refreshTokens(env, refreshToken) {
-  return ynabTokenRequest(env, { grant_type: "refresh_token", refresh_token: refreshToken });
+  return ynabTokenRequest(env, { grant_type: "refresh_token", refresh_token: refreshToken })
+    .then((record) => ({
+      ...record,
+      // OAuth permits a refresh response to omit a replacement token. Keep
+      // the current one unless YNAB explicitly rotates it.
+      refreshToken: record.refreshToken || refreshToken,
+    }));
 }
 
 export async function fetchYnabUserId(accessToken) {
   const res = await fetch(`${YNAB_API_BASE}/user`, {
     headers: { Authorization: `Bearer ${accessToken}` },
+    redirect: "error",
   });
   if (!res.ok) throw new Error(`YNAB /user returned HTTP ${res.status}`);
   const json = await res.json();
-  return json?.data?.user?.id;
+  const userId = json?.data?.user?.id;
+  if (typeof userId !== "string" || !userId) {
+    throw new Error("YNAB /user response was missing a user id");
+  }
+  return userId;
 }
 
-export async function saveTokenRecord(kv, ynabUserId, record) {
-  await kv.put(tokenRecordKey(ynabUserId), JSON.stringify(record));
+export async function saveTokenRecord(kv, ynabUserId, record, encryptionSecret) {
+  const key = tokenRecordKey(ynabUserId);
+  const encryptedRecord = await encryptStoredJson(encryptionSecret, key, record);
+  await kv.put(key, encryptedRecord);
+  return encryptedRecord;
 }
 
-export async function readTokenRecord(kv, ynabUserId) {
-  const raw = await kv.get(tokenRecordKey(ynabUserId));
-  return raw ? JSON.parse(raw) : null;
+export async function readTokenRecord(kv, ynabUserId, encryptionSecret) {
+  const key = tokenRecordKey(ynabUserId);
+  const raw = await kv.get(key);
+  if (!raw) return null;
+  const decoded = await decryptStoredJson(encryptionSecret, key, raw);
+  if (decoded.legacy) await saveTokenRecord(kv, ynabUserId, decoded.value, encryptionSecret);
+  return decoded.value;
 }
 
 // Return a currently-valid access token for the user, refreshing (and
@@ -117,7 +185,7 @@ export async function readTokenRecord(kv, ynabUserId) {
 // Returns null when no usable token exists — the shared tool layer then
 // answers with its structured missing-credentials result instead of crashing.
 export async function getFreshAccessToken(env, ynabUserId) {
-  const record = await readTokenRecord(env.OAUTH_KV, ynabUserId);
+  const record = await readTokenRecord(env.OAUTH_KV, ynabUserId, env.DATA_ENCRYPTION_KEY);
   if (!record?.accessToken) return null;
   if (Date.now() < record.expiresAt - REFRESH_SAFETY_WINDOW_MS) {
     return record.accessToken;
@@ -125,28 +193,43 @@ export async function getFreshAccessToken(env, ynabUserId) {
   if (!record.refreshToken) return null;
   try {
     const refreshed = await refreshTokens(env, record.refreshToken);
-    await saveTokenRecord(env.OAUTH_KV, ynabUserId, refreshed);
+    await saveTokenRecord(env.OAUTH_KV, ynabUserId, refreshed, env.DATA_ENCRYPTION_KEY);
     return refreshed.accessToken;
   } catch {
-    // Stale or already-rotated refresh token: require reauthorization
-    // rather than looping on a dead credential (doc: token lifecycle).
-    await env.OAUTH_KV.delete(tokenRecordKey(ynabUserId));
+    // Another MCP session may have refreshed the same rotating token first.
+    // Re-read before failing; never delete here because KV has no atomic
+    // compare-and-delete and doing so could erase the peer's fresh record.
+    const latest = await readTokenRecord(env.OAUTH_KV, ynabUserId, env.DATA_ENCRYPTION_KEY);
+    if (latest?.accessToken && (
+      latest.refreshToken !== record.refreshToken || latest.expiresAt > record.expiresAt
+    )) {
+      return latest.accessToken;
+    }
     return null;
   }
 }
 
 // KV-backed undo journal implementing the shared layer's async journal
 // interface ({ read, persist }); one record per YNAB user.
-export function createKvJournal(kv, ynabUserId) {
+export function createKvJournal(env, ynabUserId) {
   const key = undoJournalKey(ynabUserId);
   return {
     async read() {
-      const raw = await kv.get(key);
-      const parsed = raw ? JSON.parse(raw) : [];
-      return Array.isArray(parsed) ? parsed : [];
+      const raw = await env.OAUTH_KV.get(key);
+      if (!raw) return [];
+      const decoded = await decryptStoredJson(env.DATA_ENCRYPTION_KEY, key, raw);
+      const entries = Array.isArray(decoded.value) ? decoded.value : [];
+      if (decoded.legacy) await env.OAUTH_KV.put(
+        key,
+        await encryptStoredJson(env.DATA_ENCRYPTION_KEY, key, entries)
+      );
+      return entries;
     },
     async persist(entries) {
-      await kv.put(key, JSON.stringify(entries));
+      await env.OAUTH_KV.put(
+        key,
+        await encryptStoredJson(env.DATA_ENCRYPTION_KEY, key, entries)
+      );
     },
   };
 }

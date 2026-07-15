@@ -16,7 +16,7 @@ export class YnabMCP extends McpAgent {
       getAccessToken: () => getFreshAccessToken(this.env, ynabUserId),
       hasCredentials: true,
       writesEnabled: !!writesEnabled,
-      journal: createKvJournal(this.env.OAUTH_KV, ynabUserId),
+      journal: createKvJournal(this.env, ynabUserId),
       runtime: {
         tokenSource: { source: "ynab_oauth", source_label: "YNAB OAuth (hosted connector)" },
         detected_agent: "remote",

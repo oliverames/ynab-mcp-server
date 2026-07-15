@@ -12,16 +12,19 @@ Not affiliated with YNAB.
   grants live in KV with props encrypted and tokens stored hash-only.
 - [`McpAgent`](https://developers.cloudflare.com/agents/) (SQLite Durable Object)
   serves `/mcp` (streamable HTTP) and `/sse` (legacy). Each session builds the
-  full 58-tool surface via `createYnabServer()` from [`../index.js`](../index.js) —
+  full 58-tool surface via `createYnabServer()` from [`../index.js`](../index.js),
   tools, prompts, resources, host pinning, and `confirmed:true` gates are the
   exact code the local stdio server runs.
 - The consent page redirects to YNAB's own OAuth (PKCE S256, state bound to a
-  cookie hash, 10-minute TTL). Access tokens last 2 hours; refresh happens
+  keyed cookie HMAC, 10-minute TTL). Access tokens last 2 hours; refresh happens
   automatically inside a 60-second safety window; refresh tokens rotate and are
   persisted per YNAB user in KV. Users choose read-only vs write access at
   consent (`read-only` scope vs no scope).
-- The undo journal is KV-backed per YNAB user; `/delete` proves identity with a
-  fresh YNAB sign-in, then purges tokens, journal, and grants.
+- YNAB tokens and undo journals are encrypted with AES-GCM before they enter KV.
+  The encryption key is separate from the cookie-signing key.
+- The undo journal is scoped to each YNAB user; `/delete` proves identity with a
+  fresh YNAB sign-in, then purges tokens, journal entries, and every paginated
+  connector grant.
 
 ## Deploy
 
@@ -32,6 +35,7 @@ npx wrangler kv namespace create OAUTH_KV     # paste id into wrangler.jsonc
 npx wrangler secret put YNAB_CLIENT_ID        # from the YNAB OAuth application
 npx wrangler secret put YNAB_CLIENT_SECRET
 npx wrangler secret put COOKIE_ENCRYPTION_KEY # any random 32+ byte string
+npx wrangler secret put DATA_ENCRYPTION_KEY   # a different random 32+ byte string
 npx wrangler deploy                           # provisions ynab.amesvt.com DNS + cert
 ```
 
@@ -43,4 +47,17 @@ zone. Local dev: copy `.dev.vars.example` to `.dev.vars` (redirect URI
 testing locally).
 
 New YNAB OAuth apps run in Restricted Mode (25 user authorizations) until a
-"Works with YNAB" review — fine while this connector stays unlisted.
+"Works with YNAB" review. That limit is fine while this connector stays unlisted.
+
+## Verify
+
+```bash
+npm test
+npx wrangler deploy --dry-run
+curl -I https://ynab.amesvt.com/
+curl https://ynab.amesvt.com/.well-known/oauth-authorization-server
+```
+
+The unit suite is credential-free. A complete production smoke also connects an
+OAuth-capable MCP client, signs in to YNAB, lists tools, and runs a read-only
+request before any write testing.

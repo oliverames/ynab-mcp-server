@@ -11,6 +11,16 @@ fi
 
 cd "$DEV_DIR"
 
+# Catch source, documentation, and Worker failures before touching version
+# files. This prevents a failed validation followed by a retry from consuming
+# another immutable npm version.
+npm run test:unit
+npm run test:safety
+npm run smoke:list-tools
+npm test --prefix worker
+npm exec --prefix worker -- wrangler deploy --dry-run --config worker/wrangler.jsonc --outdir /tmp/ynab-worker-release-check
+npm run release:check
+
 # Bump version
 NEW_VERSION=$(node -e "
   const pkg = JSON.parse(require('fs').readFileSync('package.json','utf8'));
@@ -45,6 +55,11 @@ node -e "
   let index = fs.readFileSync(indexPath, 'utf8');
   index = index.replace(/version: \"\\d+\\.\\d+\\.\\d+\"/, 'version: \"$NEW_VERSION\"');
   fs.writeFileSync(indexPath, index);
+
+  const workerPath = 'worker/src/ynab-mcp.js';
+  let worker = fs.readFileSync(workerPath, 'utf8');
+  worker = worker.replace(/version: \"\\d+\\.\\d+\\.\\d+\"/, 'version: \"$NEW_VERSION\"');
+  fs.writeFileSync(workerPath, worker);
 
   const readmePath = 'README.md';
   let readme = fs.readFileSync(readmePath, 'utf8');

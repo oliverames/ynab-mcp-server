@@ -36,7 +36,7 @@
 
 ---
 
-Run YNAB through Claude Code, Codex, Hermes, Antigravity, or any stdio MCP host without a marketplace plugin — or deploy it to [Glama](https://glama.ai/mcp/servers/oliverames/ynab-mcp-server) as a remote endpoint for ChatGPT, Le Chat, and claude.ai. This server gives AI assistants a rate-aware YNAB API layer that is read-only by default, speaks in dollars instead of milliunits, exposes write tools only after explicit opt-in, and journals every write so it can be undone.
+Run YNAB through Claude Code, Codex, Hermes, Antigravity, or any stdio MCP host. For clients that need a remote URL, the hosted connector at [`https://ynab.amesvt.com/mcp`](https://ynab.amesvt.com) signs each user in through YNAB OAuth, with no personal access token to copy into another service. Both paths use the same rate-aware tool layer, speak in dollars instead of milliunits, start read-only, and journal writes so they can be undone.
 
 ## Why This Exists
 
@@ -52,7 +52,17 @@ All monetary values are automatically converted between dollars and YNAB's inter
 
 This package stands on its own as a stdio MCP server. You can install it from this repo as a standalone Claude Code, Codex, Hermes, or Antigravity plugin, or register the npm package directly and let your MCP client launch it on demand. You do not need the older `ames-connectors` marketplace for YNAB.
 
-This is the local, owner-run package. It uses a personal access token because it is intended for a YNAB account owner running the MCP server for that same account. A public connector for other YNAB users should be reviewed as an OAuth application and should follow the hosted pattern in [docs/hosted-oauth-connector.md](docs/hosted-oauth-connector.md).
+The npm package is the local, owner-run option. It uses a personal access token because the account owner runs the process. The same repository also powers a hosted OAuth connector for clients that accept remote MCP URLs.
+
+### Connect to the hosted remote server
+
+Add this Streamable HTTP URL to claude.ai, ChatGPT, Le Chat, or another remote MCP client:
+
+```text
+https://ynab.amesvt.com/mcp
+```
+
+The client opens this connector's consent page and then sends you to YNAB to sign in. Leave the write-access box unchecked for a read-only connection, or enable it when you need the write tools. The connector stores OAuth tokens and undo data with application-layer encryption in Cloudflare KV; the AI client receives only the connector's own scoped token. See the live [privacy policy](https://ynab.amesvt.com/privacy), [data-deletion flow](https://ynab.amesvt.com/delete), and [deployment documentation](worker/README.md).
 
 ### Install as a Plugin
 
@@ -461,7 +471,7 @@ The YNAB API has no category merge/delete endpoint and cannot split an already-i
 |------|-------------|
 | `merge_category` **(write)** | Recategorize every transaction from one category into another and move budgeted amounts (`moveBudgetedMonths: none/current/all`, capped at 24 months). The emptied source category is then hidden/deleted by hand in the YNAB UI. Requires `confirmed: true`. |
 | `retire_category` **(write)** | Prepare a category for deletion: move its transaction history to a replacement category and zero its budgets (dollars return to Ready to Assign). Requires `confirmed: true`. |
-| `prepare_split_for_matching` **(write)** | Create a mirror unapproved split transaction that YNAB will offer to match with an imported original — the only way to get splits onto a bank-imported transaction. Requires `confirmed: true`. |
+| `prepare_split_for_matching` **(write)** | Create a mirror unapproved split transaction that YNAB will offer to match with an imported original, the only way to get splits onto a bank-imported transaction. Requires `confirmed: true`. |
 
 ### Audits & Analytics (v4.0, read-only)
 
@@ -586,7 +596,7 @@ All amounts in tool inputs and outputs are in **dollars** (e.g., `-12.34` for a 
 
 ## Rate Limiting
 
-The YNAB API allows **200 requests per hour** per access token, enforced on a rolling window. This server applies a client-side limiter at 190 requests per hour with a burst of 10 by default. Each tool call typically uses one API request, except tools that deliberately verify or merge writes (`update_transactions`, `approve_transactions`, `reassign_payee_transactions`, `update_scheduled_transaction`) which perform a small, constant number of additional reads — batch verification uses one list request for the whole batch regardless of batch size.
+The YNAB API allows **200 requests per hour** per access token, enforced on a rolling window. This server applies a client-side limiter at 190 requests per hour with a burst of 10 by default. Each tool call typically uses one API request, except tools that deliberately verify or merge writes (`update_transactions`, `approve_transactions`, `reassign_payee_transactions`, `update_scheduled_transaction`) which perform a small, constant number of additional reads. Batch verification uses one list request for the whole batch regardless of batch size.
 
 If a request still hits YNAB's limit (HTTP 429), the server waits for the `Retry-After` interval and retries automatically (up to `YNAB_HTTP_RETRIES` times). Transient 502/503/504 responses and network failures are retried for read requests only, since a failed write may have partially applied on the server.
 
@@ -614,18 +624,18 @@ When the trailing-hour budget drops to 50 requests or fewer, tool responses appe
 - **Validation:** All parameters validated with [Zod](https://zod.dev) schemas
 - **Error handling:** API errors are caught, formatted, and returned as MCP error responses with detail messages
 
-For a hosted OAuth connector design, see [docs/hosted-oauth-connector.md](docs/hosted-oauth-connector.md). For data handling details for this local package, see [docs/privacy.md](docs/privacy.md).
+The hosted OAuth connector runs on Cloudflare Workers at [`ynab.amesvt.com`](https://ynab.amesvt.com). Its implementation notes are in [worker/README.md](worker/README.md) and [docs/hosted-oauth-connector.md](docs/hosted-oauth-connector.md). For data handling details for the local package, see [docs/privacy.md](docs/privacy.md).
 
 ### Glama Hosting
 
-The repo is ready for [Glama](https://glama.ai) MCP hosting: the root [`glama.json`](glama.json) claims the registry listing (per [Glama's glama.json spec](https://glama.ai/blog/2025-07-08-what-is-glamajson)), and the [`Dockerfile`](Dockerfile) is what Glama's GitHub integration builds. To deploy: Glama dashboard → MCP Hosting → deploy from GitHub → select this repo, then set environment variables `YNAB_API_TOKEN` (required), `YNAB_BUDGET_ID` (recommended), and `YNAB_DISABLE_AGENT_CONFIG_FALLBACK=1` (no agent config files exist in the container). Leave `YNAB_ALLOW_WRITES` unset until you have verified the deployment read-only, and keep the deployment **private** — its env vars hold your personal token. `YNAB_OP_PATH` is unsupported in hosted containers (no 1Password CLI); the server reports this explicitly and falls back to discovery-only mode rather than crashing. Glama wraps the stdio transport as a Streamable HTTP Gateway endpoint automatically.
+The repo is ready for [Glama](https://glama.ai) MCP hosting: the root [`glama.json`](glama.json) claims the registry listing (per [Glama's glama.json spec](https://glama.ai/blog/2025-07-08-what-is-glamajson)), and the [`Dockerfile`](Dockerfile) is what Glama's GitHub integration builds. To deploy: Glama dashboard → MCP Hosting → deploy from GitHub → select this repo, then set environment variables `YNAB_API_TOKEN` (required), `YNAB_BUDGET_ID` (recommended), and `YNAB_DISABLE_AGENT_CONFIG_FALLBACK=1` (no agent config files exist in the container). Leave `YNAB_ALLOW_WRITES` unset until you have verified the deployment read-only, and keep the deployment **private** because its env vars hold your personal token. `YNAB_OP_PATH` is unsupported in hosted containers (no 1Password CLI); the server reports this explicitly and falls back to discovery-only mode rather than crashing. Glama wraps the stdio transport as a Streamable HTTP Gateway endpoint automatically.
 
 ### Public Listing Readiness
 
-This repository is production-ready as a local owner-run stdio MCP package. For a public "Works with YNAB" style listing, confirm the listing scope with YNAB first:
+This repository is production-ready as a local owner-run stdio MCP package. The hosted OAuth connector is live under the YNAB application's initial Restricted Mode while it is tested and prepared for review:
 
 - If YNAB accepts a local owner-run package, submit this package with the published privacy policy, non-affiliation language, read-only default, write opt-in, confirmation gates, and test evidence.
-- If YNAB expects an OAuth application for public distribution, use [docs/hosted-oauth-connector.md](docs/hosted-oauth-connector.md) as the implementation checklist before submission.
+- The hosted connector uses the YNAB authorization-code flow with PKCE, a public privacy policy, and a user-facing deletion flow.
 - Keep public display names in the "for YNAB" pattern and avoid names that imply sponsorship or official support.
 
 ---
@@ -639,9 +649,10 @@ Unit tests cover the pure helpers (amount conversion, ID normalization, update v
 ```bash
 npm run test:unit
 npm run test:safety
+cd worker && npm test
 ```
 
-Both run in CI (`.github/workflows/ci.yml`) on Node 18, 20, and 22 for every push and pull request, along with `release:check` and a credential-free MCP smoke test.
+The root suites run in CI (`.github/workflows/ci.yml`) on Node 18, 20, and 22 for every push and pull request, along with `release:check` and a credential-free MCP smoke test. The Worker suite covers consent-page escaping, OAuth state and PKCE, encrypted KV records, token refresh races, and paginated grant deletion.
 
 ### Live Integration Tests
 

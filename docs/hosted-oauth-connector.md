@@ -1,10 +1,10 @@
 # Hosted OAuth Connector Pattern
 
-This package is a local stdio MCP server. A hosted connector should not ask users for a YNAB personal access token. It should follow an OAuth authorization-code flow, store per-user YNAB tokens server-side, and expose MCP over HTTPS.
+This repository includes both the local stdio MCP server and a hosted connector at `https://ynab.amesvt.com/mcp`. The hosted connector does not ask users for a YNAB personal access token. It uses YNAB's authorization-code flow, stores encrypted per-user tokens server-side, and exposes MCP over HTTPS.
 
-## Target Architecture
+## Architecture
 
-Use a Cloudflare Worker or equivalent edge service with these routes:
+The Cloudflare Worker in `worker/` uses these routes:
 
 | Route | Purpose |
 |---|---|
@@ -28,16 +28,16 @@ Use YNAB OAuth instead of personal access tokens:
 - PKCE: `S256` code challenge and verifier
 - Scope: use the minimum viable scope. Prefer read-only unless the hosted connector explicitly offers write tools.
 
-Required hosted environment values:
+Required Worker values:
 
 | Variable | Purpose |
 |---|---|
-| `YNAB_OAUTH_CLIENT_ID` | YNAB OAuth application client ID. |
-| `YNAB_OAUTH_CLIENT_SECRET` | YNAB OAuth application secret. Store only in the host secret manager. |
-| `YNAB_OAUTH_SCOPE` | Requested YNAB OAuth scope. |
-| `CONNECTOR_BASE_URL` | Public connector origin, for redirect URL construction. |
-| `TOKEN_KV` | Durable KV/DB binding for encrypted YNAB access and refresh tokens. |
-| `OAUTH_STATE_KV` | Short-lived state storage for authorization requests. |
+| `YNAB_CLIENT_ID` | YNAB OAuth application client ID (Worker secret). |
+| `YNAB_CLIENT_SECRET` | YNAB OAuth application secret (Worker secret). |
+| `COOKIE_ENCRYPTION_KEY` | HMAC key for consent and state cookies (Worker secret). |
+| `DATA_ENCRYPTION_KEY` | AES-GCM key material for YNAB tokens and undo journals (Worker secret). |
+| `CONNECTOR_BASE_URL` | Public connector origin used to build the exact callback URI. |
+| `OAUTH_KV` | KV binding for connector grants, OAuth state, encrypted YNAB tokens, and encrypted undo journals. |
 
 ## Safety Model
 
@@ -58,8 +58,8 @@ The authorization flow should bind state to both server-side storage and a brows
 1. Generate a random OAuth `state`.
 2. Generate a PKCE verifier and `S256` challenge.
 3. Store `{ state, verifier, redirect_uri, client_id, scope }` with a 10-minute TTL.
-4. Set an HttpOnly, Secure, SameSite=Lax cookie containing a SHA-256 hash of `state`.
-5. On `/callback`, require the query `state`, the stored state record, and the cookie hash to match.
+4. Set an HttpOnly, Secure, SameSite=Lax cookie containing a keyed HMAC of `state`.
+5. On `/callback`, require the query `state`, the stored state record, and the cookie HMAC to match.
 6. Delete the state record after first use.
 
 This prevents replay and cross-tab confusion while keeping the YNAB token exchange server-side.
@@ -71,7 +71,7 @@ The hosted connector should store tokens by connector user or YNAB user ID:
 - On callback, exchange the code for YNAB access and refresh tokens.
 - Fetch the YNAB user profile immediately and persist the YNAB user ID with the token record.
 - Refresh tokens before expiry, with a small safety window such as 60 seconds.
-- If refresh fails, delete the stale token record and require reauthorization.
+- If refresh fails, preserve the record and require reauthorization. Re-read first so a concurrent successful refresh is not discarded.
 - Never expose YNAB access or refresh tokens to the MCP host or model context.
 
 ## Deployment Checklist

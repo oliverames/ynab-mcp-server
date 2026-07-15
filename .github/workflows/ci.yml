@@ -19,9 +19,15 @@ jobs:
         with:
           node-version: "22.x"
           cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            worker/package-lock.json
       - run: npm ci --no-audit --no-fund
+      - run: npm ci --prefix worker --no-audit --no-fund
       - name: Dependency audit
         run: npm audit --omit=dev --audit-level=high
+      - name: Worker dependency audit
+        run: npm audit --prefix worker --omit=dev --audit-level=high
       - name: Secret scan
         uses: gitleaks/gitleaks-action@v3
         env:
@@ -53,3 +59,23 @@ jobs:
         run: npm run smoke:list-tools
         env:
           YNAB_DISABLE_AGENT_CONFIG_FALLBACK: "1"
+
+  worker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22.x"
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            worker/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm ci --prefix worker --no-audit --no-fund
+      - name: Worker tests (offline)
+        run: npm test
+        working-directory: worker
+      - name: Validate Worker bundle and Wrangler schema
+        run: npx wrangler deploy --dry-run --outdir /tmp/ynab-worker-dry-run
+        working-directory: worker
