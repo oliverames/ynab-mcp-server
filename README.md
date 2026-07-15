@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <code>47 tools with writes enabled</code> &bull;
+  <code>58 tools with writes enabled</code> &bull;
   <code>YNAB API v1.85</code> &bull;
   <code>read-only by default</code>
 </p>
@@ -295,7 +295,7 @@ YNAB_API_TOKEN=your-token-here npm run smoke:review-unapproved -- --published
 
 ## Features
 
-**YNAB API v1.85 coverage** with 47 tools when writes are enabled:
+**YNAB API v1.85 coverage** with 58 tools when writes are enabled, plus MCP prompts and resources:
 
 | Resource | Tools | Capabilities |
 |----------|-------|-------------|
@@ -309,6 +309,12 @@ YNAB_API_TOKEN=your-token-here npm run smoke:review-unapproved -- --published
 | **Transactions** | 8 | Full CRUD, bulk ops, split transactions, multi-filter |
 | **Scheduled Transactions** | 5 | Full CRUD for recurring transactions |
 | **Convenience** | 2 | Unapproved transaction review and overspending checks |
+| **Workflows** | 3 | Category merge/retire, split-via-match for imported transactions |
+| **Audits** | 2 | Credit card payment funding, reconciliation diagnosis |
+| **Analytics** | 3 | Budget health, income/expense + savings rate, recurring-charge detection |
+| **Undo & Export** | 3 | Local undo journal for writes, CSV export |
+
+Beyond tools, the server ships **6 MCP prompts** (guided workflows: monthly review, weekly triage, categorize-and-approve, subscription audit, reconciliation, credit card audit) and **4 MCP resources** (`ynab://guide/*`: YNAB methodology, write-safety rules, audit patterns, review flags reference).
 
 ### Design Decisions
 
@@ -328,6 +334,9 @@ YNAB_API_TOKEN=your-token-here npm run smoke:review-unapproved -- --published
 - **Nullable updates** - update tools accept `null` for clearable fields (`memo`, `payeeName`, `categoryId`, `flagColor`) to distinguish "don't change" (omit) from "clear this field" (`null`).
 - **Target behavior support** - category create/update tools expose `goalNeedsWholeAmount` for YNAB's "Set aside another" vs. "Refill up to" goal behavior.
 - **Delta request support** - high-volume list tools accept `lastKnowledgeOfServer` and return `server_knowledge` when that parameter is provided. `get_budget` supports full delta exports: pass `lastKnowledgeOfServer` to receive every entity changed since that knowledge in one response.
+- **Undo journal** - every transaction write is journaled locally with before-state (`~/.ynab-mcp-undo.json`); `list_undo_history` reviews it and `undo_operation` reverses a journaled write. Category/payee/scheduled writes are journaled for audit without automatic undo.
+- **Prompts and resources** - guided workflow prompts (monthly review, weekly triage, categorize-and-approve, subscription audit, reconciliation, credit card audit) and a general YNAB-methodology knowledge base as MCP resources, so any host gets the working discipline without a separate skill.
+- **Rate-budget surfacing** - responses warn the model when 50 or fewer requests remain in the trailing hour, on top of the client-side limiter that enforces the budget.
 - **Debt account support** - loan and debt accounts include `debt_original_balance`, `debt_interest_rates`, `debt_minimum_payments`, and `debt_escrow_amounts` with correct unit conversion (rates stay as percentages, payments convert from milliunits).
 
 ---
@@ -436,6 +445,36 @@ Read tools are available by default. Tools that create, update, import, or delet
 |------|-------------|
 | `review_unapproved` | Get unapproved transactions grouped by readiness: "ready to approve" (categorized, split, or transfer) vs. "needs category first" (uncategorized). Each transaction includes a `flags` array highlighting anomalies (manually_entered, match_broken, no_prior_amount_match, category_drift, new_payee, scheduled_transaction_realized) computed against 60 days of payee history. Includes a warning against blind approval. Pass `summary: true` for counts + by-payee aggregates only, or `compact: true` to keep per-transaction rows (with IDs) while dropping bulky fields so the response fits inline. |
 | `get_overspent_categories` | Get categories with negative balances for a month, useful for finding prior-month overspending that reduces the current month's Ready to Assign. |
+
+### Workflows (v4.0)
+
+The YNAB API has no category merge/delete endpoint and cannot split an already-imported transaction; these composite tools do everything the API allows and report the remaining manual UI step.
+
+| Tool | Description |
+|------|-------------|
+| `merge_category` **(write)** | Recategorize every transaction from one category into another and move budgeted amounts (`moveBudgetedMonths: none/current/all`, capped at 24 months). The emptied source category is then hidden/deleted by hand in the YNAB UI. Requires `confirmed: true`. |
+| `retire_category` **(write)** | Prepare a category for deletion: move its transaction history to a replacement category and zero its budgets (dollars return to Ready to Assign). Requires `confirmed: true`. |
+| `prepare_split_for_matching` **(write)** | Create a mirror unapproved split transaction that YNAB will offer to match with an imported original — the only way to get splits onto a bank-imported transaction. Requires `confirmed: true`. |
+
+### Audits & Analytics (v4.0, read-only)
+
+| Tool | Description |
+|------|-------------|
+| `audit_credit_card_payments` | Compare each credit card's balance against its Credit Card Payment category and report underfunded cards. |
+| `audit_account_reconciliation` | Per-account reconciliation status; with `accountId`, lists the exact uncleared/unapproved items to check against the bank statement. |
+| `get_budget_health` | Snapshot with green/yellow/red indicators: savings rate, age of money, Ready to Assign, overspending, credit card debt. |
+| `get_income_expense_summary` | Income vs. spending by month with savings rate, transfers excluded. |
+| `detect_recurring_charges` | Find subscriptions/recurring charges from history by payee + amount + cadence, with estimated annual cost. |
+| `export_transactions` | Export filtered transactions as CSV text. |
+
+### Undo Journal (v4.0)
+
+Every transaction write (create, update, bulk update, approve, reassign, delete, and the category workflows) is journaled to a local file (`~/.ynab-mcp-undo.json`, last 100 entries) with before-state.
+
+| Tool | Description |
+|------|-------------|
+| `list_undo_history` | List journaled writes, newest first, with undo capability per entry. Reads only the local journal. |
+| `undo_operation` **(write)** | Reverse a journaled write: restore updated fields, delete created transactions, or recreate a deleted one (without its original bank-import linkage). One undo per entry. Requires `confirmed: true`. |
 
 ---
 
@@ -546,6 +585,8 @@ If a request still hits YNAB's limit (HTTP 429), the server waits for the `Retry
 
 Set `YNAB_RATE_LIMIT_PER_HOUR=0` only for controlled local tests or smoke checks where you know you will stay under YNAB's API limit.
 
+When the trailing-hour budget drops to 50 requests or fewer, tool responses append a pacing warning so the calling model can switch to delta requests, summary modes, and batch tools before hitting the wall.
+
 ---
 
 ## Architecture
@@ -567,6 +608,10 @@ Set `YNAB_RATE_LIMIT_PER_HOUR=0` only for controlled local tests or smoke checks
 - **Error handling:** API errors are caught, formatted, and returned as MCP error responses with detail messages
 
 For a hosted OAuth connector design, see [docs/hosted-oauth-connector.md](docs/hosted-oauth-connector.md). For data handling details for this local package, see [docs/privacy.md](docs/privacy.md).
+
+### Glama Hosting
+
+The repo is ready for [Glama](https://glama.ai) MCP hosting: the root [`glama.json`](glama.json) claims the registry listing (per [Glama's glama.json spec](https://glama.ai/blog/2025-07-08-what-is-glamajson)), and the [`Dockerfile`](Dockerfile) is what Glama's GitHub integration builds. To deploy: Glama dashboard → MCP Hosting → deploy from GitHub → select this repo, then set environment variables `YNAB_API_TOKEN` (required), `YNAB_BUDGET_ID` (recommended), and `YNAB_DISABLE_AGENT_CONFIG_FALLBACK=1` (no agent config files exist in the container). Leave `YNAB_ALLOW_WRITES` unset until you have verified the deployment read-only, and keep the deployment **private** — its env vars hold your personal token. `YNAB_OP_PATH` is unsupported in hosted containers (no 1Password CLI); the server reports this explicitly and falls back to discovery-only mode rather than crashing. Glama wraps the stdio transport as a Streamable HTTP Gateway endpoint automatically.
 
 ### Public Listing Readiness
 

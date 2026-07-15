@@ -27,6 +27,12 @@ const {
   withWriteGateDescription,
   parseToolExecuteInput,
   verifyBulkTransactionUpdates,
+  beforeFieldsForUpdate,
+  summarizeIncomeExpenseByMonth,
+  detectRecurringFromTransactions,
+  csvEscape,
+  buildTransactionsCsv,
+  currentBudgetMonth,
 } = await import("../index.js");
 
 test("dollars converts milliunits and passes null through", () => {
@@ -291,4 +297,79 @@ test("parseToolExecuteInput validates against the target tool schema", () => {
   );
   // Tools without an input schema accept any object.
   assert.deepEqual(parseToolExecuteInput("get_user", undefined), {});
+});
+
+// --- v4.0 helpers ---
+
+test("beforeFieldsForUpdate captures only the requested fields' before-values", () => {
+  const before = { category_id: "old-cat", approved: false, memo: "old memo", payee_id: "p1" };
+  const requested = { id: "t1", categoryId: "new-cat", approved: true };
+  assert.deepEqual(beforeFieldsForUpdate(requested, before), {
+    categoryId: "old-cat",
+    approved: false,
+  });
+  assert.equal(beforeFieldsForUpdate(requested, null), null);
+});
+
+test("summarizeIncomeExpenseByMonth separates income, spending, and transfers", () => {
+  const txns = [
+    { date: "2026-06-01", amount: 5000, category_name: "Inflow: Ready to Assign", transfer_account_id: null, deleted: false },
+    { date: "2026-06-05", amount: -1000, category_name: "Groceries", transfer_account_id: null, deleted: false },
+    { date: "2026-06-07", amount: -500, category_name: null, transfer_account_id: "acct-2", deleted: false }, // transfer: excluded
+    { date: "2026-06-09", amount: -200, category_name: "Dining", transfer_account_id: null, deleted: true }, // deleted: excluded
+    { date: "2026-07-01", amount: 4000, category_name: "Inflow: Ready to Assign", transfer_account_id: null, deleted: false },
+    { date: "2026-07-02", amount: -1000, category_name: "Rent", transfer_account_id: null, deleted: false },
+  ];
+  const months = summarizeIncomeExpenseByMonth(txns);
+  assert.deepEqual(months, [
+    { month: "2026-06", income: 5000, spending: 1000, net: 4000, savings_rate_pct: 80 },
+    { month: "2026-07", income: 4000, spending: 1000, net: 3000, savings_rate_pct: 75 },
+  ]);
+});
+
+test("detectRecurringFromTransactions finds a monthly cadence and annualizes it", () => {
+  const sub = (date) => ({ date, amount: -15.99, payee_name: "Streamflix", payee_id: "p-s", category_name: "Subscriptions", transfer_account_id: null, deleted: false });
+  const noise = (date, amount) => ({ date, amount, payee_name: "Grocer", payee_id: "p-g", category_name: "Groceries", transfer_account_id: null, deleted: false });
+  const txns = [sub("2026-01-14"), sub("2026-02-14"), sub("2026-03-15"), sub("2026-04-14"),
+    noise("2026-01-02", -52.11), noise("2026-02-19", -8.4)];
+  const found = detectRecurringFromTransactions(txns);
+  assert.equal(found.length, 1);
+  assert.equal(found[0].payee_name, "Streamflix");
+  assert.equal(found[0].cadence, "monthly");
+  assert.equal(found[0].occurrences, 4);
+  assert.equal(found[0].estimated_annual_cost, round2(15.99 * (365 / 30)));
+});
+
+test("detectRecurringFromTransactions ignores inflows, transfers, and sparse groups", () => {
+  const txns = [
+    { date: "2026-01-01", amount: 100, payee_name: "Employer", payee_id: "p1", transfer_account_id: null, deleted: false },
+    { date: "2026-02-01", amount: 100, payee_name: "Employer", payee_id: "p1", transfer_account_id: null, deleted: false },
+    { date: "2026-03-01", amount: 100, payee_name: "Employer", payee_id: "p1", transfer_account_id: null, deleted: false },
+    { date: "2026-01-05", amount: -50, payee_name: "Savings", payee_id: "p2", transfer_account_id: "a2", deleted: false },
+    { date: "2026-01-09", amount: -9.99, payee_name: "OneOff", payee_id: "p3", transfer_account_id: null, deleted: false },
+  ];
+  assert.deepEqual(detectRecurringFromTransactions(txns), []);
+});
+
+test("csvEscape quotes commas, quotes, and newlines", () => {
+  assert.equal(csvEscape("plain"), "plain");
+  assert.equal(csvEscape('has "quotes"'), '"has ""quotes"""');
+  assert.equal(csvEscape("a,b"), '"a,b"');
+  assert.equal(csvEscape("line\nbreak"), '"line\nbreak"');
+  assert.equal(csvEscape(null), "");
+  assert.equal(csvEscape(undefined), "");
+});
+
+test("buildTransactionsCsv emits header plus one row per transaction", () => {
+  const csv = buildTransactionsCsv([
+    { date: "2026-06-01", amount: -12.34, payee_name: "Cafe, The", category_name: "Dining", account_name: "Checking", memo: null, cleared: "cleared", approved: true, transfer_account_id: null, id: "t1" },
+  ]);
+  const lines = csv.split("\n");
+  assert.equal(lines.length, 2);
+  assert.equal(lines[0], "date,amount,payee,category,account,memo,cleared,approved,transfer,id");
+  assert.equal(lines[1], '2026-06-01,-12.34,"Cafe, The",Dining,Checking,,cleared,true,,t1');
+});
+
+test("currentBudgetMonth is the first of the current month", () => {
+  assert.match(currentBudgetMonth(), /^\d{4}-\d{2}-01$/);
 });

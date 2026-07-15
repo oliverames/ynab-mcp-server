@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -112,7 +113,13 @@ function resolveYnabRuntimeConfig() {
         source_label: "YNAB_OP_PATH via 1Password CLI",
       };
     } catch (e) {
-      lookupErrors.push(`Could not read YNAB_OP_PATH via 1Password CLI: ${e.stderr?.toString().trim() || e.message || "unknown 1Password CLI error"}`);
+      // ENOENT means the `op` binary itself is absent (containers, hosted
+      // deployments like Glama) — name the real problem instead of a generic
+      // CLI error so the fix (use YNAB_API_TOKEN) is obvious.
+      const message = e?.code === "ENOENT"
+        ? "the 1Password CLI (op) is not installed in this environment, so YNAB_OP_PATH is unsupported here. Set YNAB_API_TOKEN instead."
+        : e.stderr?.toString().trim() || e.message || "unknown 1Password CLI error";
+      lookupErrors.push(`Could not read YNAB_OP_PATH via 1Password CLI: ${message}`);
     }
   }
 
@@ -621,7 +628,39 @@ const PRETTY_PRINT_MAX_BYTES = 65536;
 function ok(data) {
   const compact = JSON.stringify(data);
   const text = compact.length > PRETTY_PRINT_MAX_BYTES ? compact : JSON.stringify(data, null, 2);
-  return { content: [{ type: "text", text }] };
+  const content = [{ type: "text", text }];
+  // Surface a pacing warning to the model when the trailing-hour request
+  // budget runs low (YNAB enforces 200/hour per token; the local limiter is
+  // set below that). Silent enforcement alone lets a model burn the budget
+  // on low-value calls and then stall mid-workflow.
+  const remaining = ynabRequestsRemaining();
+  if (remaining !== null && remaining <= 50) {
+    content.push({
+      type: "text",
+      text: `Rate limit warning: about ${remaining} YNAB API requests remaining this hour (limit resets on a rolling window). Prefer delta requests, summary/compact modes, and batch tools until it recovers.`,
+    });
+  }
+  return { content };
+}
+
+// Trailing-hour request counter for user-visible pacing warnings. The token
+// bucket above enforces the limit; this only reports how much budget is left.
+const apiRequestTimes = [];
+
+function recordApiRequest() {
+  const now = Date.now();
+  apiRequestTimes.push(now);
+  while (apiRequestTimes.length > 0 && apiRequestTimes[0] < now - 3600000) {
+    apiRequestTimes.shift();
+  }
+}
+
+function ynabRequestsRemaining() {
+  const requestsPerHour = envNumber("YNAB_RATE_LIMIT_PER_HOUR", 190);
+  if (requestsPerHour <= 0) return null;
+  const cutoff = Date.now() - 3600000;
+  const used = apiRequestTimes.filter((t) => t >= cutoff).length;
+  return Math.max(0, Math.floor(requestsPerHour) - used);
 }
 
 function collection(data, key, items, lastKnowledgeOfServer) {
@@ -786,6 +825,7 @@ async function secureFetch(input, init = {}) {
   const maxRetries = Math.floor(envNumber("YNAB_HTTP_RETRIES", 2));
   for (let attempt = 0; ; attempt += 1) {
     await ynabRateLimit();
+    recordApiRequest();
 
     let res;
     try {
@@ -897,7 +937,7 @@ async function ynabFetch(path, { method = "GET", body, query } = {}) {
 
 const server = new McpServer({
   name: "mcp-server-for-ynab",
-  version: "3.2.0",
+  version: "5.0.0",
 });
 
 const registeredTools = new Map();
@@ -973,6 +1013,10 @@ const WRITE_TOOL_METADATA = {
   create_scheduled_transaction: { destructiveHint: false, idempotentHint: false },
   update_scheduled_transaction: { destructiveHint: false, idempotentHint: true },
   delete_scheduled_transaction: { destructiveHint: true, idempotentHint: true },
+  merge_category: { destructiveHint: false, idempotentHint: true },
+  retire_category: { destructiveHint: false, idempotentHint: true },
+  prepare_split_for_matching: { destructiveHint: false, idempotentHint: false },
+  undo_operation: { destructiveHint: false, idempotentHint: true },
 };
 
 function writesEnabled() {
@@ -1057,7 +1101,7 @@ server.registerTool = (name, config, handler) => {
 
 registerTool(
   "get_user",
-  { description: "Get the authenticated user" },
+  { description: "Get the authenticated YNAB user (their user ID). Read-only; takes no input. Mainly useful to verify the API token works — for credential/config diagnostics prefer ynab_auth_status, which needs no API request." },
   () =>
   run(async () => {
     const { data } = await api.user.getUser();
@@ -1138,7 +1182,7 @@ registerTool(
 
 registerTool(
   "get_budget_settings",
-  { description: "Get budget settings (currency format, date format)", inputSchema: { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") } },
+  { description: "Get a budget's settings: currency format (symbol, decimal digits, placement) and date format. Read-only. Use when formatting amounts or dates for display; not needed for tool inputs, which always use dollars and YYYY-MM-DD.", inputSchema: { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") } },
   ({ budgetId }) =>
     run(async () => {
       const { data } = await api.plans.getPlanSettingsById(resolveBudgetId(budgetId));
@@ -1174,7 +1218,7 @@ function formatAccount(a) {
 
 registerTool(
   "list_accounts",
-  { description: "List all accounts in a budget", inputSchema: {
+  { description: "List all accounts in a budget with balances (dollars), type, closed/on-budget status, last-reconciled time, and debt metadata. Read-only. Use to find account IDs for transaction tools, check balances, or spot direct-import errors (direct_import_in_error). Includes closed accounts; filter on 'closed' if you only want active ones.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     lastKnowledgeOfServer: z.number().int().nonnegative().optional().describe("Delta request server knowledge. When provided, returns { accounts, server_knowledge }."),
   } },
@@ -1188,7 +1232,7 @@ registerTool(
 
 registerTool(
   "get_account",
-  { description: "Get details for a specific account", inputSchema: {
+  { description: "Get one account's details: balances (dollars), type, reconciliation timestamp, and debt metadata. Read-only. Prefer list_accounts when comparing several accounts; use this when you already have the account ID and want fresh detail.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     accountId: z.string().describe("Account ID"),
   } },
@@ -1201,7 +1245,7 @@ registerTool(
 
 registerTool(
   "create_account",
-  { description: "Create a new account", inputSchema: {
+  { description: "Create a new unlinked (manual) account with a starting balance. Side effects: the starting balance posts as a 'Starting Balance' transaction dated today, and an on-budget account's balance adds to Ready to Assign. Cannot create bank-linked accounts (linking happens in the YNAB UI).", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     name: z.string().describe("Account name"),
     type: z.enum(["checking", "savings", "cash", "creditCard", "lineOfCredit", "otherAsset", "otherLiability", "mortgage", "autoLoan", "studentLoan", "personalLoan", "medicalDebt", "otherDebt"]).describe("Account type"),
@@ -1260,7 +1304,7 @@ function formatCategory(c) {
 
 registerTool(
   "list_categories",
-  { description: "List all category groups and their categories", inputSchema: {
+  { description: "List all category groups and their categories with budgeted/activity/balance amounts (dollars) for the current month. Read-only. Use to find category IDs and survey the budget structure; for a specific month's numbers use get_month, and for name-based lookup use search_categories. Hidden and deleted items are included with flags — filter on 'hidden'/'deleted' when presenting.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     lastKnowledgeOfServer: z.number().int().nonnegative().optional().describe("Delta request server knowledge. When provided, returns { category_groups, server_knowledge }."),
   } },
@@ -1296,7 +1340,7 @@ registerTool(
 
 registerTool(
   "get_category",
-  { description: "Get a specific category", inputSchema: {
+  { description: "Get one category's full detail for the current month, including goal/target fields (type, target amount, funding progress). Read-only. Use for goal inspection; for a past or future month's numbers use get_month_category instead.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     categoryId: z.string().describe("Category ID"),
   } },
@@ -1432,7 +1476,7 @@ registerTool(
 
 registerTool(
   "list_payees",
-  { description: "List all payees", inputSchema: {
+  { description: "List all payees with IDs and transfer_account_id (non-null marks a transfer payee — use it as payeeId when creating transfers instead of inventing a 'Transfer : ...' name). Read-only. For name-based lookup prefer search_payees; payee lists on mature budgets can be long.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     lastKnowledgeOfServer: z.number().int().nonnegative().optional().describe("Delta request server knowledge. When provided, returns { payees, server_knowledge }."),
   } },
@@ -1446,7 +1490,7 @@ registerTool(
 
 registerTool(
   "get_payee",
-  { description: "Get a specific payee", inputSchema: {
+  { description: "Get one payee by ID (name, transfer_account_id, deleted flag). Read-only. Mostly useful to confirm a payee still exists or resolve its transfer account; for discovery use search_payees.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     payeeId: z.string().describe("Payee ID"),
   } },
@@ -1459,7 +1503,7 @@ registerTool(
 
 registerTool(
   "update_payee",
-  { description: "Rename a payee", inputSchema: {
+  { description: "Rename a payee. Side effects: the new name appears on every transaction using this payee, past and future. Renaming does not merge payees — to fold one payee's transactions into another use reassign_payee_transactions. Transfer payees cannot be renamed.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     payeeId: z.string().describe("Payee ID"),
     name: z.string().max(500).describe("New payee name (max 500 characters)"),
@@ -1475,7 +1519,7 @@ registerTool(
 
 registerTool(
   "create_payee",
-  { description: "Create a new payee", inputSchema: {
+  { description: "Create a new payee by name. Rarely needed: create_transaction with payeeName creates the payee implicitly. Use this only when you want the payee to exist before any transaction does. Side effects: duplicate names are allowed by YNAB — search_payees first to avoid creating a duplicate.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     name: z.string().max(500).describe("Payee name (max 500 characters)"),
   } },
@@ -1493,7 +1537,7 @@ registerTool(
 
 registerTool(
   "list_payee_locations",
-  { description: "List all payee locations (GPS coordinates where transactions occurred)", inputSchema: { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") } },
+  { description: "List all payee locations (GPS coordinates YNAB's mobile app recorded at transaction time). Read-only. Only payees with mobile-recorded transactions appear; many budgets have none. Use get_payee_locations_by_payee to scope to one payee.", inputSchema: { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") } },
   ({ budgetId }) =>
     run(async () => {
       const { data } = await api.payeeLocations.getPayeeLocations(resolveBudgetId(budgetId));
@@ -1503,7 +1547,7 @@ registerTool(
 
 registerTool(
   "get_payee_location",
-  { description: "Get a specific payee location", inputSchema: {
+  { description: "Get one payee location record by its ID (payee, latitude, longitude). Read-only; requires a payee-location ID from list_payee_locations.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     payeeLocationId: z.string().describe("Payee location ID"),
   } },
@@ -1516,7 +1560,7 @@ registerTool(
 
 registerTool(
   "get_payee_locations_by_payee",
-  { description: "Get all locations for a specific payee", inputSchema: {
+  { description: "Get all recorded GPS locations for one payee. Read-only. Useful to confirm which physical merchant an ambiguous payee refers to; empty for payees never used in YNAB's mobile app.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     payeeId: z.string().describe("Payee ID"),
   } },
@@ -1548,7 +1592,7 @@ function formatMonth(m) {
 
 registerTool(
   "list_months",
-  { description: "List all budget months", inputSchema: {
+  { description: "List all budget months with summary numbers per month (income, budgeted, activity, Ready to Assign, age of money — dollars). Read-only. Use to find which months exist and their headline totals; for per-category detail in one month use get_month.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     lastKnowledgeOfServer: z.number().int().nonnegative().optional().describe("Delta request server knowledge. When provided, returns { months, server_knowledge }."),
   } },
@@ -1562,7 +1606,7 @@ registerTool(
 
 registerTool(
   "get_month",
-  { description: "Get budget month detail with per-category breakdown", inputSchema: {
+  { description: "Get one budget month's detail: month totals plus every category's budgeted/activity/balance and goal fields for that month (dollars). Read-only. The workhorse for monthly reviews and budget-vs-actual questions; combine with get_overspent_categories for the negative balances only.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     month: z.string().describe("Month in YYYY-MM-DD format (first of month)"),
   } },
@@ -1619,7 +1663,7 @@ function formatMoneyMovement(m) {
 
 registerTool(
   "list_money_movements",
-  { description: "List all money movements (budget re-allocations between categories)", inputSchema: { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") } },
+  { description: "List all money movements — the history of budget re-allocations between categories (who moved how much from where to where, when). Read-only. Use to answer 'why did this category's assigned amount change'; these are budget moves, not transactions. Can be long on old budgets; prefer get_money_movements_by_month for a specific month.", inputSchema: { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") } },
   ({ budgetId }) =>
     run(async () => {
       const data = await ynabFetch(`/plans/${resolveBudgetId(budgetId)}/money_movements`);
@@ -1629,7 +1673,7 @@ registerTool(
 
 registerTool(
   "get_money_movements_by_month",
-  { description: "Get money movements for a specific month", inputSchema: {
+  { description: "Get money movements (category-to-category budget re-allocations) for one month. Read-only. The month-scoped view of list_money_movements; use during month-end review to see how assignments were shuffled.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     month: z.string().describe("Month in YYYY-MM-DD format (first of month), or 'current'"),
   } },
@@ -1642,7 +1686,7 @@ registerTool(
 
 registerTool(
   "list_money_movement_groups",
-  { description: "List all money movement groups (batches of related money movements)", inputSchema: { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") } },
+  { description: "List all money movement groups — batches of related money movements applied together (e.g. one multi-category re-allocation). Read-only. Join to list_money_movements rows via money_movement_group_id.", inputSchema: { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") } },
   ({ budgetId }) =>
     run(async () => {
       const data = await ynabFetch(`/plans/${resolveBudgetId(budgetId)}/money_movement_groups`);
@@ -1652,7 +1696,7 @@ registerTool(
 
 registerTool(
   "get_money_movement_groups_by_month",
-  { description: "Get money movement groups for a specific month", inputSchema: {
+  { description: "Get money movement groups (batched budget re-allocations) for one month. Read-only. The month-scoped view of list_money_movement_groups.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     month: z.string().describe("Month in YYYY-MM-DD format (first of month), or 'current'"),
   } },
@@ -1795,7 +1839,7 @@ registerTool(
 
 registerTool(
   "create_transaction",
-  { description: "Create a new transaction. Amounts are in dollars (positive for inflows, negative for outflows). Note: future-dated transactions cannot be created here - use create_scheduled_transaction instead.", inputSchema: {
+  { description: "Create a new transaction. Amounts are in dollars (positive for inflows, negative for outflows). Note: future-dated transactions cannot be created here - use create_scheduled_transaction instead. For transfers between accounts, pass the destination account's transfer_payee_id (from list_accounts) as payeeId — do not pass a 'Transfer : ...' payee name. For manual entry of spend the bank will later import (checks, P2P), use cleared:'uncleared' and NO importId so the import matches instead of duplicating. Creation is journaled and reversible via undo_operation.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     accountId: z.string().describe("Account ID"),
     date: z.string().describe("Transaction date (YYYY-MM-DD)"),
@@ -1812,10 +1856,19 @@ registerTool(
   } },
   ({ budgetId, ...txnFields }) =>
     run(async () => {
-      const { data } = await api.transactions.createTransaction(resolveBudgetId(budgetId), {
+      const bid = resolveBudgetId(budgetId);
+      const { data } = await api.transactions.createTransaction(bid, {
         transaction: mapTransactionInput(txnFields),
       });
-      return ok(formatTransaction(data.transaction));
+      const created = formatTransaction(data.transaction);
+      appendUndoEntry({
+        tool: "create_transaction",
+        budget_id: bid,
+        description: `Created transaction ${created.id} (${created.payee_name ?? "no payee"}, ${created.amount})`,
+        undoable: true,
+        undo: { type: "delete_transactions", ids: [created.id] },
+      });
+      return ok(created);
     })
 );
 
@@ -1840,11 +1893,22 @@ registerTool(
   } },
   ({ budgetId, transactions: txns }) =>
     run(async () => {
-      const { data } = await api.transactions.createTransactions(resolveBudgetId(budgetId), {
+      const bid = resolveBudgetId(budgetId);
+      const { data } = await api.transactions.createTransactions(bid, {
         transactions: txns.map(mapTransactionInput),
       });
+      const created = data.transactions?.map(formatTransaction) ?? [];
+      if (created.length > 0) {
+        appendUndoEntry({
+          tool: "create_transactions",
+          budget_id: bid,
+          description: `Created ${created.length} transactions`,
+          undoable: true,
+          undo: { type: "delete_transactions", ids: created.map((t) => t.id) },
+        });
+      }
       return ok({
-        created: data.transactions?.map(formatTransaction),
+        created,
         duplicate_import_ids: data.duplicate_import_ids,
       });
     })
@@ -1869,9 +1933,25 @@ registerTool(
   } },
   ({ budgetId, transactionId, accountId, date, amount, payeeId, payeeName, categoryId, memo, cleared, approved, flagColor, subtransactions }) =>
     run(async () => {
-      const { data } = await api.transactions.updateTransaction(resolveBudgetId(budgetId), transactionId, {
-        transaction: mapTransactionUpdate({ accountId, date, amount, payeeId, payeeName, categoryId, memo, cleared, approved, flagColor, subtransactions }),
+      const bid = resolveBudgetId(budgetId);
+      const requested = { id: transactionId, accountId, date, amount, payeeId, payeeName, categoryId, memo, cleared, approved, flagColor, subtransactions };
+      // Capture before-state (one GET) so the change lands in the undo journal.
+      let before = null;
+      try {
+        before = await getFormattedTransaction(bid, transactionId);
+      } catch {
+        // Missing before-state only degrades undo; the update itself proceeds.
+      }
+      const { data } = await api.transactions.updateTransaction(bid, transactionId, {
+        transaction: mapTransactionUpdate(requested),
       });
+      journalTransactionUpdates(
+        "update_transaction",
+        bid,
+        [requested],
+        new Map(before ? [[normalizeTransactionId(transactionId), before]] : []),
+        `Updated transaction ${transactionId} (${before?.payee_name ?? "unknown payee"})`
+      );
       return ok(formatTransaction(data.transaction));
     })
 );
@@ -1885,8 +1965,17 @@ registerTool(
   } },
   ({ budgetId, transactionId }) =>
     run(async () => {
-      const { data } = await api.transactions.deleteTransaction(resolveBudgetId(budgetId), transactionId);
-      return ok(formatTransaction(data.transaction));
+      const bid = resolveBudgetId(budgetId);
+      const { data } = await api.transactions.deleteTransaction(bid, transactionId);
+      const deleted = formatTransaction(data.transaction);
+      appendUndoEntry({
+        tool: "delete_transaction",
+        budget_id: bid,
+        description: `Deleted transaction ${deleted.id} (${deleted.payee_name ?? "no payee"}, ${deleted.amount})`,
+        undoable: true,
+        undo: { type: "recreate_transaction", transaction: deleted },
+      });
+      return ok(deleted);
     })
 );
 
@@ -1929,6 +2018,9 @@ registerTool(
         ...(t.id !== undefined ? { id: t.id } : { import_id: t.importId }),
         ...mapTransactionUpdate(t),
       }));
+      // Capture before-states pre-write for the undo journal (id-based rows
+      // only; importId-only rows have no id yet and journal as non-undoable).
+      const beforeById = await fetchTransactionsByIds(bid, txns.filter((t) => t.id !== undefined).map((t) => t.id));
       const { data } = await api.transactions.updateTransactions(bid, {
         transactions: mapped,
       });
@@ -1953,6 +2045,13 @@ registerTool(
       if (unresolved.length > 0) {
         throw new Error(`The bulk update was submitted, but YNAB did not return updated transactions for import ids: ${unresolved.join(", ")}. Verification could not run for those rows; inspect them with get_transactions before retrying.`);
       }
+      journalTransactionUpdates(
+        "update_transactions",
+        bid,
+        resolved,
+        beforeById,
+        `Bulk-updated ${resolved.length} transactions`
+      );
       const { verification, verified } = await verifyBulkTransactionUpdates(bid, resolved, data.transactions);
       if (verification.failed.length > 0) {
         return {
@@ -2021,6 +2120,14 @@ registerTool(
       const updates = txns.map((t) => ({ id: t.id, approved: true }));
       const mapped = updates.map((t) => ({ id: t.id, ...mapTransactionUpdate(t) }));
       const { data: updData } = await api.transactions.updateTransactions(bid, { transactions: mapped });
+      // The pre-write fetch above is the before-state: every row was unapproved.
+      journalTransactionUpdates(
+        "approve_transactions",
+        bid,
+        updates,
+        new Map(txns.map((t) => [normalizeTransactionId(t.id), formatTransaction(t)])),
+        `Approved ${updates.length} transactions by filter`
+      );
       const { verification, verified } = await verifyBulkTransactionUpdates(bid, updates, updData.transactions);
       if (verification.failed.length > 0) {
         return {
@@ -2068,6 +2175,13 @@ registerTool(
       const updates = txns.map((t) => ({ id: t.id, payeeId: toPayeeId }));
       const mapped = updates.map((t) => ({ id: t.id, ...mapTransactionUpdate(t) }));
       const { data: updData } = await api.transactions.updateTransactions(bid, { transactions: mapped });
+      journalTransactionUpdates(
+        "reassign_payee_transactions",
+        bid,
+        updates,
+        new Map(txns.map((t) => [normalizeTransactionId(t.id), formatTransaction(t)])),
+        `Reassigned ${updates.length} transactions from payee ${fromPayeeId} to ${toPayeeId}`
+      );
       const { verification, verified } = await verifyBulkTransactionUpdates(bid, updates, updData.transactions);
       if (verification.failed.length > 0) {
         return {
@@ -2088,7 +2202,7 @@ registerTool(
 
 registerTool(
   "import_transactions",
-  { description: "Trigger import of linked account transactions", inputSchema: { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") } },
+  { description: "Ask YNAB to pull any pending transactions from bank-linked accounts now (same as clicking Import in the UI). Side effects: new imported transactions arrive unapproved; follow with review_unapproved. Returns the imported transaction IDs. No-op when nothing is pending; does not affect unlinked accounts.", inputSchema: { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") } },
   ({ budgetId }) =>
     run(async () => {
       const { data } = await api.transactions.importTransactions(resolveBudgetId(budgetId));
@@ -2156,7 +2270,7 @@ registerTool(
 
 registerTool(
   "get_scheduled_transaction",
-  { description: "Get a specific scheduled transaction", inputSchema: {
+  { description: "Get one scheduled (recurring) transaction by ID: next date, frequency, amount (dollars), payee, category. Read-only. Composite realized-transaction IDs (uuid_YYYY-MM-DD) are not valid here — strip the date suffix or use get_transaction, which handles them.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     scheduledTransactionId: z.string().describe("Scheduled transaction ID"),
   } },
@@ -2169,7 +2283,7 @@ registerTool(
 
 registerTool(
   "create_scheduled_transaction",
-  { description: "Create a new scheduled (recurring) transaction", inputSchema: {
+  { description: "Create a new scheduled (recurring or future one-time) transaction. Side effects: YNAB will realize it into a real unapproved transaction on each occurrence date. Use frequency:'never' for a single future-dated transaction (create_transaction rejects future dates). For transfers, use the destination account's transfer_payee_id as payeeId.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     accountId: z.string().describe("Account ID"),
     dateFirst: z.string().describe("First occurrence date (YYYY-MM-DD)"),
@@ -2202,7 +2316,7 @@ registerTool(
 
 registerTool(
   "update_scheduled_transaction",
-  { description: "Update an existing scheduled transaction. Only provided fields are changed. Amounts in dollars.", inputSchema: {
+  { description: "Update an existing scheduled transaction. Only provided fields are changed; amounts in dollars. Side effects: changes apply to all FUTURE occurrences (already-realized transactions are untouched — edit those with update_transaction). Implementation note: the YNAB API replaces the whole resource, so this tool fetches current values first and merges (costs one extra API request).", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     scheduledTransactionId: z.string().describe("Scheduled transaction ID"),
     accountId: z.string().optional().describe("Account ID"),
@@ -2602,6 +2716,841 @@ registerTool(
   }
 );
 
+// ==================== Undo Journal ====================
+// Every transaction-level write is journaled locally with enough before-state
+// to reverse it (pattern adapted from Maronato/ynab-mcp and jeangnc/ynab-mcp-server).
+// The journal lives outside the budget, so it survives restarts but never
+// leaves this machine. Category/payee/scheduled writes are journaled without
+// undo data (undoable: false) — reversing those safely needs human judgment.
+
+const UNDO_JOURNAL_MAX_ENTRIES = 100;
+
+function undoJournalPath() {
+  return path.join(userHomeDir(), ".ynab-mcp-undo.json");
+}
+
+function readUndoJournal() {
+  try {
+    const parsed = JSON.parse(readFileSync(undoJournalPath(), "utf8"));
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function appendUndoEntry(entry) {
+  // A journaling failure must never fail the write it describes.
+  try {
+    const journal = readUndoJournal();
+    journal.unshift({ id: randomUUID(), at: new Date().toISOString(), ...entry });
+    writeFileSync(undoJournalPath(), JSON.stringify(journal.slice(0, UNDO_JOURNAL_MAX_ENTRIES), null, 2));
+    return journal[0].id;
+  } catch (e) {
+    console.error(`Could not write undo journal: ${sanitizeErrorMessage(e?.message || e)}`);
+    return null;
+  }
+}
+
+// Extract the before-values of exactly the fields a requested update changes,
+// so undo restores only what this operation touched.
+function beforeFieldsForUpdate(requested, beforeTransaction) {
+  if (!beforeTransaction) return null;
+  const fields = {};
+  for (const [inputField, outputField] of TRANSACTION_UPDATE_VERIFICATION_FIELDS) {
+    if (!hasOwn(requested, inputField) || requested[inputField] === undefined) continue;
+    fields[inputField] = beforeTransaction[outputField] ?? null;
+  }
+  return fields;
+}
+
+// One list request covering recent history, with per-transaction GET fallback
+// only for stragglers — same budget-friendly shape as prefetchUpdatedTransactions.
+async function fetchTransactionsByIds(budgetId, ids) {
+  const wanted = new Set(ids.map(normalizeTransactionId));
+  const byId = new Map();
+  const sinceDate = new Date(Date.now() - VERIFY_REFETCH_WINDOW_DAYS * 24 * 60 * 60 * 1000)
+    .toISOString().slice(0, 10);
+  try {
+    const data = await fetchTransactions({ budgetId, sinceDate });
+    for (const t of data.transactions) {
+      const id = normalizeTransactionId(t.id);
+      if (wanted.has(id)) byId.set(id, formatTransaction(t));
+    }
+  } catch {
+    // Fall through to per-transaction GETs.
+  }
+  const missing = [...wanted].filter((id) => !byId.has(id));
+  await Promise.all(missing.map(async (id) => {
+    try {
+      byId.set(id, await getFormattedTransaction(budgetId, id));
+    } catch {
+      // Missing before-state degrades that row to undoable: false; it must
+      // not block the write.
+    }
+  }));
+  return byId;
+}
+
+function journalTransactionUpdates(tool, budgetId, requestedUpdates, beforeById, description) {
+  const rows = [];
+  let missingBefore = 0;
+  for (const requested of requestedUpdates) {
+    const before = beforeById.get(normalizeTransactionId(requested.id));
+    const fields = beforeFieldsForUpdate(requested, before);
+    if (fields && Object.keys(fields).length > 0) {
+      rows.push({ id: normalizeTransactionId(requested.id), fields });
+    } else {
+      missingBefore += 1;
+    }
+  }
+  return appendUndoEntry({
+    tool,
+    budget_id: budgetId,
+    description,
+    undoable: rows.length > 0,
+    rows_without_before_state: missingBefore,
+    undo: rows.length > 0 ? { type: "restore_fields", rows } : null,
+  });
+}
+
+registerTool(
+  "list_undo_history",
+  { description: "List the local undo journal: every write this MCP server performed (most recent first), with per-entry undo capability. Read-only; reads a local journal file, never the YNAB API. Use this to review what changed before calling undo_operation, or to audit a session's writes. Entries with undoable:false are recorded for audit only and cannot be reversed automatically.", inputSchema: {
+    limit: z.number().int().positive().max(UNDO_JOURNAL_MAX_ENTRIES).optional().describe("Maximum entries to return (default 20, newest first)"),
+  } },
+  ({ limit }) => {
+    const journal = readUndoJournal().slice(0, limit ?? 20);
+    return ok({
+      count: journal.length,
+      journal_path: undoJournalPath(),
+      entries: journal.map((e) => ({
+        id: e.id,
+        at: e.at,
+        tool: e.tool,
+        description: e.description,
+        undoable: !!e.undoable,
+        undone: !!e.undone,
+      })),
+    });
+  }
+);
+
+registerTool(
+  "undo_operation",
+  { description: "Reverse a previous write recorded in the undo journal (see list_undo_history for entry IDs). Supported reversals: field updates are restored to their captured before-values, created transactions are deleted, and deleted transactions are recreated (without their original bank-import linkage, which the YNAB API cannot restore). Side effects: performs real writes against the budget. An entry can only be undone once. Not supported for category/payee/scheduled writes (journaled as undoable:false). Requires confirmed:true after explicit user confirmation.", inputSchema: {
+    entryId: z.string().describe("Undo journal entry ID from list_undo_history"),
+    confirmed: z.literal(true).describe("Required. Pass true only after the user explicitly confirms this undo."),
+  } },
+  ({ entryId }) =>
+    run(async () => {
+      const journal = readUndoJournal();
+      const entry = journal.find((e) => e.id === entryId);
+      if (!entry) throw new Error(`No undo journal entry with id ${entryId}. Use list_undo_history to find entry IDs.`);
+      if (entry.undone) throw new Error(`Entry ${entryId} was already undone at ${entry.undone_at}.`);
+      if (!entry.undoable || !entry.undo) throw new Error(`Entry ${entryId} (${entry.tool}) is journaled for audit only and cannot be undone automatically.`);
+
+      const bid = entry.budget_id;
+      let result;
+      if (entry.undo.type === "restore_fields") {
+        const updates = entry.undo.rows.map((r) => ({ id: r.id, ...r.fields }));
+        const mapped = updates.map((t) => ({ id: t.id, ...mapTransactionUpdate(t) }));
+        const { data } = await api.transactions.updateTransactions(bid, { transactions: mapped });
+        const { verification } = await verifyBulkTransactionUpdates(bid, updates, data.transactions);
+        if (verification.failed.length > 0) {
+          throw new Error(`Undo applied but verification failed for: ${JSON.stringify(verification.failed)}`);
+        }
+        result = { restored_count: updates.length };
+      } else if (entry.undo.type === "delete_transactions") {
+        for (const id of entry.undo.ids) {
+          await api.transactions.deleteTransaction(bid, id);
+        }
+        result = { deleted_count: entry.undo.ids.length };
+      } else if (entry.undo.type === "recreate_transaction") {
+        const t = entry.undo.transaction;
+        const { data } = await api.transactions.createTransaction(bid, {
+          transaction: mapTransactionInput({
+            accountId: t.account_id,
+            date: t.date,
+            amount: t.amount,
+            payeeId: t.payee_id,
+            categoryId: t.category_id,
+            memo: t.memo,
+            cleared: t.cleared,
+            approved: t.approved,
+            flagColor: t.flag_color,
+          }),
+        });
+        result = { recreated_transaction: formatTransaction(data.transaction) };
+      } else {
+        throw new Error(`Unknown undo type: ${entry.undo.type}`);
+      }
+
+      entry.undone = true;
+      entry.undone_at = new Date().toISOString();
+      try {
+        writeFileSync(undoJournalPath(), JSON.stringify(journal.slice(0, UNDO_JOURNAL_MAX_ENTRIES), null, 2));
+      } catch (e) {
+        console.error(`Could not mark undo entry as undone: ${sanitizeErrorMessage(e?.message || e)}`);
+      }
+      appendUndoEntry({
+        tool: "undo_operation",
+        budget_id: bid,
+        description: `Undid entry ${entryId} (${entry.tool}: ${entry.description})`,
+        undoable: false,
+        undo: null,
+      });
+      return ok({ undone_entry: entryId, original_tool: entry.tool, ...result });
+    })
+);
+
+// ==================== Category Workflows ====================
+// The YNAB API has no category merge or delete endpoint (its category paths
+// support only GET/POST/PATCH), so these are composite workflows: move the
+// transactions, move or zero the budgeted amounts, then the empty category
+// is retired by hand in the YNAB UI. Adapted from justmytwospence/ynab-mcp.
+
+const MAX_BUDGET_MOVE_MONTHS = 24;
+
+async function reassignCategoryTransactions(bid, fromCategoryId, toCategoryId) {
+  const data = await fetchTransactions({ budgetId: bid, categoryId: fromCategoryId, sinceDate: allHistorySinceDate() });
+  // The category-transactions endpoint returns hybrid rows: real transactions
+  // plus subtransaction rows from splits. Subtransaction rows cannot be
+  // PATCHed directly, so they are reported for manual follow-up instead.
+  const rows = data.transactions.filter((t) => !t.deleted);
+  const txns = rows.filter((t) => t.type !== "subtransaction");
+  const subRows = rows.filter((t) => t.type === "subtransaction");
+  if (txns.length === 0) {
+    return { reassigned_count: 0, skipped_subtransaction_rows: subRows.length };
+  }
+  const updates = txns.map((t) => ({ id: normalizeTransactionId(t.id), categoryId: toCategoryId }));
+  const mapped = updates.map((t) => ({ id: t.id, ...mapTransactionUpdate(t) }));
+  const { data: updData } = await api.transactions.updateTransactions(bid, { transactions: mapped });
+  const { verification } = await verifyBulkTransactionUpdates(bid, updates, updData.transactions);
+  if (verification.failed.length > 0) {
+    throw new Error(`Category reassignment verification failed: ${JSON.stringify(verification.failed)}`);
+  }
+  return {
+    reassigned_count: updates.length,
+    skipped_subtransaction_rows: subRows.length,
+    before_categories: txns,
+  };
+}
+
+function currentBudgetMonth() {
+  return `${new Date().toISOString().slice(0, 7)}-01`;
+}
+
+async function moveCategoryBudgets(bid, fromCategoryId, toCategoryId, monthsMode) {
+  if (monthsMode === "none") return { months_adjusted: [], months_scanned: 0 };
+  let months;
+  if (monthsMode === "current") {
+    months = [currentBudgetMonth()];
+  } else {
+    const { data } = await api.months.getPlanMonths(bid);
+    months = data.months
+      .map((m) => m.month)
+      .sort()
+      .reverse()
+      .slice(0, MAX_BUDGET_MOVE_MONTHS);
+  }
+  const adjusted = [];
+  for (const month of months) {
+    const { data } = await api.categories.getMonthCategoryById(bid, month, fromCategoryId);
+    const budgeted = data.category.budgeted;
+    if (!budgeted) continue;
+    if (toCategoryId) {
+      const { data: target } = await api.categories.getMonthCategoryById(bid, month, toCategoryId);
+      await api.categories.updateMonthCategory(bid, month, toCategoryId, {
+        category: { budgeted: target.category.budgeted + budgeted },
+      });
+    }
+    await api.categories.updateMonthCategory(bid, month, fromCategoryId, {
+      category: { budgeted: 0 },
+    });
+    adjusted.push({ month, moved: dollars(budgeted) });
+  }
+  return { months_adjusted: adjusted, months_scanned: months.length };
+}
+
+registerTool(
+  "merge_category",
+  { description: "Merge one category into another: every transaction in fromCategoryId is recategorized to toCategoryId, and budgeted amounts are moved (per moveBudgetedMonths). Use to consolidate duplicate or obsolete categories. The YNAB API cannot delete categories, so the emptied source category remains and must be hidden or deleted by hand in the YNAB UI afterward. Split-transaction sub-rows in the source category are reported but not moved (the API cannot edit existing splits) — handle those in the UI. Side effects: bulk transaction updates plus per-month budget updates; with moveBudgetedMonths='all' this scans up to 24 months and can use many API requests. The transaction recategorization is journaled and reversible via undo_operation; budget moves are not. Requires confirmed:true after explicit user confirmation.", inputSchema: {
+    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+    fromCategoryId: z.string().describe("Source category to empty (its transactions and budgets move out)"),
+    toCategoryId: z.string().describe("Destination category that absorbs the transactions and budgeted amounts"),
+    moveBudgetedMonths: z.enum(["none", "current", "all"]).optional().describe("Which months' budgeted amounts to move to the destination: 'current' (default) only the current month, 'all' every month with a nonzero source budget (newest 24 months), 'none' to move transactions only"),
+    confirmed: z.literal(true).describe("Required. Pass true only after the user explicitly confirms this category merge."),
+  } },
+  ({ budgetId, fromCategoryId, toCategoryId, moveBudgetedMonths }) =>
+    run(async () => {
+      if (fromCategoryId === toCategoryId) throw new Error("fromCategoryId and toCategoryId must differ.");
+      const bid = resolveBudgetId(budgetId);
+      const reassigned = await reassignCategoryTransactions(bid, fromCategoryId, toCategoryId);
+      if (reassigned.before_categories) {
+        journalTransactionUpdates(
+          "merge_category",
+          bid,
+          reassigned.before_categories.map((t) => ({ id: normalizeTransactionId(t.id), categoryId: toCategoryId })),
+          new Map(reassigned.before_categories.map((t) => [normalizeTransactionId(t.id), formatTransaction(t)])),
+          `Merged category ${fromCategoryId} into ${toCategoryId} (${reassigned.reassigned_count} transactions)`
+        );
+      }
+      const budgets = await moveCategoryBudgets(bid, fromCategoryId, toCategoryId, moveBudgetedMonths ?? "current");
+      return ok({
+        from_category_id: fromCategoryId,
+        to_category_id: toCategoryId,
+        reassigned_count: reassigned.reassigned_count,
+        skipped_subtransaction_rows: reassigned.skipped_subtransaction_rows,
+        budget_moves: budgets,
+        note: "Source category is now empty but still exists; hide or delete it in the YNAB UI (the API cannot delete categories).",
+      });
+    })
+);
+
+registerTool(
+  "retire_category",
+  { description: "Prepare a category for deletion: recategorize its full transaction history to replacementCategoryId and zero its budgeted amounts (per zeroBudgetedMonths). The YNAB API has no category-delete endpoint, so the final hide/delete step happens by hand in the YNAB UI — this tool does everything the API can. Split-transaction sub-rows are reported but not moved. Side effects: bulk transaction updates plus per-month budget zeroing; zeroed budget dollars return to Ready to Assign for those months rather than moving to the replacement category (use merge_category if the dollars should follow). The recategorization is journaled and reversible via undo_operation. Requires confirmed:true after explicit user confirmation.", inputSchema: {
+    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+    categoryId: z.string().describe("Category to retire"),
+    replacementCategoryId: z.string().describe("Category that absorbs the transaction history"),
+    zeroBudgetedMonths: z.enum(["none", "current", "all"]).optional().describe("Which months' budgeted amounts to zero: 'current' (default), 'all' (newest 24 months), or 'none'"),
+    confirmed: z.literal(true).describe("Required. Pass true only after the user explicitly confirms retiring this category."),
+  } },
+  ({ budgetId, categoryId, replacementCategoryId, zeroBudgetedMonths }) =>
+    run(async () => {
+      if (categoryId === replacementCategoryId) throw new Error("categoryId and replacementCategoryId must differ.");
+      const bid = resolveBudgetId(budgetId);
+      const reassigned = await reassignCategoryTransactions(bid, categoryId, replacementCategoryId);
+      if (reassigned.before_categories) {
+        journalTransactionUpdates(
+          "retire_category",
+          bid,
+          reassigned.before_categories.map((t) => ({ id: normalizeTransactionId(t.id), categoryId: replacementCategoryId })),
+          new Map(reassigned.before_categories.map((t) => [normalizeTransactionId(t.id), formatTransaction(t)])),
+          `Retired category ${categoryId}; history moved to ${replacementCategoryId} (${reassigned.reassigned_count} transactions)`
+        );
+      }
+      const budgets = await moveCategoryBudgets(bid, categoryId, null, zeroBudgetedMonths ?? "current");
+      return ok({
+        category_id: categoryId,
+        replacement_category_id: replacementCategoryId,
+        reassigned_count: reassigned.reassigned_count,
+        skipped_subtransaction_rows: reassigned.skipped_subtransaction_rows,
+        budget_zeroing: budgets,
+        note: "Category is now empty; hide or delete it in the YNAB UI (Budget view → category → hide/delete). Zeroed budget dollars returned to Ready to Assign.",
+      });
+    })
+);
+
+registerTool(
+  "prepare_split_for_matching",
+  { description: "Work around the YNAB API's inability to split an already-imported transaction: creates a NEW unapproved, uncleared split transaction with the given subtransactions, mirroring the original's account, date, amount, and payee. YNAB then offers to match it with the imported original in the web/mobile UI; approving that match merges the split onto the bank-linked transaction, preserving import linkage. Workflow: call this, then tell the user to open YNAB and approve the suggested match. Side effects: creates one real transaction; if the user never matches it, it should be deleted (the creation is journaled and reversible via undo_operation). The subtransaction amounts must sum exactly to the original amount. Requires confirmed:true after explicit user confirmation. Adapted from dgalarza/ynab-mcp-dgalarza.", inputSchema: {
+    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+    transactionId: z.string().describe("The existing imported transaction to mirror (its account, date, amount, and payee are copied)"),
+    subtransactions: z.array(subtransactionInputSchema).min(2).describe("The split lines. Amounts are in dollars and must sum to the original transaction's amount."),
+    confirmed: z.literal(true).describe("Required. Pass true only after the user explicitly confirms creating the mirror split transaction."),
+  } },
+  ({ budgetId, transactionId, subtransactions }) =>
+    run(async () => {
+      const bid = resolveBudgetId(budgetId);
+      const original = await getFormattedTransaction(bid, transactionId);
+      const splitSum = round2(subtransactions.reduce((sum, s) => sum + s.amount, 0));
+      if (splitSum !== round2(original.amount)) {
+        throw new Error(`Subtransaction amounts sum to ${splitSum} but the original transaction amount is ${original.amount}; they must match exactly.`);
+      }
+      const { data } = await api.transactions.createTransaction(bid, {
+        transaction: mapTransactionInput({
+          accountId: original.account_id,
+          date: original.date,
+          amount: original.amount,
+          payeeId: original.payee_id,
+          memo: original.memo,
+          cleared: "uncleared",
+          approved: false,
+          subtransactions,
+        }),
+      });
+      const created = formatTransaction(data.transaction);
+      appendUndoEntry({
+        tool: "prepare_split_for_matching",
+        budget_id: bid,
+        description: `Created mirror split ${created.id} for imported transaction ${transactionId}`,
+        undoable: true,
+        undo: { type: "delete_transactions", ids: [created.id] },
+      });
+      return ok({
+        created_split: created,
+        original_transaction_id: transactionId,
+        next_step: "Open YNAB (web or mobile); it should suggest matching this new split with the imported original. Approving the match merges them and preserves the bank-import link. If no match is offered, delete the created transaction (see undo_operation).",
+      });
+    })
+);
+
+// ==================== Audits ====================
+
+registerTool(
+  "audit_credit_card_payments",
+  { description: "Read-only audit of credit card payment categories: for each open credit card / line of credit account, compares the card's balance with its Credit Card Payment category's available balance. In a healthy budget the payment category equals the card balance (sign-flipped) for spending that is budgeted; a shortfall means a future payment is not fully funded (common after overspending or direct debt increases). Reports each card's balance, payment-category balance, difference, and a status. Makes no changes — fix shortfalls by assigning to the payment category via update_month_category. Interpretation note: small transient differences appear while recent transactions are pending/uncleared; treat sub-dollar or same-day differences as timing, not error.", inputSchema: {
+    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+  } },
+  ({ budgetId }) =>
+    run(async () => {
+      const bid = resolveBudgetId(budgetId);
+      const [{ data: acctData }, { data: catData }] = await Promise.all([
+        api.accounts.getAccounts(bid),
+        api.categories.getCategories(bid),
+      ]);
+      const ccCategories = new Map();
+      for (const g of catData.category_groups) {
+        if (g.name !== "Credit Card Payments") continue;
+        for (const c of g.categories) {
+          if (!c.deleted) ccCategories.set(c.name, c);
+        }
+      }
+      const cards = acctData.accounts
+        .filter((a) => !a.deleted && !a.closed && (a.type === "creditCard" || a.type === "lineOfCredit"))
+        .map((a) => {
+          const cat = ccCategories.get(a.name);
+          const cardBalance = dollars(a.balance);
+          const paymentAvailable = cat ? dollars(cat.balance) : null;
+          const funded = paymentAvailable !== null ? round2(paymentAvailable + cardBalance) : null;
+          let status;
+          if (!cat) status = "no_payment_category_found";
+          else if (cardBalance >= 0) status = "paid_off_or_positive";
+          else if (funded >= -0.005) status = "fully_funded";
+          else status = "underfunded";
+          return {
+            account_id: a.id,
+            account_name: a.name,
+            card_balance: cardBalance,
+            payment_category_id: cat?.id ?? null,
+            payment_category_available: paymentAvailable,
+            difference: funded,
+            status,
+          };
+        });
+      const underfunded = cards.filter((c) => c.status === "underfunded");
+      return ok({
+        cards,
+        underfunded_count: underfunded.length,
+        total_underfunded: round2(underfunded.reduce((sum, c) => sum + c.difference, 0)),
+        how_to_fix: "Assign the shortfall to the card's Credit Card Payment category with update_month_category (payment category balance should equal the card balance, sign-flipped, when all card spending is budgeted).",
+      });
+    })
+);
+
+registerTool(
+  "audit_account_reconciliation",
+  { description: "Read-only reconciliation diagnosis. Without accountId: summarizes every open account's last-reconciled date and cleared/uncleared balances (one API request). With accountId: additionally lists that account's uncleared and unapproved transactions since the last reconciliation, which are exactly the rows to compare against the bank statement. Makes no changes — actual reconciliation (marking transactions reconciled and locking the balance) happens in the YNAB UI; use this to find what needs attention first. Interpretation note: an old last_reconciled_at is not itself a problem if cleared_balance matches the bank; uncleared transactions older than a few days are the usual culprits.", inputSchema: {
+    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+    accountId: z.string().optional().describe("Account to inspect in detail (adds that account's uncleared/unapproved transaction list)"),
+  } },
+  ({ budgetId, accountId }) =>
+    run(async () => {
+      const bid = resolveBudgetId(budgetId);
+      const { data } = await api.accounts.getAccounts(bid);
+      const accounts = data.accounts
+        .filter((a) => !a.deleted && !a.closed && (!accountId || a.id === accountId))
+        .map((a) => ({
+          account_id: a.id,
+          account_name: a.name,
+          type: a.type,
+          last_reconciled_at: a.last_reconciled_at,
+          cleared_balance: dollars(a.cleared_balance),
+          uncleared_balance: dollars(a.uncleared_balance),
+          balance: dollars(a.balance),
+          needs_attention: a.uncleared_balance !== 0,
+        }));
+      if (accountId && accounts.length === 0) throw new Error(`No open account with id ${accountId}.`);
+      const result = { accounts };
+      if (accountId) {
+        const account = accounts[0];
+        const since = account.last_reconciled_at
+          ? account.last_reconciled_at.slice(0, 10)
+          : allHistorySinceDate();
+        const txData = await fetchTransactions({ budgetId: bid, accountId, sinceDate: since });
+        const open = txData.transactions.filter((t) => !t.deleted && (t.cleared === "uncleared" || !t.approved));
+        result.detail = {
+          account_id: accountId,
+          since,
+          open_items_count: open.length,
+          open_items: open.map((t) => ({
+            id: t.id,
+            date: t.date,
+            payee_name: t.payee_name,
+            amount: dollars(t.amount),
+            cleared: t.cleared,
+            approved: t.approved,
+          })),
+          guidance: "Compare open_items against the bank statement. Items on the statement should be marked cleared (update_transaction cleared:'cleared'); items missing from the bank after several days may be duplicates or manual entries needing review.",
+        };
+      }
+      return ok(result);
+    })
+);
+
+// ==================== Analytics ====================
+// Deterministic, read-only analytics computed from transaction history.
+// Adapted from Maronato/ynab-mcp; thresholds and formulas follow standard
+// personal-finance guidance (savings rate = (income - spending) / income).
+
+function isTransfer(t) {
+  return !!t.transfer_account_id;
+}
+
+function isIncome(t) {
+  return !isTransfer(t) && t.amount > 0 && (t.category_name === "Inflow: Ready to Assign" || t.category_name === "To be Budgeted");
+}
+
+function summarizeIncomeExpenseByMonth(transactions) {
+  const byMonth = new Map();
+  for (const t of transactions) {
+    if (t.deleted || isTransfer(t)) continue;
+    const month = t.date.slice(0, 7);
+    if (!byMonth.has(month)) byMonth.set(month, { income: 0, spending: 0 });
+    const bucket = byMonth.get(month);
+    if (isIncome(t)) bucket.income += t.amount;
+    else if (t.amount < 0) bucket.spending += -t.amount;
+  }
+  return [...byMonth.entries()].sort().map(([month, { income, spending }]) => ({
+    month,
+    income: round2(income),
+    spending: round2(spending),
+    net: round2(income - spending),
+    savings_rate_pct: income > 0 ? round2(((income - spending) / income) * 100) : null,
+  }));
+}
+
+registerTool(
+  "get_income_expense_summary",
+  { description: "Read-only income vs. spending summary by month, computed from transaction history. Income counts non-transfer inflows to 'Inflow: Ready to Assign'; spending counts non-transfer outflows; transfers and deleted transactions are excluded, so credit card payments do not double-count. Includes per-month savings rate ((income - spending) / income). Use for savings-rate reports, month-end closes, and trend questions like 'am I saving enough'. Refunds appear as negative spending months' offsets, not income.", inputSchema: {
+    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+    sinceDate: z.string().optional().describe("Start of the window (YYYY-MM-DD). Defaults to 6 full months back."),
+    untilDate: z.string().optional().describe("End of the window (YYYY-MM-DD). Defaults to today."),
+  } },
+  ({ budgetId, sinceDate, untilDate }) =>
+    run(async () => {
+      const bid = resolveBudgetId(budgetId);
+      const defaultSince = new Date(Date.now() - 183 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const data = await fetchTransactions({ budgetId: bid, sinceDate: sinceDate || defaultSince, untilDate });
+      const txns = data.transactions.map((t) => ({ ...t, amount: dollars(t.amount) }));
+      const months = summarizeIncomeExpenseByMonth(txns);
+      const totals = months.reduce((acc, m) => ({ income: acc.income + m.income, spending: acc.spending + m.spending }), { income: 0, spending: 0 });
+      return ok({
+        months,
+        totals: {
+          income: round2(totals.income),
+          spending: round2(totals.spending),
+          net: round2(totals.income - totals.spending),
+          savings_rate_pct: totals.income > 0 ? round2(((totals.income - totals.spending) / totals.income) * 100) : null,
+        },
+      });
+    })
+);
+
+const RECURRING_CADENCES = [
+  { name: "weekly", days: 7, tolerance: 2 },
+  { name: "biweekly", days: 14, tolerance: 3 },
+  { name: "monthly", days: 30, tolerance: 5 },
+  { name: "quarterly", days: 91, tolerance: 10 },
+  { name: "yearly", days: 365, tolerance: 20 },
+];
+
+function detectRecurringFromTransactions(transactions, { minOccurrences = 3 } = {}) {
+  const groups = new Map();
+  for (const t of transactions) {
+    if (t.deleted || isTransfer(t) || t.amount >= 0) continue;
+    const key = `${t.payee_name || t.payee_id || "unknown"}|${round2(t.amount)}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(t);
+  }
+  const recurring = [];
+  for (const txns of groups.values()) {
+    if (txns.length < minOccurrences) continue;
+    const dates = txns.map((t) => new Date(`${t.date}T00:00:00Z`).getTime()).sort((a, b) => a - b);
+    const gaps = [];
+    for (let i = 1; i < dates.length; i += 1) gaps.push((dates[i] - dates[i - 1]) / 86400000);
+    const avgGap = gaps.reduce((a, b) => a + b, 0) / gaps.length;
+    const cadence = RECURRING_CADENCES.find((c) => Math.abs(avgGap - c.days) <= c.tolerance);
+    if (!cadence) continue;
+    const sample = txns[0];
+    const perYear = 365 / cadence.days;
+    recurring.push({
+      payee_name: sample.payee_name,
+      payee_id: sample.payee_id,
+      amount: round2(sample.amount),
+      category_name: sample.category_name,
+      cadence: cadence.name,
+      occurrences: txns.length,
+      first_seen: txns.reduce((min, t) => (t.date < min ? t.date : min), txns[0].date),
+      last_seen: txns.reduce((max, t) => (t.date > max ? t.date : max), txns[0].date),
+      estimated_annual_cost: round2(-sample.amount * perYear),
+    });
+  }
+  return recurring.sort((a, b) => b.estimated_annual_cost - a.estimated_annual_cost);
+}
+
+registerTool(
+  "detect_recurring_charges",
+  { description: "Read-only detection of recurring charges (subscriptions, utilities, insurance) from transaction history: groups outflows by payee + exact amount and reports groups whose spacing matches a weekly/biweekly/monthly/quarterly/yearly cadence, with estimated annual cost. Use for subscription audits and 'what am I paying for' questions. Catches auto-imported recurring charges that list_scheduled_transactions cannot see (that tool only lists manually-created recurrences). Limitations: variable-amount bills (utilities that fluctuate) are missed because grouping is by exact amount; the same vendor billed under multiple identities or payee spellings appears as separate rows — verify against payee variants with search_payees before concluding a subscription was cancelled.", inputSchema: {
+    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+    monthsBack: z.number().int().positive().max(24).optional().describe("History window in months (default 6; longer windows catch quarterly/yearly cadences)"),
+    minOccurrences: z.number().int().min(2).optional().describe("Minimum occurrences to count as recurring (default 3)"),
+  } },
+  ({ budgetId, monthsBack, minOccurrences }) =>
+    run(async () => {
+      const bid = resolveBudgetId(budgetId);
+      const since = new Date(Date.now() - (monthsBack ?? 6) * 30.5 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const data = await fetchTransactions({ budgetId: bid, sinceDate: since });
+      const txns = data.transactions.map((t) => ({ ...t, amount: dollars(t.amount) }));
+      const recurring = detectRecurringFromTransactions(txns, { minOccurrences: minOccurrences ?? 3 });
+      return ok({
+        window_since: since,
+        recurring_count: recurring.length,
+        total_estimated_annual_cost: round2(recurring.reduce((sum, r) => sum + r.estimated_annual_cost, 0)),
+        recurring,
+      });
+    })
+);
+
+registerTool(
+  "get_budget_health",
+  { description: "Read-only budget health snapshot combining month data, account balances, and a trailing-3-month income/spending summary: savings rate, age of money, Ready to Assign, overspent categories, credit card payment funding, and a green/yellow/red indicator per metric. Threshold guidance (standard personal-finance defaults, not YNAB rules): savings rate 20%+ green; carried credit card debt red when payment categories are underfunded; overspent categories yellow. Use as the opening move of a monthly review or 'how am I doing' question, then drill into specific tools. Costs about 4 API requests.", inputSchema: {
+    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+  } },
+  ({ budgetId }) =>
+    run(async () => {
+      const bid = resolveBudgetId(budgetId);
+      const month = currentBudgetMonth();
+      const since = new Date(Date.now() - 92 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const [{ data: monthData }, { data: acctData }, txData] = await Promise.all([
+        api.months.getPlanMonth(bid, month),
+        api.accounts.getAccounts(bid),
+        fetchTransactions({ budgetId: bid, sinceDate: since }),
+      ]);
+      const m = monthData.month;
+      const txns = txData.transactions.map((t) => ({ ...t, amount: dollars(t.amount) }));
+      const months = summarizeIncomeExpenseByMonth(txns);
+      const totals = months.reduce((acc, x) => ({ income: acc.income + x.income, spending: acc.spending + x.spending }), { income: 0, spending: 0 });
+      const savingsRate = totals.income > 0 ? round2(((totals.income - totals.spending) / totals.income) * 100) : null;
+
+      const overspent = (m.categories || []).filter((c) => !c.deleted && c.balance < 0 && c.category_group_name !== "Internal Master Category");
+      const openAccounts = acctData.accounts.filter((a) => !a.deleted && !a.closed);
+      const ccAccounts = openAccounts.filter((a) => a.type === "creditCard" || a.type === "lineOfCredit");
+      const ccDebt = round2(ccAccounts.reduce((sum, a) => sum + Math.min(0, dollars(a.balance)), 0));
+
+      const indicator = (value, green, yellow) => (value === null ? "unknown" : value ? green : yellow);
+      const metrics = {
+        savings_rate_pct: {
+          value: savingsRate,
+          status: savingsRate === null ? "unknown" : savingsRate >= 20 ? "green" : savingsRate >= 0 ? "yellow" : "red",
+          guidance: "20%+ is the common target; negative means spending exceeded income over the window.",
+        },
+        age_of_money_days: {
+          value: m.age_of_money ?? null,
+          status: m.age_of_money == null ? "unknown" : m.age_of_money >= 30 ? "green" : m.age_of_money >= 10 ? "yellow" : "red",
+          guidance: "Days between earning a dollar and spending it; 30+ means roughly a month of buffer.",
+        },
+        ready_to_assign: {
+          value: dollars(m.to_be_budgeted),
+          status: m.to_be_budgeted >= 0 ? "green" : "red",
+          guidance: "Negative Ready to Assign means more is assigned than exists; move money between categories to fix.",
+        },
+        overspent_categories: {
+          value: overspent.length,
+          total: round2(overspent.reduce((sum, c) => sum + dollars(c.balance), 0)),
+          status: overspent.length === 0 ? "green" : "yellow",
+          guidance: "Cover overspending from other categories before month-end or it reduces next month's Ready to Assign.",
+        },
+        credit_card_debt: {
+          value: ccDebt,
+          status: indicator(ccDebt === 0 ? true : null, "green", "yellow") === "green" ? "green" : "yellow",
+          guidance: "Card balances are fine when their payment categories are fully funded; run audit_credit_card_payments for the funding check.",
+        },
+      };
+      const statuses = Object.values(metrics).map((x) => x.status);
+      const overall = statuses.includes("red") ? "red" : statuses.includes("yellow") ? "yellow" : "green";
+      return ok({
+        month,
+        overall_status: overall,
+        metrics,
+        trailing_months: months,
+        next_steps: "Drill in with get_overspent_categories, audit_credit_card_payments, detect_recurring_charges, or get_income_expense_summary.",
+      });
+    })
+);
+
+// ==================== Export ====================
+
+const CSV_COLUMNS = [
+  ["date", (t) => t.date],
+  ["amount", (t) => t.amount],
+  ["payee", (t) => t.payee_name],
+  ["category", (t) => t.category_name],
+  ["account", (t) => t.account_name],
+  ["memo", (t) => t.memo],
+  ["cleared", (t) => t.cleared],
+  ["approved", (t) => t.approved],
+  ["transfer", (t) => (t.transfer_account_id ? "yes" : "")],
+  ["id", (t) => t.id],
+];
+
+function csvEscape(value) {
+  if (value === null || value === undefined) return "";
+  const text = String(value);
+  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function buildTransactionsCsv(transactions) {
+  const header = CSV_COLUMNS.map(([name]) => name).join(",");
+  const rows = transactions.map((t) => CSV_COLUMNS.map(([, get]) => csvEscape(get(t))).join(","));
+  return [header, ...rows].join("\n");
+}
+
+registerTool(
+  "export_transactions",
+  { description: "Export transactions as CSV text (same filters as get_transactions). Columns: date, amount (dollars, negative = outflow), payee, category, account, memo, cleared, approved, transfer, id. Use when the user wants data for a spreadsheet or offline analysis; for programmatic work prefer get_transactions (structured JSON). Read-only. Large date ranges produce large output — narrow with filters when possible.", inputSchema: {
+    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+    sinceDate: z.string().optional().describe("Only export transactions on or after this date (YYYY-MM-DD). If omitted, YNAB defaults to one year ago."),
+    untilDate: z.string().optional().describe("Only export transactions on or before this date (YYYY-MM-DD)"),
+    accountId: z.string().optional().describe("Filter by account ID"),
+    categoryId: z.string().optional().describe("Filter by category ID"),
+    payeeId: z.string().optional().describe("Filter by payee ID"),
+    month: z.string().optional().describe("Filter by month (YYYY-MM-DD, first of month)"),
+  } },
+  ({ budgetId, sinceDate, untilDate, accountId, categoryId, payeeId, month }) =>
+    run(async () => {
+      const data = await fetchTransactions({ budgetId, sinceDate, untilDate, accountId, categoryId, payeeId, month });
+      const txns = data.transactions.filter((t) => !t.deleted).map(formatTransaction);
+      return { content: [{ type: "text", text: buildTransactionsCsv(txns) }] };
+    })
+);
+
+// ==================== Prompts & Resources ====================
+// Workflow prompts and a general-methodology knowledge base, so any MCP host
+// gets guided workflows without a separate skill. Patterns adapted from
+// Maronato/ynab-mcp and senivel/you-need-an-advisor-mcp. Content is generic
+// YNAB methodology — nothing budget-specific.
+
+const YNAB_METHODOLOGY_TEXT = `# YNAB Methodology Primer
+
+## The Four Rules
+1. **Give Every Dollar a Job** — assign all of Ready to Assign to categories; a negative Ready to Assign means more is assigned than exists.
+2. **Embrace Your True Expenses** — break large irregular costs (insurance, holidays, repairs) into monthly amounts via category targets.
+3. **Roll With the Punches** — overspending is fixed by moving money between categories, not by guilt; cover overspent categories before month-end or they reduce next month's Ready to Assign.
+4. **Age Your Money** — the age-of-money metric is days between earning and spending; 30+ days means about a month of buffer.
+
+## Credit cards
+YNAB treats credit cards as their own accounts with a paired "Credit Card Payment" category. When budgeted cash is spent on a card, YNAB moves that cash into the payment category. A healthy card has payment-category balance equal to the card balance (sign-flipped). A shortfall means future payments are not fully funded (run audit_credit_card_payments).
+
+## Reconciliation
+Reconciliation locks the account to the bank's reality: compare the cleared balance to the bank balance, clear transactions the bank shows, investigate uncleared items older than a few days, then finish in the YNAB UI (the API cannot mark an account reconciled). audit_account_reconciliation lists exactly the open items to check.
+
+## Amounts in this server
+All tool inputs and outputs use dollars (e.g. -12.34), not YNAB's internal milliunits. Negative = outflow, positive = inflow.
+
+## Interpretation cautions
+- A category's assigned-vs-spent gap within a month is usually a timing signal, not a discipline failure — bills land unevenly.
+- 'Inflow: Ready to Assign' is the income category; transfers between accounts are not income or spending.
+- list_scheduled_transactions only shows manually-created recurrences; use detect_recurring_charges for real recurring spend.`;
+
+const YNAB_WRITE_SAFETY_TEXT = `# Write Safety Rules for this server
+
+- Write tools exist only when the server starts with YNAB_ALLOW_WRITES=1; destructive/bulk tools additionally require confirmed:true after explicit user confirmation.
+- Never batch-approve on vague instructions ("approve the rest"). List the exact transactions (payee, amount, category), get explicit confirmation, and state what you are NOT approving.
+- Never fabricate transaction IDs. Extract them from review_unapproved / get_transactions results. A batch failing with "transaction does not exist in this budget" is the signature of fabricated IDs.
+- After combined category+approval writes, check the returned verification block; require verification.failed to be empty. Do not use the approval-queue count as the only success check — approval can succeed while the category write did not persist.
+- Recategorizing a transaction does not move budgeted dollars. To true-up the month, also call update_month_category (it sets an absolute value: compute old budgeted − amount and new budgeted + amount).
+- Transfers: use the destination account's transfer_payee_id as payeeId; do not invent a "Transfer : ..." payee name.
+- Every transaction write is journaled locally; list_undo_history shows the journal and undo_operation reverses a journaled write.`;
+
+const YNAB_AUDIT_PATTERNS_TEXT = `# Common Audit Patterns
+
+- **Refund mirroring**: when a refund lands, categorize it to the same category as the original purchase so the two net out; flag pending returns (e.g. yellow) until the refund arrives.
+- **Manual entry for non-imported spend** (checks, P2P apps, cash): create as uncleared with NO importId so the bank's later import matches and promotes it instead of duplicating.
+- **Transfer pairs**: each side of a transfer has an independent cleared state. Before deleting an apparent phantom, check the other side and the prior-month cadence. Credit-card payments should be transfers, not categorized spending.
+- **Payee disambiguation**: when payee_name is truncated or ambiguous, read import_payee_name_original — the raw bank string encodes the processor (AplPay, SP = Square, TST* = Toast), full merchant name, and city/state.
+- **Aggregator payees** (app stores, marketplaces, municipalities) bill many products under one payee; disambiguate by amount or import_payee_name_original before recategorizing.
+- **Split needed on an imported transaction**: the API cannot split an existing transaction; use prepare_split_for_matching and approve the match in the YNAB UI.`;
+
+const YNAB_FLAGS_REFERENCE_TEXT = `# review_unapproved flags reference
+
+| Flag | Meaning | Suggested action |
+|------|---------|------------------|
+| manually_entered | Hand-keyed, not bank-imported | Confirm it's intentional |
+| match_broken | Stale matched_transaction_id reference | The transaction itself is fully editable; only the stale link is immutable via API. GET the matched id: not-found = orphan (safe), live = duplicate (keep one). UI cleanup of the link is cosmetic. |
+| no_prior_amount_match | First time this amount appeared for this payee | Review before approving |
+| category_drift:was_X | Payee previously categorized elsewhere | Surface the drift with prior-category evidence; ask before fixing |
+| new_payee | No history for this payee | Confirm payee and category |
+| scheduled_transaction_realized | Came from a scheduled entry | Verify amount and category match expectations |
+
+Transactions flagged match_broken, or manually_entered + no_prior_amount_match, should get explicit user sign-off regardless of batch size.`;
+
+const YNAB_RESOURCES = [
+  ["methodology", "YNAB methodology primer: the Four Rules, credit card handling, reconciliation, age of money, and amount conventions for this server.", YNAB_METHODOLOGY_TEXT],
+  ["write-safety", "Write-safety rules: gating, confirmed:true, batch approval discipline, verification blocks, undo journal.", YNAB_WRITE_SAFETY_TEXT],
+  ["audit-patterns", "Common audit patterns: refund mirroring, transfer pairs, manual entry, payee disambiguation via import_payee_name_original, split-via-match.", YNAB_AUDIT_PATTERNS_TEXT],
+  ["flags-reference", "Reference table for the flags array returned by review_unapproved, with suggested actions.", YNAB_FLAGS_REFERENCE_TEXT],
+];
+
+for (const [slug, description, text] of YNAB_RESOURCES) {
+  server.registerResource(
+    `ynab-guide-${slug}`,
+    `ynab://guide/${slug}`,
+    { title: `YNAB guide: ${slug}`, description, mimeType: "text/markdown" },
+    async (uri) => ({ contents: [{ uri: uri.href, mimeType: "text/markdown", text }] })
+  );
+}
+
+function promptText(text) {
+  return () => ({ messages: [{ role: "user", content: { type: "text", text } }] });
+}
+
+const YNAB_PROMPTS = [
+  ["monthly-review", "Guided month-end review: health snapshot, overspending, credit card funding, income vs spending, and next-month planning.",
+    `Run a month-end YNAB review using this server's tools, read-only unless I explicitly approve a change:
+1. get_budget_health for the snapshot; note anything yellow/red.
+2. get_overspent_categories for the current month; propose (do not apply) coverage moves.
+3. audit_credit_card_payments; report underfunded cards.
+4. get_income_expense_summary for the trailing 3 months; report savings rate vs the 20% guideline.
+5. detect_recurring_charges; flag new or grown subscriptions.
+6. Summarize in a table (right-align amounts, negatives in parentheses) and list proposed actions for my approval. Perform zero writes.`],
+  ["weekly-triage", "Proposal-only weekly review of unapproved transactions with flag analysis; performs zero writes.",
+    `Do a weekly YNAB triage. This is PROPOSAL-ONLY: report 'Writes performed: 0' at the end.
+1. review_unapproved (use summary:true first; drill in with compact:true if needed).
+2. For each flagged transaction, apply the flags-reference guidance (resource ynab://guide/flags-reference).
+3. Propose exact categorizations/approvals as a table (payee, amount, current category, proposed category, flags), separating clean rows from rows needing my judgment.
+4. Do not call any write tool.`],
+  ["categorize-and-approve", "Guarded categorize-then-approve workflow for the unapproved queue, with verification.",
+    `Work through my unapproved YNAB transactions with the write-safety rules (resource ynab://guide/write-safety):
+1. review_unapproved with compact:true; never fabricate IDs.
+2. Propose categories for uncategorized rows using payee history (get_transactions with payeeId) and import_payee_name_original.
+3. List the exact rows you intend to change and wait for my confirmation.
+4. Apply with update_transactions (categoryId + approved:true in the same entry); check the verification block and stop if verification.failed is non-empty.
+5. Report what was changed, what was skipped, and why.`],
+  ["subscription-audit", "Find recurring charges, estimate annual cost, and flag candidates to cancel.",
+    `Audit my subscriptions:
+1. detect_recurring_charges with monthsBack: 12.
+2. Cross-check ambiguous rows against payee variants (search_payees) — the same vendor may bill under multiple payee spellings or identities; cancellation on one does not affect the others.
+3. Present a table sorted by estimated annual cost with cadence and last-seen date; flag anything unused, duplicated, or grown in price.
+4. Read-only: recommend cancellations, do not change the budget.`],
+  ["reconcile-account", "Diagnose an account's reconciliation state and list exactly what to check against the bank statement.",
+    `Help me reconcile an account:
+1. audit_account_reconciliation without accountId to find accounts needing attention.
+2. For the account I pick, rerun with accountId for the open-items list.
+3. Walk me through comparing each open item to my bank statement; propose update_transaction cleared:'cleared' for confirmed items (with my approval per the write-safety rules).
+4. Remind me to finish the reconciliation lock in the YNAB UI — the API cannot do that step.`],
+  ["credit-card-audit", "Check that every credit card's payment category is fully funded and propose fixes.",
+    `Audit my credit card payment funding:
+1. audit_credit_card_payments.
+2. For each underfunded card, explain the shortfall and propose the update_month_category assignment that fixes it (show the math; treat sub-dollar same-day differences as timing).
+3. Apply fixes only after my explicit confirmation.`],
+];
+
+for (const [slug, description, text] of YNAB_PROMPTS) {
+  server.registerPrompt(slug, { title: slug.replace(/-/g, " "), description }, promptText(text));
+}
+
 // --- Exports (unit tests) ---
 
 export {
@@ -2623,6 +3572,15 @@ export {
   withWriteGateDescription,
   parseToolExecuteInput,
   verifyBulkTransactionUpdates,
+  beforeFieldsForUpdate,
+  summarizeIncomeExpenseByMonth,
+  detectRecurringFromTransactions,
+  csvEscape,
+  buildTransactionsCsv,
+  readUndoJournal,
+  undoJournalPath,
+  ynabRequestsRemaining,
+  currentBudgetMonth,
 };
 
 // --- Start ---
