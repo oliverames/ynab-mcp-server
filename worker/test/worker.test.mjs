@@ -55,6 +55,28 @@ function hiddenValue(html, name) {
   return match[1];
 }
 
+function applySetCookies(cookieJar, response) {
+  const combined = response.headers.get("set-cookie") ?? "";
+  const headers = typeof response.headers.getSetCookie === "function"
+    ? response.headers.getSetCookie()
+    : combined.split(/,(?=\s*__Host-)/);
+  for (const header of headers) {
+    const pair = header.split(";", 1)[0].trim();
+    const separator = pair.indexOf("=");
+    if (separator < 1) continue;
+    const name = pair.slice(0, separator);
+    const value = pair.slice(separator + 1);
+    if (/;\s*Max-Age=0(?:;|$)/i.test(header)) cookieJar.delete(name);
+    else cookieJar.set(name, value);
+  }
+}
+
+function cookieHeader(cookieJar) {
+  return [...cookieJar]
+    .map(([name, value]) => `${name}=${value}`)
+    .join("; ");
+}
+
 test("hosted connector publishes the permitted Works with YNAB mark", async () => {
   assert.equal(WORKS_WITH_YNAB_SOURCE_URL, "https://api.ynab.com/papi/works_with_ynab.svg");
   assert.deepEqual(CONNECTOR_RESOURCE_METADATA, {
@@ -365,4 +387,130 @@ test("consent request is opaque, single-use, and redirects to YNAB", async () =>
   assert.equal(location.searchParams.get("code_challenge_method"), "S256");
   assert.equal(location.searchParams.get("redirect_uri"), "https://ynab.amesvt.com/callback");
   assert.equal(await kv.get(`oauth_consent:${consentId}`), null);
+});
+
+test("concurrent consent pages keep independent CSRF cookies", async () => {
+  const kv = new MemoryKV();
+  let requestNumber = 0;
+  const env = {
+    COOKIE_ENCRYPTION_KEY: COOKIE_KEY,
+    CONNECTOR_BASE_URL: "https://ynab.amesvt.com",
+    YNAB_CLIENT_ID: "ynab-client-id",
+    OAUTH_KV: kv,
+    OAUTH_PROVIDER: {
+      async parseAuthRequest() {
+        requestNumber += 1;
+        return {
+          responseType: "code",
+          clientId: `registered-client-${requestNumber}`,
+          redirectUri: `https://client-${requestNumber}.example/callback`,
+          scope: [],
+          state: `client-state-${requestNumber}`,
+          codeChallenge: `client-pkce-${requestNumber}`,
+          codeChallengeMethod: "S256",
+          resource: CONNECTOR_MCP_URL,
+        };
+      },
+      async lookupClient(clientId) {
+        return { clientName: clientId };
+      },
+    },
+  };
+
+  const first = await YnabHandler.request(`${CONNECTOR_MCP_URL.replace(/\/mcp$/, "")}/authorize`, {}, env);
+  const firstBody = await first.text();
+  const second = await YnabHandler.request(`${CONNECTOR_MCP_URL.replace(/\/mcp$/, "")}/authorize`, {}, env);
+  const secondBody = await second.text();
+
+  const browserCookies = new Map();
+  for (const response of [first, second]) {
+    const pair = (response.headers.get("set-cookie") ?? "").split(";", 1)[0];
+    const separator = pair.indexOf("=");
+    browserCookies.set(pair.slice(0, separator), pair.slice(separator + 1));
+  }
+  const cookieHeader = [...browserCookies]
+    .map(([name, value]) => `${name}=${value}`)
+    .join("; ");
+
+  const post = await YnabHandler.request(`${CONNECTOR_MCP_URL.replace(/\/mcp$/, "")}/authorize`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Cookie: cookieHeader,
+    },
+    body: new URLSearchParams({
+      consent: hiddenValue(firstBody, "consent"),
+      csrf: hiddenValue(firstBody, "csrf"),
+    }),
+  }, env);
+
+  assert.equal(post.status, 302);
+  assert.equal(new URL(post.headers.get("location")).origin, "https://app.ynab.com");
+});
+
+test("overlapping YNAB approvals keep independent callback state cookies", async () => {
+  const kv = new MemoryKV();
+  let requestNumber = 0;
+  const env = {
+    COOKIE_ENCRYPTION_KEY: COOKIE_KEY,
+    CONNECTOR_BASE_URL: "https://ynab.amesvt.com",
+    YNAB_CLIENT_ID: "ynab-client-id",
+    OAUTH_KV: kv,
+    OAUTH_PROVIDER: {
+      async parseAuthRequest() {
+        requestNumber += 1;
+        return {
+          responseType: "code",
+          clientId: `registered-client-${requestNumber}`,
+          redirectUri: `https://client-${requestNumber}.example/callback`,
+          scope: [],
+          state: `client-state-${requestNumber}`,
+          codeChallenge: `client-pkce-${requestNumber}`,
+          codeChallengeMethod: "S256",
+          resource: CONNECTOR_MCP_URL,
+        };
+      },
+      async lookupClient(clientId) {
+        return { clientName: clientId };
+      },
+    },
+  };
+  const origin = CONNECTOR_MCP_URL.replace(/\/mcp$/, "");
+  const browserCookies = new Map();
+
+  const pages = [];
+  for (let i = 0; i < 2; i += 1) {
+    const response = await YnabHandler.request(`${origin}/authorize`, {}, env);
+    applySetCookies(browserCookies, response);
+    pages.push(await response.text());
+  }
+
+  const states = [];
+  for (const body of pages) {
+    const response = await YnabHandler.request(`${origin}/authorize`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Cookie: cookieHeader(browserCookies),
+      },
+      body: new URLSearchParams({
+        consent: hiddenValue(body, "consent"),
+        csrf: hiddenValue(body, "csrf"),
+      }),
+    }, env);
+    assert.equal(response.status, 302);
+    applySetCookies(browserCookies, response);
+    states.push(new URL(response.headers.get("location")).searchParams.get("state"));
+  }
+
+  for (const state of states) {
+    const response = await YnabHandler.request(
+      `${origin}/callback?error=access_denied&state=${encodeURIComponent(state)}`,
+      { headers: { Cookie: cookieHeader(browserCookies) } },
+      env
+    );
+    applySetCookies(browserCookies, response);
+    assert.equal(response.status, 400);
+    assert.match(await response.text(), /YNAB did not authorize the connector/);
+  }
 });

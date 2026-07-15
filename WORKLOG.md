@@ -1,5 +1,17 @@
 # Worklog
 
+## 2026-07-15 - Concurrent OAuth tabs no longer overwrite security cookies
+
+**What changed**: Fixed the live Claude.ai and Mistral Work acceptance failure where a fresh consent form returned “Consent form expired or invalid” on its first submit. The connector used one origin-wide CSRF cookie and one origin-wide upstream OAuth state cookie. Opening authorization pages for two MCP clients at once made the later tab overwrite the earlier tab's cookie. Consent CSRF cookies are now namespaced by the opaque consent ID, and YNAB callback cookies are namespaced by the opaque OAuth state. Abandoned cookies retain the existing 10-minute expiry.
+
+**Decisions made**: Kept every security property intact. Each cookie is still random-request-bound, HMAC-verified, HttpOnly, Secure, `SameSite=Lax`, host-only, single-use, and backed by a one-time KV record. No replay or CSRF check was weakened. Added separate regressions for concurrent consent forms and overlapping YNAB callbacks.
+
+**Left off at**: Deployed Cloudflare Worker version `fb1cb3da-2aae-49ca-9ef1-02ee2efb7d07`. A live two-client production probe held two CSRF cookies simultaneously, received two independent 302 redirects to YNAB, held two state cookies simultaneously, and validated and cleared both callback states. Offline checks passed with 28 core tests, 16 Worker tests, the safety suite, 62-tool discovery, release consistency, and a Wrangler dry run.
+
+**Open questions**: Repeat signed-in, read-only acceptance from fresh connector flows in Claude.ai and Mistral Work. Previously opened consent pages use the old global cookie names and must be restarted from the MCP client. Write and undo acceptance still requires explicit approval for the exact write operation.
+
+---
+
 ## 2026-07-15 - Hosted connector identity and sanctioned YNAB mark
 
 **What changed**: Finished the Cloudflare connector identity work on top of the v5.1.0 hosted OAuth release. The Worker now advertises `MCP Server for YNAB`, the canonical `https://ynab.amesvt.com/mcp` resource, and HTTPS PNG and SVG icons in its MCP `initialize` response. It serves YNAB's unmodified, expressly permitted “Works with YNAB” integration mark as SVG, a 196x78 PNG rendering for clients that require PNG, and matching favicon routes. The landing, consent, privacy, deletion, and error pages display the mark and YNAB's required non-affiliation and trademark notice. A future Claude Connectors Directory submission draft was added, but nothing was submitted or published to a directory.

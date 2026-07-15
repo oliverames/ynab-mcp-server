@@ -28,6 +28,7 @@ const STATE_TTL_SECONDS = 600;
 const STATE_COOKIE = "__Host-ynab_mcp_state";
 const CSRF_COOKIE = "__Host-ynab_mcp_csrf";
 const CONSENT_PREFIX = "oauth_consent:";
+const OPAQUE_ID_PATTERN = /^[A-Za-z0-9_-]{32}$/;
 
 const app = new Hono();
 
@@ -68,6 +69,18 @@ function readCookie(c, name) {
   return match ? match.slice(name.length + 1) : null;
 }
 
+function consentCsrfCookieName(consentId) {
+  return OPAQUE_ID_PATTERN.test(consentId)
+    ? `${CSRF_COOKIE}_${consentId}`
+    : null;
+}
+
+function oauthStateCookieName(state) {
+  return OPAQUE_ID_PATTERN.test(state)
+    ? `${STATE_COOKIE}_${state}`
+    : null;
+}
+
 function callbackUri(c) {
   const baseUrl = c.env.CONNECTOR_BASE_URL;
   if (!baseUrl) throw new Error("CONNECTOR_BASE_URL is required");
@@ -79,17 +92,17 @@ function callbackUri(c) {
   return new URL("/callback", base).href;
 }
 
-async function issueCsrf(c) {
+async function issueCsrf(c, cookieName = CSRF_COOKIE) {
   const csrfToken = randomToken(16);
-  setCookie(c, CSRF_COOKIE, await hmacSign(c.env.COOKIE_ENCRYPTION_KEY, csrfToken));
+  setCookie(c, cookieName, await hmacSign(c.env.COOKIE_ENCRYPTION_KEY, csrfToken));
   return csrfToken;
 }
 
-async function validateCsrf(c, form) {
-  const csrfCookie = readCookie(c, CSRF_COOKIE);
+async function validateCsrf(c, form, cookieName = CSRF_COOKIE) {
+  const csrfCookie = readCookie(c, cookieName);
   if (!form.csrf || !csrfCookie) return false;
   const valid = csrfCookie === await hmacSign(c.env.COOKIE_ENCRYPTION_KEY, String(form.csrf));
-  if (valid) clearCookie(c, CSRF_COOKIE);
+  if (valid) clearCookie(c, cookieName);
   return valid;
 }
 
@@ -137,21 +150,23 @@ app.get("/authorize", async (c) => {
   await c.env.OAUTH_KV.put(`${CONSENT_PREFIX}${consentId}`, JSON.stringify(oauthReqInfo), {
     expirationTtl: STATE_TTL_SECONDS,
   });
+  const csrfCookieName = consentCsrfCookieName(consentId);
   return html(c, consentPage({
     clientName: client?.clientName || oauthReqInfo.clientId,
     redirectUri: oauthReqInfo.redirectUri || (client?.redirectUris?.[0] ?? "unknown"),
     consentId,
-    csrfToken: await issueCsrf(c),
+    csrfToken: await issueCsrf(c, csrfCookieName),
   }));
 });
 
 app.post("/authorize", async (c) => {
   const form = await c.req.parseBody();
-  if (!await validateCsrf(c, form)) {
-    return html(c, errorPage("Consent form expired or invalid. Start again from your MCP client."), 400);
-  }
   const consentId = String(form.consent || "");
   if (!consentId) return html(c, errorPage("Missing authorization request."), 400);
+  const csrfCookieName = consentCsrfCookieName(consentId);
+  if (!csrfCookieName || !await validateCsrf(c, form, csrfCookieName)) {
+    return html(c, errorPage("Consent form expired or invalid. Start again from your MCP client."), 400);
+  }
   const consentKey = `${CONSENT_PREFIX}${consentId}`;
   const rawRequest = await c.env.OAUTH_KV.get(consentKey);
   await c.env.OAUTH_KV.delete(consentKey); // one-time consent payload
@@ -185,6 +200,8 @@ app.post("/delete", async (c) => {
 
 async function startYnabDance(c, stateRecord) {
   const state = randomToken(24);
+  const stateCookieName = oauthStateCookieName(state);
+  if (!stateCookieName) throw new Error("Generated OAuth state was invalid");
   const codeVerifier = randomToken(48);
   const codeChallenge = await sha256base64url(codeVerifier);
   await c.env.OAUTH_KV.put(
@@ -192,7 +209,11 @@ async function startYnabDance(c, stateRecord) {
     JSON.stringify({ ...stateRecord, codeVerifier }),
     { expirationTtl: STATE_TTL_SECONDS }
   );
-  setCookie(c, STATE_COOKIE, await hmacSign(c.env.COOKIE_ENCRYPTION_KEY, state));
+  setCookie(
+    c,
+    stateCookieName,
+    await hmacSign(c.env.COOKIE_ENCRYPTION_KEY, state)
+  );
   const redirectUri = callbackUri(c);
   return c.redirect(buildYnabAuthorizeUrl({
     clientId: c.env.YNAB_CLIENT_ID,
@@ -210,16 +231,20 @@ app.get("/callback", async (c) => {
   const state = c.req.query("state");
   const upstreamError = c.req.query("error");
   if ((!code && !upstreamError) || !state) return html(c, errorPage("Missing authorization result or state from YNAB."), 400);
+  const stateCookieName = oauthStateCookieName(state);
+  if (!stateCookieName) {
+    return html(c, errorPage("Authorization state expired or did not match. Start again from your MCP client."), 400);
+  }
 
   const stateKey = `oauth_state:${state}`;
   const rawRecord = await c.env.OAUTH_KV.get(stateKey);
-  const cookieHash = readCookie(c, STATE_COOKIE);
+  const cookieHash = readCookie(c, stateCookieName);
   const expectedHash = await hmacSign(c.env.COOKIE_ENCRYPTION_KEY, state);
   if (!rawRecord || !cookieHash || cookieHash !== expectedHash) {
     return html(c, errorPage("Authorization state expired or did not match. Start again from your MCP client."), 400);
   }
   await c.env.OAUTH_KV.delete(stateKey); // single use
-  clearCookie(c, STATE_COOKIE);
+  clearCookie(c, stateCookieName);
 
   let record;
   try {
