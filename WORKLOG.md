@@ -1,5 +1,43 @@
 # Worklog
 
+## 2026-07-15 - Harden hosted transport, privacy, and display metadata
+
+**What changed**: The Cloudflare Worker now rejects untrusted browser Origins
+before OAuth on `/mcp` and legacy `/sse`, while preserving no-Origin
+native/server clients. The privacy page now states its update date, Cloudflare
+storage role, persistent and transient retention behavior, and delivery of tool
+results to the connected MCP client. Added hostname-scoped HSTS and disabled
+the unused `workers.dev` endpoint. Connector display metadata, OAuth protected
+resource metadata, and bundled host manifests now use `YNAB`; package IDs and
+the `ynab.amesvt.com` hostname remain unchanged. Updated the Claude Directory
+submission draft and local privacy document to reflect the deployed connector.
+
+**Decisions made**: The browser allowlist is explicit for ChatGPT, Claude, and
+Mistral origins, while absent Origin remains valid per the MCP transport model.
+HSTS is one year without `includeSubDomains`, because this Worker does not own
+every `amesvt.com` subdomain. The YNAB app icon remains the published connector
+icon. No Restricted Mode request or public-directory submission was made.
+
+**Verification**: Worker tests passed (24), root unit tests passed (28), as
+did safety and release checks plus Wrangler dry-run validation. Production
+version `7ec69139-5eeb-42b7-ba24-47861647c49a` returned 403 with no CORS allow
+header to `Origin: https://example.invalid`, returned the expected OAuth 401
+challenge for no-Origin clients, and served `resource_name: "YNAB"` with HSTS.
+The live YNAB icon SHA-256 remains
+`b1b3180d79d59548fea1ddff1b58622ce66c3ffd1951d416ab4f5d9b63324e0a`.
+
+**Left off at**: Commit `3b3162a` is pushed to `main`; local and
+`origin/main` match. The hosted service is deployed and the repository is
+clean.
+
+**Open questions**: **Still open**: a host may retain a manually entered
+connector-card label even after it reads the new MCP metadata; refresh or
+reconnect the existing client registration before treating a cached label as
+the deployed server title. Public listing and YNAB Restricted Mode review stay
+deferred pending explicit approval.
+
+---
+
 ## 2026-07-15 - Three-host OAuth acceptance and app-client contracts
 
 **What changed**: Completed the remaining hosted-connector release gates after

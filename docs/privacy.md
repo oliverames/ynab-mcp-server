@@ -1,10 +1,10 @@
 # Privacy Policy for MCP Server for YNAB
 
-Last Updated: June 8, 2026
+Last Updated: July 15, 2026
 
 MCP Server for YNAB is a local stdio MCP server that runs on the user's machine or in a user-controlled MCP host. It connects the user's MCP client to the YNAB API.
 
-This policy covers the local owner-run package published as `@oliverames/mcp-server-for-ynab`. It does not cover a hosted OAuth connector or any third-party MCP host that a user chooses to connect to this package.
+This policy covers the local owner-run package published as `@oliverames/mcp-server-for-ynab`. The hosted OAuth connector at `https://ynab.amesvt.com/mcp` has its own current policy at `https://ynab.amesvt.com/privacy`; third-party MCP hosts have their own privacy and retention policies.
 
 ## Data Access
 
@@ -44,13 +44,13 @@ Because this local package does not persist YNAB budget data, there is no server
 2. Delete any local token file or environment variable used for `YNAB_API_TOKEN`.
 3. Revoke the personal access token in YNAB Developer Settings.
 
-If a hosted OAuth connector is deployed later, that hosted service must publish its own privacy policy, token storage details, public support contact, and user-facing deletion or revocation flow.
+For the hosted OAuth connector, use `https://ynab.amesvt.com/delete` to revoke connector grants and remove its stored token and undo records.
 
 ## Support and Data Requests
 
 For package support, security questions, or data-handling questions, open an issue at https://github.com/oliverames/ynab-mcp-server/issues or contact Oliver Ames through https://ames.consulting.
 
-Because this local package does not operate a server-side data store, data deletion requests usually mean helping the user remove local configuration and revoke the YNAB access token. If a hosted OAuth connector is launched later, deletion requests must also remove any hosted token records associated with the requesting user.
+Because this local package does not operate a server-side data store, data deletion requests usually mean helping the user remove local configuration and revoke the YNAB access token. Hosted connector deletion requests are handled through its public deletion flow.
 
 ## Children
 

@@ -7,7 +7,7 @@ user must confirm before anyone submits it.
 
 ## Listing
 
-- Server name: `MCP Server for YNAB`
+- Server name: `YNAB`
 - Tagline: `Explore and manage your YNAB budget through Claude`
 - Suggested category: Finance
 - Server URL: `https://ynab.amesvt.com/mcp`
@@ -20,7 +20,7 @@ user must confirm before anyone submits it.
 
 ### Description
 
-MCP Server for YNAB connects Claude to a user's own YNAB budget through YNAB's
+YNAB connects Claude to a user's own YNAB budget through YNAB's
 OAuth flow. It starts with read-only access, so Claude can answer questions
 about plans, accounts, categories, payees, months, scheduled transactions, and
 spending. A user can opt into write access during sign-in when they want Claude
