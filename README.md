@@ -56,13 +56,27 @@ The npm package is the local, owner-run option. It uses a personal access token 
 
 ### Connect to the hosted remote server
 
-Add this Streamable HTTP URL to claude.ai, ChatGPT, Le Chat, or another remote MCP client:
+Add this Streamable HTTP URL to Claude.ai, ChatGPT, Mistral Vibe Work, or another remote MCP client:
 
 ```text
 https://ynab.amesvt.com/mcp
 ```
 
 The client opens this connector's consent page and then sends you to YNAB to sign in. Leave the write-access box unchecked for a read-only connection, or enable it when you need the write tools. The connector stores OAuth tokens and undo data with application-layer encryption in Cloudflare KV; the AI client receives only the connector's own scoped token. See the live [privacy policy](https://ynab.amesvt.com/privacy), [data-deletion flow](https://ynab.amesvt.com/delete), and [deployment documentation](worker/README.md).
+
+Signed-in acceptance passed on July 15, 2026, in **ChatGPT**, **Claude.ai**,
+and **Mistral Vibe Work**. Each host completed OAuth, invoked the connector,
+returned the live budget list, and reported `writes_enabled: true` for the
+explicitly write-authorized grant. New grants still default to read-only, and
+high-impact tools retain their own `confirmed: true` gate even when write tools
+are visible.
+
+Connector cards use the square PNG at
+`https://ynab.amesvt.com/assets/ynab-app-icon.png`; the hosted consent,
+callback, privacy, and deletion pages retain the permitted “Works with YNAB”
+integration mark. Host UIs can store separate name, description, and icon
+fields or cache an older card image, so those presentation fields may need to
+be refreshed in the host after the MCP metadata changes.
 
 ### Install as a Plugin
 
@@ -336,6 +350,7 @@ Beyond tools, the server ships **6 MCP prompts** (guided workflows: monthly revi
 ### Design Decisions
 
 - **Read-only by default** - write tools are not registered unless `YNAB_ALLOW_WRITES=1` is set. Read tools are annotated with `readOnlyHint: true`; write tools are annotated with `readOnlyHint: false`, idempotency hints, and destructive hints for delete operations.
+- **Structured contracts for app clients** - every tool exposes a human-readable title, an input schema even when it takes no arguments, an output schema, and matching `structuredContent`. Impact hints describe YNAB as a private, bounded system so app clients can distinguish reads, writes, and destructive operations accurately.
 - **Explicit destructive confirmation** - delete tools require `confirmed: true` in their input after user confirmation. Bulk-filter writes also require `confirmed: true`, and support `expectedMatchedCount` when the current match count needs to be locked before mutation.
 - **Dollar amounts everywhere** - inputs and outputs are in dollars (`-12.34`), never milliunits (`-12340`). Conversion is automatic and transparent.
 - **Smart budget resolution** - set `YNAB_BUDGET_ID` for a default, or omit it to auto-resolve to your last-used budget. Every tool accepts an optional `budgetId` override.
@@ -638,7 +653,11 @@ The repo is ready for [Glama](https://glama.ai) MCP hosting: the root [`glama.js
 
 ### Public Listing Readiness
 
-This repository is production-ready as a local owner-run stdio MCP package. The hosted OAuth connector is live under the YNAB application's initial Restricted Mode while it is tested and prepared for review:
+This repository is production-ready as a local owner-run stdio MCP package.
+The hosted OAuth connector is live under the YNAB application's initial
+Restricted Mode and has completed private signed-in acceptance in ChatGPT,
+Claude.ai, and Mistral Vibe Work. Public review and directory publication remain
+separate decisions:
 
 - If YNAB accepts a local owner-run package, submit this package with the published privacy policy, non-affiliation language, read-only default, write opt-in, confirmation gates, and test evidence.
 - The hosted connector uses the YNAB authorization-code flow with PKCE, a public privacy policy, and a user-facing deletion flow.

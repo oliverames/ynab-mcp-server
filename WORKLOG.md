@@ -1,14 +1,55 @@
 # Worklog
 
+## 2026-07-15 - Three-host OAuth acceptance and app-client contracts
+
+**What changed**: Completed the remaining hosted-connector release gates after
+the cookie-free OAuth work. `30bca1c` allows only validated dynamic MCP redirect
+targets in authorization-page CSP and form actions, while preserving the
+connector-origin default for all other forms. `2d94a81` applies human-readable
+titles, input schemas, output schemas, matching `structuredContent`, and
+private/bounded impact hints across the full tool catalog. The production
+Mistral connector record now carries the square app-list icon and the same
+non-affiliation description as the earlier connector. `9cf65c6` reconciles the
+submission guide with the separate connector-card and hosted-consent icon
+roles.
+
+**Decisions made**: Treat host presentation fields as host-owned state rather
+than assuming MCP `serverInfo.icons` will populate every client. Keep the
+square app icon on connector cards and the permitted “Works with YNAB” mark on
+hosted authorization, privacy, and deletion pages. A write-enabled grant only
+exposes write tools; destructive and bulk-filter actions still require the
+shared per-call confirmation gates.
+
+**Verification**: ChatGPT, Claude.ai, and Mistral Vibe Work each completed the
+real OAuth flow, invoked the connector, returned current budget names, and
+reported `writes_enabled: true`. Acceptance chats are recorded at
+`https://chatgpt.com/c/6a57daaf-89c8-83ea-b232-5e58401c629a`,
+`https://claude.ai/chat/c5132430-bbfc-4905-bb7b-23df6b92298d`, and
+`https://chat.mistral.ai/work/5343e6ca-af1e-4825-a32e-0d7516093d78`.
+Local verification passed with 46 live root checks and 21 Worker tests; CI run
+`29446432189` passed. Cloudflare deployment
+`e83324b1-277e-4cef-b068-e0f2b7b29525` serves 100% of production traffic.
+
+**Left off at**: `main` and `origin/main` include the completed implementation
+and documentation through `9cf65c6`. The private connector objective and all
+three host-acceptance tasks are complete.
+
+**Open questions**: **Still open**: an actual write followed by undo needs
+explicit approval for the exact YNAB operation. Restricted Mode removal,
+public directory publication, and broader trademark review remain separate
+rollout decisions.
+
+---
+
 ## 2026-07-15 - Embedded-browser OAuth no longer depends on cookies
 
 **What changed**: Replaced the hosted connector's consent and YNAB callback cookie bindings after live Mistral Work acceptance proved its embedded OAuth browser did not return the first-party cookie even on a fresh, single consent flow. Consent now uses a 192-bit opaque record ID and a separate 192-bit hidden CSRF token whose keyed hash is stored with the parsed MCP authorization request. The POST fetches and deletes that one-time record before validating the token. YNAB callback state is also 192-bit, HMAC-verified, tied to the original dynamic-client request and access choice, stored for 10 minutes, and deleted before callback validation. PKCE S256, the fixed callback URI, CSP `form-action 'self'`, read-only default, and encrypted YNAB tokens are unchanged.
 
 **Decisions made**: Kept the existing `COOKIE_ENCRYPTION_KEY` secret name to avoid an unnecessary credential migration, but it now signs server-side consent and state records as well as the separate deletion-form cookie. Cloudflare KV has no compare-and-swap operation, so the implementation does not claim atomic consumption; sequential replay is rejected, records have unguessable 192-bit identifiers, invalid submissions consume their record, and the TTL remains 10 minutes. Added no-cookie, replay, tamper, cross-consent, and overlapping-callback regressions. Restricted Mode is documented as a separate rollout constraint: YNAB exempts the app owner, permits 25 access tokens for other users, blocks new authorizations at the cap, and says removal review takes 2 to 4 weeks. No review form or public directory submission was made.
 
-**Left off at**: Deployment and signed-in client acceptance are pending the final release gates in this session.
+**Left off at**: Deployed Cloudflare Worker version `c9f13970-3d78-437e-afc6-2015c04daaef`. A production probe registered two independent MCP clients, loaded and submitted both consent forms without a cookie jar or any `Set-Cookie` response, and received two YNAB redirects with PKCE S256, the fixed connector callback, and read-only scope. Both simulated denial callbacks validated without cookies. Sequential callback replay and a tampered state were rejected, while the second legitimate state remained valid after the tamper probe. Offline checks passed with 28 core tests, 16 Worker tests, the safety suite, 62-tool discovery, release consistency, and a Wrangler dry run.
 
-**Open questions**: Repeat signed-in read-only acceptance from fresh Claude.ai and Mistral Work connector flows after deployment. Write and undo acceptance still requires explicit approval for the exact financial operation.
+**Open questions**: **Resolved this session**: fresh Claude.ai, ChatGPT, and Mistral Vibe Work connector flows completed OAuth and a real budget-list read. **Still open**: write and undo acceptance requires explicit approval for the exact financial operation.
 
 ---
 
