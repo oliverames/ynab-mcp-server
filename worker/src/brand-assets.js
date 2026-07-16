@@ -32,7 +32,7 @@ export const CONNECTOR_ICON_PNG_URL =
 export const REMOTE_SERVER_INFO = {
   name: "YNAB",
   title: "YNAB",
-  version: "5.1.0",
+  version: "5.1.1",
   description:
     "Independent open-source connector for accessing a user's own YNAB budget. Not affiliated with, sponsored by, or endorsed by YNAB.",
   icons: [
