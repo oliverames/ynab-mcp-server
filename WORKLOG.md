@@ -1,5 +1,34 @@
 # Worklog
 
+## 2026-07-15 - v5.1.1 local server name and release closeout
+
+**What changed**: Renamed the local stdio MCP server identity to `YNAB Local`
+and released `@oliverames/mcp-server-for-ynab@5.1.1`. The standalone Codex
+marketplace installation is enabled at v5.1.1. The Cloudflare-hosted connector
+continues to identify as `YNAB`; only its version metadata was aligned to
+v5.1.1 for release consistency.
+
+**Decisions made**: Kept the hosted and local server identities deliberately
+separate. Left generic references to the connector as an “YNAB MCP connector”
+unchanged because they are descriptions, not the local server display name.
+
+**Verification**: Root unit tests (28), safety checks, root live tests (46
+passed; 4 explicitly skipped), and Worker tests (24) passed. Wrangler
+deployment dry-run and the release-consistency check passed. The published npm
+tarball was fetched and verified to contain `serverInfo = { name: "YNAB Local",
+version: "5.1.1" }`. GitHub Release `v5.1.1` published successfully with the
+MCPB asset.
+
+**Left off at**: Commit `70a0e81` and tag `v5.1.1` are pushed to `main`; the
+repository and the ames-plugins marketplace are clean. KitchenSync's earlier
+publish refusal is resolved: its previously untracked `agents/openai.yaml` is
+now a tracked generated Codex skill manifest.
+
+**Open questions**: None. An already-running MCP process may need a new Codex
+task or restart to reload the local server display name.
+
+---
+
 ## 2026-07-15 - Harden hosted transport, privacy, and display metadata
 
 **What changed**: The Cloudflare Worker now rejects untrusted browser Origins
