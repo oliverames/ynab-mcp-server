@@ -452,7 +452,7 @@ const {
   writesEnabled: allowWrites = false,
   journal = null,
   runtime = {},
-  serverInfo = { name: "YNAB", version: "5.1.0" },
+  serverInfo = { name: "YNAB Local", version: "5.1.0" },
 } = options;
 
 // Most-recently-seen access token, kept only so sanitizeErrorMessage can
@@ -997,8 +997,7 @@ function buildYnabUrl(path) {
 async function ynabFetch(path, { method = "GET", body, query } = {}) {
   const url = buildYnabUrl(path);
   for (const [key, value] of Object.entries(query || {})) {
-    if (value !== undefined && value !== null) url.searchParams.set(key, String(value));
-  }
+    if (value !== undefined && value !== null) url.searchParams.set(key, String(value));  }
   const opts = {
     method,
     // The Authorization header is injected per-request by secureFetch.
@@ -1997,8 +1996,7 @@ registerTool(
   "create_transaction",
   { description: "Create a new transaction. Amounts are in dollars (positive for inflows, negative for outflows). Note: future-dated transactions cannot be created here - use create_scheduled_transaction instead. For transfers between accounts, pass the destination account's transfer_payee_id (from list_accounts) as payeeId — do not pass a 'Transfer : ...' payee name. For manual entry of spend the bank will later import (checks, P2P), use cleared:'uncleared' and NO importId so the import matches instead of duplicating. Creation is journaled and reversible via undo_operation.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
-    accountId: z.string().describe("Account ID"),
-    date: z.string().describe("Transaction date (YYYY-MM-DD)"),
+    accountId: z.string().describe("Account ID"),    date: z.string().describe("Transaction date (YYYY-MM-DD)"),
     amount: z.number().describe("Amount in dollars (negative for outflows, positive for inflows)"),
     payeeId: z.string().optional().describe("Payee ID"),
     payeeName: z.string().max(200).optional().describe("Payee name (creates new payee if no payeeId)"),
@@ -2997,8 +2995,7 @@ registerTool(
       if (!entry.undoable || !entry.undo) throw new Error(`Entry ${entryId} (${entry.tool}) is journaled for audit only and cannot be undone automatically.`);
 
       const bid = entry.budget_id;
-      let result;
-      if (entry.undo.type === "restore_fields") {
+      let result;      if (entry.undo.type === "restore_fields") {
         const updates = entry.undo.rows.map((r) => ({ id: r.id, ...r.fields }));
         const mapped = updates.map((t) => ({ id: t.id, ...mapTransactionUpdate(t) }));
         const { data } = await api.transactions.updateTransactions(bid, { transactions: mapped });
