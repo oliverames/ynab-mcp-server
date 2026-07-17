@@ -14,6 +14,13 @@ anything on the server side could fix it.
   `.well-known` OAuth document carries a `logo_uri` (none is defined for either).
 - ChatGPT renders the icon because it reads `serverInfo.icons` from the
   `initialize` response, which the connector sends correctly.
+- Live probe (2026-07-17, second session): `POST /mcp` rejects `initialize`
+  itself without a bearer token (`{"error":"invalid_token"}`), so
+  `serverInfo.icons` is only visible *after* OAuth. Combined with no `logo_uri`
+  in either `.well-known` doc, the authenticated `initialize` response is the
+  single place the brand icon is exposed — which is exactly why a post-auth
+  reader (ChatGPT) sees it and a pre-auth snapshot sees only the "Y" fallback.
+  `GET /assets/icon.png` returns HTTP 200, `image/png`, 777,333 bytes, no auth.
 - Claude.ai does **not** read `serverInfo.icons` for custom connectors. This is
   the one icon channel the server controls, and it is the one Claude ignores.
   Source: anthropics/claude-ai-mcp issue #152 (open). This is the single solid,
