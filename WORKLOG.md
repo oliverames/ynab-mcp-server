@@ -1,5 +1,56 @@
 # Worklog
 
+## 2026-07-17 - Claude.ai custom connector icon investigation (no code change)
+
+**Context**: The hosted connector's custom icon renders in ChatGPT but not in
+Claude.ai, where it shows a generated "Y" letter monogram. Investigated whether
+anything on the server side could fix it.
+
+**What was verified**:
+- The Worker advertises the icon through every server-side channel and all are
+  live (HTTP 200): MCP `serverInfo.icons` (HTTPS URL), `/favicon.ico`,
+  `/favicon-16x16.png`, `/favicon-32x32.png`, `/apple-touch-icon.png`,
+  `/assets/icon.png`, HTML `<link rel="icon">`, and `og:image`. Neither
+  `.well-known` OAuth document carries a `logo_uri` (none is defined for either).
+- ChatGPT renders the icon because it reads `serverInfo.icons` from the
+  `initialize` response, which the connector sends correctly.
+- Claude.ai does **not** read `serverInfo.icons` for custom connectors. This is
+  the one icon channel the server controls, and it is the one Claude ignores.
+  Source: anthropics/claude-ai-mcp issue #152 (open). This is the single solid,
+  current web-verified fact from the investigation.
+
+**Conflict left unresolved**: Oliver's live connector list (screenshot) shows
+several connectors with branded icons, including Meta Ads which carries a
+"Custom" tag and shows the Facebook icon. So in the current Claude.ai UI a
+Custom-tagged connector CAN show a branded icon, which contradicts issue #152's
+"custom connectors always show a generic globe" wording. The public record
+could not be reconciled with the live UI; treat the live UI as authoritative
+and issue #152's "always" wording as stale or partial. Custom-vs-directory is
+therefore NOT the discriminator for whether an icon appears.
+
+**Explicitly retracted (were inference, not verified)**: earlier hypotheses in
+this session that Claude resolves connector icons via domain recognizability /
+Google's favicon service, and that the icon-bearing connectors win because they
+are well-known domains. The mechanism Claude uses to resolve the icon Meta Ads
+does show is unknown and could not be sourced. A local `curl` probe only showed
+that a common public favicon crawler had no indexed favicon for
+`ynab.amesvt.com` or `amesvt.com`; that says nothing definitive about Claude's
+resolver.
+
+**Decision**: No code change. The server-side icon surface is already complete
+and correct; nothing on the origin can force Claude.ai to render it today.
+
+**Open questions / next tests** (both are on the client side, not the server):
+1. Compare the exact connector URL/domain of the working Meta Ads entry against
+   `ynab.amesvt.com` — a concrete, readable difference.
+2. Remove and re-add the YNAB connector in Claude.ai. If the "Y" becomes an
+   icon, it was a stale cache from before the icons existed; if it stays, the
+   resolution is not reaching the origin and a Connectors Directory submission
+   is the realistic fix. Directory submission remains deferred pending Oliver's
+   approval and YNAB Restricted Mode planning (unchanged from prior entries).
+
+---
+
 ## 2026-07-16 - Match the hosted connector icon to Codex
 
 **What changed**: Replaced the hosted connector's YNAB App Store artwork with
