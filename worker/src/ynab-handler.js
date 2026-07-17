@@ -21,8 +21,16 @@ import {
 } from "./ynab-oauth.js";
 import { putTransientState, consumeTransientState } from "./transient-state.js";
 import {
-  YNAB_APP_ICON_PNG,
-  YNAB_APP_ICON_PNG_SHA256,
+  CONNECTOR_APPLE_TOUCH_ICON_PNG,
+  CONNECTOR_APPLE_TOUCH_ICON_PNG_SHA256,
+  CONNECTOR_FAVICON_16_PNG,
+  CONNECTOR_FAVICON_16_PNG_SHA256,
+  CONNECTOR_FAVICON_32_PNG,
+  CONNECTOR_FAVICON_32_PNG_SHA256,
+  CONNECTOR_FAVICON_ICO,
+  CONNECTOR_FAVICON_ICO_SHA256,
+  CONNECTOR_ICON_PNG,
+  CONNECTOR_ICON_PNG_SHA256,
   WORKS_WITH_YNAB_PNG,
   WORKS_WITH_YNAB_PNG_SHA256,
   WORKS_WITH_YNAB_SVG,
@@ -154,25 +162,41 @@ app.get("/assets/works-with-ynab.svg", (c) => worksWithYnabAsset(c, {
   contentType: "image/svg+xml; charset=utf-8",
   sha256: WORKS_WITH_YNAB_SVG_SHA256,
 }));
-app.get("/assets/ynab-app-icon.png", (c) => worksWithYnabAsset(c, {
-  body: YNAB_APP_ICON_PNG,
+app.get("/assets/icon.png", (c) => worksWithYnabAsset(c, {
+  body: CONNECTOR_ICON_PNG,
   contentType: "image/png",
-  sha256: YNAB_APP_ICON_PNG_SHA256,
+  sha256: CONNECTOR_ICON_PNG_SHA256,
+}));
+// Keep the former path as an exact alias so existing host records do not break.
+app.get("/assets/ynab-app-icon.png", (c) => worksWithYnabAsset(c, {
+  body: CONNECTOR_ICON_PNG,
+  contentType: "image/png",
+  sha256: CONNECTOR_ICON_PNG_SHA256,
 }));
 app.get("/favicon.ico", (c) => worksWithYnabAsset(c, {
-  body: YNAB_APP_ICON_PNG,
+  body: CONNECTOR_FAVICON_ICO,
+  contentType: "image/x-icon",
+  sha256: CONNECTOR_FAVICON_ICO_SHA256,
+}));
+app.get("/favicon-16x16.png", (c) => worksWithYnabAsset(c, {
+  body: CONNECTOR_FAVICON_16_PNG,
   contentType: "image/png",
-  sha256: YNAB_APP_ICON_PNG_SHA256,
+  sha256: CONNECTOR_FAVICON_16_PNG_SHA256,
+}));
+app.get("/favicon-32x32.png", (c) => worksWithYnabAsset(c, {
+  body: CONNECTOR_FAVICON_32_PNG,
+  contentType: "image/png",
+  sha256: CONNECTOR_FAVICON_32_PNG_SHA256,
 }));
 app.get("/favicon.png", (c) => worksWithYnabAsset(c, {
-  body: YNAB_APP_ICON_PNG,
+  body: CONNECTOR_FAVICON_32_PNG,
   contentType: "image/png",
-  sha256: YNAB_APP_ICON_PNG_SHA256,
+  sha256: CONNECTOR_FAVICON_32_PNG_SHA256,
 }));
-app.get("/favicon.svg", (c) => worksWithYnabAsset(c, {
-  body: WORKS_WITH_YNAB_SVG,
-  contentType: "image/svg+xml; charset=utf-8",
-  sha256: WORKS_WITH_YNAB_SVG_SHA256,
+app.get("/apple-touch-icon.png", (c) => worksWithYnabAsset(c, {
+  body: CONNECTOR_APPLE_TOUCH_ICON_PNG,
+  contentType: "image/png",
+  sha256: CONNECTOR_APPLE_TOUCH_ICON_PNG_SHA256,
 }));
 app.get("/privacy", (c) => html(c, privacyPage()));
 app.get("/delete", async (c) => html(

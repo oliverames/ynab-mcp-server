@@ -69,17 +69,17 @@ The Worker serves YNAB's permitted, unmodified
 pages use this mark and carry the required non-affiliation and trademark
 language.
 
-For connector discovery, MCP `initialize` advertises the current 1024x1024 YNAB
-iOS App Store icon at `/assets/ynab-app-icon.png` in `serverInfo.icons`. The
-landing page publishes the same PNG as its favicon and Open Graph image. Its
-source listing, source artwork URL, dimensions, MIME type, and SHA-256 digest
-are pinned in `src/brand-assets.js` and `src/ynab-app-icon-png.js` and covered by
-the Worker tests.
+For connector discovery, MCP `initialize` advertises `/assets/icon.png`, which
+is generated from the exact 1024x1024 `codex/assets/icon.png` artwork displayed
+by the Codex plugin. The landing page publishes the same artwork as its Open
+Graph image and provides conventional ICO, 16px, 32px, and Apple touch icon
+routes for favicon discovery. The generator, dimensions, MIME types, and
+SHA-256 digests are pinned in source and covered by the Worker tests.
 
 YNAB's API Terms expressly permit the integration mark and the "for YNAB"
-naming form. They do not expressly grant general permission to reuse YNAB's
-consumer app artwork; the app-list icon is therefore documented as a separate
-branding choice rather than as a Terms-permitted integration asset.
+naming form. The square connector icon is documented as the repository's
+existing Codex branding choice rather than as a Terms-permitted integration
+asset.
 
 Custom connectors may ignore MCP icon metadata or cached favicon changes. A
 Connectors Directory listing has a separate icon field, but public submission is

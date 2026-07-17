@@ -1,5 +1,35 @@
 # Worklog
 
+## 2026-07-16 - Match the hosted connector icon to Codex
+
+**What changed**: Replaced the hosted connector's YNAB App Store artwork with
+the exact canonical Codex plugin icon from `codex/assets/icon.png`. Added a
+conventional multi-size `favicon.ico`, 16 px and 32 px PNG favicons, an Apple
+touch icon, and matching page metadata. The legacy icon URL remains as a
+compatibility alias. A deterministic generator now keeps every hosted variant
+derived from the Codex source.
+
+**Decisions made**: Use one canonical source rather than maintaining separate
+host-specific artwork. Preserve `/assets/ynab-app-icon.png` for existing
+consumers while advertising `/assets/icon.png` in MCP and page metadata.
+
+**Verification**: Worker tests (24), root unit tests (28), safety checks, the
+release-consistency check, and Wrangler deployment dry-run passed. Two
+successive icon generations were byte-identical. Production version
+`8947cacc-784b-41fa-a37b-ec278b175031` serves `/assets/icon.png` with the same
+SHA-256 as the Codex source,
+`4dc3adc4ec2ae657be39392d470f714b7839ba959612a274db8bdd0db8cc8773`.
+The live ICO contains 16 px, 32 px, and 48 px images, and every public icon
+endpoint returns the expected image content type.
+
+**Left off at**: The production Worker is deployed and the source change is
+fully verified.
+
+**Open questions**: Claude's external favicon cache may take time to reindex
+the corrected site. The production discovery surface itself is complete.
+
+---
+
 ## 2026-07-15 - v5.1.1 local server name and release closeout
 
 **What changed**: Renamed the local stdio MCP server identity to `YNAB Local`

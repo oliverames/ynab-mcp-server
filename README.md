@@ -72,11 +72,13 @@ high-impact tools retain their own `confirmed: true` gate even when write tools
 are visible.
 
 Connector cards use the square PNG at
-`https://ynab.amesvt.com/assets/ynab-app-icon.png`; the hosted consent,
+`https://ynab.amesvt.com/assets/icon.png`, generated from the exact same
+`codex/assets/icon.png` artwork used by the Codex plugin. The hosted consent,
 callback, privacy, and deletion pages retain the permitted “Works with YNAB”
-integration mark. Host UIs can store separate name, description, and icon
-fields or cache an older card image, so those presentation fields may need to
-be refreshed in the host after the MCP metadata changes.
+integration mark. The landing page also exposes conventional ICO, 16px, 32px,
+and Apple touch icons for host favicon discovery. Host UIs can still cache an
+older card image, so those presentation fields may need to be refreshed or
+reindexed after the MCP metadata changes.
 
 ### Install as a Plugin
 

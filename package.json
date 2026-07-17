@@ -49,6 +49,7 @@
     "release:check": "node scripts/check-release-consistency.mjs",
     "release:check:registry": "node scripts/check-release-consistency.mjs --registry",
     "build:mcpb": "node scripts/build-mcpb.mjs",
+    "build:worker-icons": "node scripts/generate-worker-icon-assets.mjs",
     "pretest:safety": "npm run deps:ensure",
     "test:safety": "node scripts/test-safety-model.mjs"
   },

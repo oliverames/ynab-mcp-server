@@ -16,7 +16,7 @@ user must confirm before anyone submits it.
 - Support: `https://github.com/oliverames/ynab-mcp-server/issues`
 - Company name: `Oliver Ames`
 - Company website: `https://ynab.amesvt.com`
-- Icon: `https://ynab.amesvt.com/assets/ynab-app-icon.png`
+- Icon: `https://ynab.amesvt.com/assets/icon.png`
 
 ### Description
 
@@ -66,12 +66,12 @@ credentials.
 ## Icon roles and trademark basis
 
 Use the square 1024x1024 connector-hosted PNG URL above in Anthropic's icon
-field. It is the same app-list artwork advertised in MCP `serverInfo.icons` and
-used by other remote connector hosts. The source listing, source artwork URL,
+field. It is generated from the exact `codex/assets/icon.png` artwork used by
+the Codex plugin and advertised in MCP `serverInfo.icons`. The source path,
 dimensions, MIME type, and SHA-256 digest are pinned in the Worker source and
 covered by its tests.
 
-Keep the app-list icon separate from the hosted authorization experience. The
+Keep the square connector icon separate from the hosted authorization experience. The
 consent, callback, privacy, and deletion pages use the exact
 ["Works with YNAB" integration mark](https://api.ynab.com/papi/works_with_ynab.svg)
 that YNAB permits under section 5.3 of its
@@ -79,10 +79,9 @@ that YNAB permits under section 5.3 of its
 `https://ynab.amesvt.com/assets/works-with-ynab.svg`.
 
 YNAB's terms expressly permit the integration mark and the "for YNAB" naming
-form. They do not expressly grant general permission to reuse YNAB's consumer
-app artwork, so the square app-list icon is documented as a separate branding
-choice rather than as a Terms-permitted integration asset. Every hosted page
-includes YNAB's required non-affiliation and trademark notice.
+form. The square Codex-matched connector icon is documented as a separate
+repository branding choice rather than as a Terms-permitted integration asset.
+Every hosted page includes YNAB's required non-affiliation and trademark notice.
 
 ## Items still needed before submission
 

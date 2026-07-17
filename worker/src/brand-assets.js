@@ -3,12 +3,31 @@ import {
   WORKS_WITH_YNAB_PNG_SHA256,
 } from "./brand-assets-png.js";
 import {
-  YNAB_APP_ICON_PNG,
-  YNAB_APP_ICON_PNG_SHA256,
-} from "./ynab-app-icon-png.js";
+  CONNECTOR_APPLE_TOUCH_ICON_PNG,
+  CONNECTOR_APPLE_TOUCH_ICON_PNG_SHA256,
+  CONNECTOR_FAVICON_16_PNG,
+  CONNECTOR_FAVICON_16_PNG_SHA256,
+  CONNECTOR_FAVICON_32_PNG,
+  CONNECTOR_FAVICON_32_PNG_SHA256,
+  CONNECTOR_FAVICON_ICO,
+  CONNECTOR_FAVICON_ICO_SHA256,
+  CONNECTOR_ICON_PNG,
+  CONNECTOR_ICON_PNG_SHA256,
+} from "./connector-icon-assets.js";
 
 export { WORKS_WITH_YNAB_PNG, WORKS_WITH_YNAB_PNG_SHA256 };
-export { YNAB_APP_ICON_PNG, YNAB_APP_ICON_PNG_SHA256 };
+export {
+  CONNECTOR_APPLE_TOUCH_ICON_PNG,
+  CONNECTOR_APPLE_TOUCH_ICON_PNG_SHA256,
+  CONNECTOR_FAVICON_16_PNG,
+  CONNECTOR_FAVICON_16_PNG_SHA256,
+  CONNECTOR_FAVICON_32_PNG,
+  CONNECTOR_FAVICON_32_PNG_SHA256,
+  CONNECTOR_FAVICON_ICO,
+  CONNECTOR_FAVICON_ICO_SHA256,
+  CONNECTOR_ICON_PNG,
+  CONNECTOR_ICON_PNG_SHA256,
+};
 
 // The YNAB API Terms expressly permit integrations to use this exact
 // "Works with YNAB" asset. Keep the decoded SVG bytes unchanged.
@@ -21,11 +40,8 @@ export const WORKS_WITH_YNAB_SVG = "<svg width=\"196\" height=\"78\" viewBox=\"0
 
 export const CONNECTOR_ORIGIN = "https://ynab.amesvt.com";
 export const CONNECTOR_MCP_URL = `${CONNECTOR_ORIGIN}/mcp`;
-export const YNAB_APP_ICON_LISTING_URL =
-  "https://apps.apple.com/us/app/ynab/id1010865877";
-export const YNAB_APP_ICON_SOURCE_URL =
-  "https://is1-ssl.mzstatic.com/image/thumb/Purple221/v4/71/e6/94/71e694ee-3cf3-44f9-bdcd-d399806ed040/AppIcon-0-0-1x_U007epad-0-1-sRGB-85-220.png/1024x1024bb.png";
-export const CONNECTOR_ICON_PNG_PATH = "/assets/ynab-app-icon.png";
+export const CONNECTOR_ICON_SOURCE_PATH = "codex/assets/icon.png";
+export const CONNECTOR_ICON_PNG_PATH = "/assets/icon.png";
 export const CONNECTOR_ICON_PNG_URL =
   `${CONNECTOR_ORIGIN}${CONNECTOR_ICON_PNG_PATH}`;
 
