@@ -1162,6 +1162,17 @@ function writesEnabled() {
   return !!allowWrites;
 }
 
+// How a caller turns writes on depends on where the server runs. The hosted
+// OAuth connector cannot set env vars or restart, so telling a ChatGPT/Claude
+// user to "restart with YNAB_ALLOW_WRITES=1" is impossible to act on; they must
+// reconnect and grant write access at the YNAB consent screen instead.
+function writeEnableGuidance() {
+  if (runtime.tokenSource?.source === "ynab_oauth") {
+    return "This connection is read-only. Reconnect this connector in your MCP client and check \"Allow write access\" on the YNAB consent screen (new grants default to read-only). If write tools still do not appear after a write-authorized reconnect, check whether your client needs a developer/beta mode or workspace-admin approval to expose custom-connector write actions.";
+  }
+  return "Restart the MCP server with YNAB_ALLOW_WRITES=1 to enable write tools.";
+}
+
 function publicYnabRuntimeSettings() {
   return Object.fromEntries(
     Object.entries(runtime.values ?? {})
@@ -1186,6 +1197,7 @@ function ynabAuthStatus() {
     default_budget_id_configured: !!defaultBudgetId,
     writes_enabled: writesEnabled(),
     write_tools_available: writeToolsAvailable,
+    write_enablement: writesEnabled() ? null : writeEnableGuidance(),
     credential_source: runtime.tokenSource?.source ?? null,
     credential_source_label: runtime.tokenSource?.source_label ?? null,
     detected_agent: runtime.detected_agent ?? null,
@@ -1195,7 +1207,9 @@ function ynabAuthStatus() {
     lookup_error: authenticated ? null : runtime.tokenLookupError ?? null,
     setup: authenticated ? null : ynabAuthSetupGuide(),
     message: authenticated
-      ? "MCP Server for YNAB has an API token configured."
+      ? (writesEnabled()
+        ? "MCP Server for YNAB has an API token configured and write tools are enabled."
+        : "MCP Server for YNAB has an API token configured but is READ-ONLY; write tools are not registered. See write_enablement for how to enable writes on this host.")
       : "MCP Server for YNAB is running in discovery-only mode. Check setup.prompt_for_agent for the safe credential setup flow, then restart the MCP server before calling API tools.",
   };
 }
@@ -1204,7 +1218,7 @@ function writeDisabledResult(name) {
   return {
     content: [{
       type: "text",
-      text: `Error: ${name} is disabled. Restart the MCP server with YNAB_ALLOW_WRITES=1 to enable write tools.`,
+      text: `Error: ${name} is disabled because this session is read-only. ${writeEnableGuidance()}`,
     }],
     isError: true,
   };

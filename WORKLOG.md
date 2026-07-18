@@ -1,5 +1,49 @@
 # Worklog
 
+## 2026-07-18 - Diagnosed "ChatGPT reads YNAB but can't write"; host-aware write guidance
+
+**Context**: ChatGPT could read YNAB data but no transaction-mutation tool was
+available, and the YNAB namespace later disappeared from the tool surface.
+Full diagnostic prompt worked through end to end.
+
+**Root cause (no server defect)**: Write tools are gated per session at
+OAuth-consent time. The hosted consent screen's "Allow write access" box is
+unchecked by default (`worker/src/pages.js:73`); unchecked → `readOnly:true`
+(`ynab-handler.js:274`) → YNAB issues a read-only token, grant scope `["read"]`,
+`writesEnabled:false` prop → `createYnabServer({writesEnabled:false})` →
+`registerTool` returns `undefined` for every write tool (`index.js:1234`), so
+they never enter `tools/list`. A correct client shows only read tools by design.
+Secondary possibility: a client-side enablement gate (developer mode / workspace
+plan / admin approval). Both are client-side. ChatGPT's exact plan requirements
+for custom-MCP writes are in active rollout and OpenAI's help articles conflict;
+rely on live docs rather than a fixed claim.
+
+**Evidence gathered**:
+- `npm run test:safety` PASS, `npm run test:unit` PASS (28/28).
+- Live hosted endpoint healthy: `/mcp` → 401 Bearer challenge; OAuth metadata
+  advertises `scopes_supported:["read","write"]`.
+- End-to-end write PROVEN on the **Test** budget / MCP Smoke Checking account
+  (id `ebbf3adf-…`): memo write → independent read-back match → idempotent
+  double-set (no duplication) → cleared → verified. Production untouched.
+- 2026-07-15 acceptance already recorded `writes_enabled:true` in ChatGPT for a
+  write grant → read-only consent is the leading trigger.
+
+**Change made (diagnostic only; no defaults/registration changed)**:
+- Added `writeEnableGuidance()` — host-aware: hosted OAuth users are told to
+  reconnect and check "Allow write access" instead of the impossible
+  "restart with YNAB_ALLOW_WRITES=1"; derived from
+  `runtime.tokenSource.source === "ynab_oauth"`.
+- `ynab_auth_status` now returns a `write_enablement` hint and names the
+  READ-ONLY state in its message; `writeDisabledResult` uses the same guidance.
+- Verified both branches with an in-memory MCP client probe (assertions passed).
+- Docs: `ROOT_CAUSE.md` (new), troubleshooting sections in `worker/README.md`
+  and `docs/hosted-oauth-connector.md`.
+
+**User action required (client side)**: call `ynab_auth_status` in ChatGPT; if
+`writes_enabled:false`, reconnect the connector with the write box checked. If
+writes still won't invoke after a write grant, it's client-side enablement, not
+the connector.
+
 ## 2026-07-17 - Claude.ai custom connector icon investigation (no code change)
 
 **Context**: The hosted connector's custom icon renders in ChatGPT but not in

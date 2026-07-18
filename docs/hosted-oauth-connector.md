@@ -92,3 +92,22 @@ The hosted connector should store tokens by connector user or YNAB user ID:
 - Run read-only smoke tests through `/mcp`.
 - If writes are enabled, run the batch category+approval smoke against a dedicated test budget and assert post-write refetch verification.
 - Require `confirmed: true` for destructive direct tools, bulk-filter write tools, and any generic write executor.
+
+## Read-only vs write grants (client troubleshooting)
+
+Because writes are gated at consent time, a connection authorized without the
+write box checked receives a read-only YNAB token and never registers write
+tools — the MCP client correctly lists only read tools. This is the expected
+outcome, not a fault. Make the state self-diagnosing:
+
+- Keep `ynab_auth_status` a read tool so it is reachable from a read-only
+  session. It reports `writes_enabled` and a host-aware `write_enablement` hint.
+- Word the write-disabled guidance for the actual host. A hosted OAuth user
+  cannot restart the process or set an env var; the correct remediation is to
+  reconnect and check "Allow write access." The shared factory derives this from
+  `runtime.tokenSource.source === "ynab_oauth"`.
+- Remember the client-enablement caveat: some clients require a developer/beta
+  mode or workspace-admin approval before they expose or invoke custom-connector
+  write tools, independent of the YNAB grant. Prove the server independently
+  (MCP Inspector / direct `tools/call`) before treating a missing write action
+  as a connector defect.

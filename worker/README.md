@@ -103,3 +103,32 @@ YNAB, invoked the connector, returned the live budget list, and reported
 `writes_enabled: true` for the explicitly write-authorized grant. No acceptance
 chat performed a financial mutation; an actual write/undo exercise still
 requires separate approval for the exact operation.
+
+## Troubleshooting: the client shows read tools but no write tools
+
+Write tools are gated **per connection, at consent time** — not by a server
+setting you can change after the fact. If the `writes` box on the connector's
+consent screen was left unchecked, YNAB issues a read-only token, the grant
+scope is `["read"]`, and the write tools are never registered for that session,
+so a correct client (ChatGPT, Claude.ai, etc.) simply does not list them. This
+is by design, not a bug.
+
+To confirm which case you are in, ask the client to call **`ynab_auth_status`**
+(a read tool, always available). It reports:
+
+- `writes_enabled` — `false` means this connection is read-only.
+- `write_enablement` — host-specific instructions for turning writes on.
+
+**To enable writes:** disconnect/remove the YNAB connector in your client, add
+it again, and on the YNAB consent screen **check "Allow write access."** New
+grants always default to read-only, so the box must be checked on every fresh
+authorization. After reconnecting, `ynab_auth_status` should report
+`writes_enabled: true` and the update/create tools should appear.
+
+**Client enablement caveat:** some clients require a developer/beta mode, or
+workspace-admin approval, before they will expose or invoke custom-connector
+write tools — independent of the YNAB grant. (In ChatGPT, custom-MCP write
+actions run through developer mode and prompt for per-action approval.) If
+`writes_enabled: true` but the client still will not call a write tool, this is
+a client-side enablement issue, not a connector defect — verify the server side
+independently with the MCP Inspector or a direct `tools/call`.
