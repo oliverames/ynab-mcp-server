@@ -44,6 +44,28 @@ OpenAI's live docs and the workspace, not a fixed claim.
 writes still won't invoke after a write grant, it's client-side enablement, not
 the connector.
 
+**Release prep (5.1.2) — PREPARED BUT HELD at Oliver's instruction**: Also fixed
+a `publish.sh` stale-path bug — it rewrote `worker/src/ynab-mcp.js` (no version
+literal) instead of `worker/src/brand-assets.js` where `REMOTE_SERVER_INFO`'s
+version now lives, so the hosted version was never bumped and `release:check`
+would abort mid-run (commit 6798b8f). Full release preflight is GREEN at 5.1.1:
+`test:unit` 28/28, `test:safety`, `smoke:list-tools` (62 tools), worker tests
+24/24, `release:check`, `wrangler deploy --dry-run`. `npm whoami` → `oliverames`
+(publish auth OK). `wrangler whoami` → NOT authenticated (worker deploy blocked
+headlessly).
+
+**Left off at**: version held at 5.1.1, tree clean, everything pushed. Oliver
+chose to hold the npm publish and skip the hosted worker deploy for now. The new
+`write_enablement` diagnostic is on `main` but not yet on npm (`@latest` 5.1.1)
+or the live worker (`ynab.amesvt.com` still 5.1.1). To ship when ready:
+`./publish.sh patch` (bumps to 5.1.2 + publishes) → commit the bump →
+`git tag -a v5.1.2 -m v5.1.2` (unsigned; SSH signing fails headless) →
+`git push && git push --tags` (fires release.yml GitHub release + MCPB) →
+`cd worker && npx wrangler login && npx wrangler deploy`.
+
+**Open questions**: none technical. The ChatGPT-write symptom is resolved by
+user re-consent (client side); the release is a separate, deferred shipping step.
+
 ## 2026-07-17 - Claude.ai custom connector icon investigation (no code change)
 
 **Context**: The hosted connector's custom icon renders in ChatGPT but not in
