@@ -9,12 +9,11 @@ side, not in this codebase.
 
 The most likely trigger is a read-only *consent choice*, which the user fixes by
 reconnecting with the write box checked. The server-side write path is proven
-working (see Evidence). ChatGPT's entitlement rules for custom-MCP write actions
-are in active rollout and OpenAI's help articles are not fully consistent with
-each other; treat OpenAI's live documentation and the user's own workspace as
-authoritative rather than any static claim here. The discriminating test is
-whether the server writes through the MCP Inspector (it does), which isolates any
-remaining block to the client.
+working (see Evidence). Whether a given ChatGPT plan or mode may invoke
+custom-MCP write actions is set by OpenAI, is in active rollout, and is not
+asserted here; verify it against OpenAI's live documentation and the user's own
+workspace settings. The discriminating test that isolates any remaining block to
+the client is whether the server writes through the MCP Inspector — it does.
 
 ## Root cause
 

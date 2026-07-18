@@ -14,9 +14,9 @@ unchecked by default (`worker/src/pages.js:73`); unchecked → `readOnly:true`
 `registerTool` returns `undefined` for every write tool (`index.js:1234`), so
 they never enter `tools/list`. A correct client shows only read tools by design.
 Secondary possibility: a client-side enablement gate (developer mode / workspace
-plan / admin approval). Both are client-side. ChatGPT's exact plan requirements
-for custom-MCP writes are in active rollout and OpenAI's help articles conflict;
-rely on live docs rather than a fixed claim.
+plan / admin approval). Both are client-side. Whether a given ChatGPT plan/mode
+may invoke custom-MCP writes is set by OpenAI and in active rollout; rely on
+OpenAI's live docs and the workspace, not a fixed claim.
 
 **Evidence gathered**:
 - `npm run test:safety` PASS, `npm run test:unit` PASS (28/28).
