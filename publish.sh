@@ -56,7 +56,10 @@ node -e "
   index = index.replace(/version: \"\\d+\\.\\d+\\.\\d+\"/, 'version: \"$NEW_VERSION\"');
   fs.writeFileSync(indexPath, index);
 
-  const workerPath = 'worker/src/ynab-mcp.js';
+  // The hosted McpServer version lives in REMOTE_SERVER_INFO in brand-assets.js
+  // (release:check asserts this file carries the current version). It used to
+  // live in ynab-mcp.js, which no longer holds a version literal.
+  const workerPath = 'worker/src/brand-assets.js';
   let worker = fs.readFileSync(workerPath, 'utf8');
   worker = worker.replace(/version: \"\\d+\\.\\d+\\.\\d+\"/, 'version: \"$NEW_VERSION\"');
   fs.writeFileSync(workerPath, worker);
