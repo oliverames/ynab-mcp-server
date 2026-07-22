@@ -1,5 +1,19 @@
 # Worklog
 
+## 2026-07-22 - Resolve root and Worker security findings
+
+**What changed**: Updated the root and Worker dependency resolutions to remove the flagged security issues, including patched server and URI-parser versions. Useful changes from the open maintenance branch were incorporated before it was closed.
+
+**Decisions made**: Kept the fix dependency-only and preserved the hosted connector's consent, authorization, and write-gating behavior.
+
+**Left off at**: Both dependency graphs audit cleanly; `main` is synchronized.
+
+**Open questions**: The client-side write-consent troubleshooting and broader hosted rollout decisions recorded below are unchanged.
+
+**Verification**: Root and Worker audits report zero vulnerabilities. The 46-check live API suite, 28 unit tests, and 24 Worker tests passed. The post-update GitHub Actions run completed all five jobs successfully.
+
+---
+
 ## 2026-07-18 - Diagnosed "ChatGPT reads YNAB but can't write"; host-aware write guidance
 
 **Context**: ChatGPT could read YNAB data but no transaction-mutation tool was
