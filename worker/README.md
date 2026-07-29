@@ -69,11 +69,15 @@ The Worker serves YNAB's permitted, unmodified
 pages use this mark and carry the required non-affiliation and trademark
 language.
 
-For connector discovery, MCP `initialize` advertises `/assets/icon.png`, which
-is generated from the exact 1024x1024 `codex/assets/icon.png` artwork displayed
-by the Codex plugin. The landing page publishes the same artwork as its Open
-Graph image and provides conventional ICO, 16px, 32px, and Apple touch icon
-routes for favicon discovery. The generator, dimensions, MIME types, and
+For connector discovery, MCP `initialize` advertises the 256px Blurple tree
+first, followed by `/assets/icon.png`, which is generated from the exact
+1024x1024 `codex/assets/icon.png` artwork displayed by the Codex plugin. The
+landing page publishes the latter artwork as its Open Graph image. Conventional
+ICO, 16px, 32px, 256px, and Apple touch icon routes
+use the Blurple YNAB tree artwork from `assets/ynab-tree-blurple.svg`, downloaded
+from YNAB's public Webflow CDN asset. The ICO includes a 256px frame so hosts that
+derive custom-connector branding from the origin favicon can use a card-sized
+asset. The generator, dimensions, MIME types, and
 SHA-256 digests are pinned in source and covered by the Worker tests.
 
 YNAB's API Terms expressly permit the integration mark and the "for YNAB"

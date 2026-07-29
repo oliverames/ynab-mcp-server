@@ -9,6 +9,8 @@ import {
   CONNECTOR_FAVICON_16_PNG_SHA256,
   CONNECTOR_FAVICON_32_PNG,
   CONNECTOR_FAVICON_32_PNG_SHA256,
+  CONNECTOR_FAVICON_256_PNG,
+  CONNECTOR_FAVICON_256_PNG_SHA256,
   CONNECTOR_FAVICON_ICO,
   CONNECTOR_FAVICON_ICO_SHA256,
   CONNECTOR_ICON_PNG,
@@ -23,6 +25,8 @@ export {
   CONNECTOR_FAVICON_16_PNG_SHA256,
   CONNECTOR_FAVICON_32_PNG,
   CONNECTOR_FAVICON_32_PNG_SHA256,
+  CONNECTOR_FAVICON_256_PNG,
+  CONNECTOR_FAVICON_256_PNG_SHA256,
   CONNECTOR_FAVICON_ICO,
   CONNECTOR_FAVICON_ICO_SHA256,
   CONNECTOR_ICON_PNG,
@@ -44,6 +48,8 @@ export const CONNECTOR_ICON_SOURCE_PATH = "codex/assets/icon.png";
 export const CONNECTOR_ICON_PNG_PATH = "/assets/icon.png";
 export const CONNECTOR_ICON_PNG_URL =
   `${CONNECTOR_ORIGIN}${CONNECTOR_ICON_PNG_PATH}`;
+export const CONNECTOR_FAVICON_256_PNG_URL =
+  `${CONNECTOR_ORIGIN}/favicon-256x256.png`;
 
 export const REMOTE_SERVER_INFO = {
   name: "YNAB",
@@ -52,6 +58,11 @@ export const REMOTE_SERVER_INFO = {
   description:
     "Independent open-source connector for accessing a user's own YNAB budget. Not affiliated with, sponsored by, or endorsed by YNAB.",
   icons: [
+    {
+      src: CONNECTOR_FAVICON_256_PNG_URL,
+      mimeType: "image/png",
+      sizes: ["256x256"],
+    },
     {
       src: CONNECTOR_ICON_PNG_URL,
       mimeType: "image/png",

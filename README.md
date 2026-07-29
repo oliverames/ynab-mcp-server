@@ -71,12 +71,16 @@ explicitly write-authorized grant. New grants still default to read-only, and
 high-impact tools retain their own `confirmed: true` gate even when write tools
 are visible.
 
-Connector cards use the square PNG at
-`https://ynab.amesvt.com/assets/icon.png`, generated from the exact same
-`codex/assets/icon.png` artwork used by the Codex plugin. The hosted consent,
+Connector discovery advertises the 256px Blurple tree first and the square PNG
+at `https://ynab.amesvt.com/assets/icon.png` second. The latter is generated
+from the exact same `codex/assets/icon.png` artwork used by the Codex plugin.
+The hosted consent,
 callback, privacy, and deletion pages retain the permitted “Works with YNAB”
-integration mark. The landing page also exposes conventional ICO, 16px, 32px,
-and Apple touch icons for host favicon discovery. Host UIs can still cache an
+integration mark. The landing page also exposes the Blurple YNAB tree through
+conventional ICO, 16px, 32px, 256px, and Apple touch icons for host favicon
+discovery. The ICO includes a
+256px frame for clients that derive connector-card branding from the origin
+favicon. Host UIs can still cache an
 older card image, so those presentation fields may need to be refreshed or
 reindexed after the MCP metadata changes.
 
