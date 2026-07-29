@@ -1,5 +1,19 @@
 # Worklog
 
+## 2026-07-29 - Add Claude-discoverable hosted connector branding
+
+**What changed**: Replaced the hosted connector's conventional favicon set with the Blurple tree artwork from the SVG Oliver supplied. The generator now produces transparent 16px, 32px, 180px, and 256px PNGs plus an ICO containing 16px, 32px, 48px, and 256px frames. The landing page advertises the new 256px route, and MCP `serverInfo.icons` lists that card-sized tree icon before the existing 1024px connector artwork.
+
+**Decisions made**: Oliver confirmed that the branded TinyFish connector shown in Claude was not part of the Claude directory. Based on that observed comparison, added the missing 256px origin favicon while retaining the existing full-size MCP icon and consent-page “Works with YNAB” mark. Declined Wrangler's unrelated offer to install Cloudflare agent skills.
+
+**Left off at**: Commit `861e2ac` is pushed to `main`; GitHub Actions run `30500927041` passed. Cloudflare Worker version `8f97efb0-ae24-418a-80b0-f444a6dcd710` is live. The deployed 256px PNG hash exactly matches generated source (`f47df80d…e4f3`), the live ICO exposes all four expected frames, the landing page advertises every icon route, and `/mcp` still returns the expected OAuth bearer challenge.
+
+**Open questions**: Claude may retain the prior generated “Y” card until the connector is disconnected and added again. Reconnect in Claude and confirm whether it now selects the 256px origin favicon.
+
+**Verification**: `npm test --prefix worker` passed 24 tests; `npm run test:unit` passed 28 tests; `npm run test:safety` and `npm run release:check` passed; Wrangler dry-run and production deployment succeeded; live asset, ICO-frame, HTML metadata, OAuth challenge, and GitHub Actions checks passed.
+
+---
+
 ## 2026-07-22 - Resolve root and Worker security findings
 
 **What changed**: Updated the root and Worker dependency resolutions to remove the flagged security issues, including patched server and URI-parser versions. Useful changes from the open maintenance branch were incorporated before it was closed.
