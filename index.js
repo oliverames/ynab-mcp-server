@@ -792,6 +792,28 @@ async function fetchTransactions({
   });
 }
 
+// Some YNAB API errors are accurate but dead-ended: they say what failed and
+// give no route forward, so a caller retries the same call or invents a
+// workaround that damages the record. Attach the known-good procedure instead.
+const ERROR_HINTS = [
+  {
+    match: /subtransactions cannot be updated on an existing split/i,
+    hint:
+      "There is no API route out of a split: setting categoryId on the parent does not collapse it either " +
+      "(the response still reports category_name 'Split' with the old subtransactions intact). " +
+      "To change an existing split, un-split it in the YNAB web register first: select the row, use the bottom " +
+      "toolbar's Categorize, pick any single category, and confirm the 'Un-split and Categorize Split Transaction?' " +
+      "dialog. That leaves a plain single-category transaction with import_id and cleared state intact, after which " +
+      "update_transaction with subtransactions works normally. Collapse to a household or catch-all category rather " +
+      "than the one you are trying to grow, so a half-finished run under-reports rather than over-reports.",
+  },
+];
+
+function withErrorHint(msg) {
+  const found = ERROR_HINTS.find((h) => h.match.test(msg));
+  return found ? `${msg}\n\n${found.hint}` : msg;
+}
+
 async function run(fn) {
   if (!hasCredentials) {
     return missingCredentialsResult();
@@ -805,7 +827,7 @@ async function run(fn) {
     const msg = detail
       ? (name ? `${name}: ${detail}` : detail)
       : (e?.message || String(e));
-    return { content: [{ type: "text", text: `Error: ${sanitizeErrorMessage(msg)}` }], isError: true };
+    return { content: [{ type: "text", text: `Error: ${withErrorHint(sanitizeErrorMessage(msg))}` }], isError: true };
   }
 }
 
@@ -2086,7 +2108,7 @@ registerTool(
 
 registerTool(
   "update_transaction",
-  { description: "Update an existing transaction. Only provided fields are changed. Amounts in dollars. Passing subtransactions converts a non-split transaction into a split (updating the subtransactions of an existing split is not supported by the YNAB API).", inputSchema: {
+  { description: "Update an existing transaction. Only provided fields are changed. Amounts in dollars. Passing subtransactions converts a non-split transaction into a split. This works on bank-imported transactions too, including reconciled ones, and preserves import_id — reach for prepare_split_for_matching only if this actually errors. What is NOT supported is changing an existing split: the API rejects that, and setting categoryId on the parent does not collapse it. Un-split in the YNAB web register first (select the row → Categorize → pick one category → confirm the un-split dialog), then call this.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     transactionId: z.string().describe("Transaction ID"),
     accountId: z.string().optional().describe("Account ID"),
@@ -2099,7 +2121,7 @@ registerTool(
     cleared: z.enum(["cleared", "uncleared", "reconciled"]).optional().describe("Cleared status"),
     approved: z.boolean().optional().describe("Whether transaction is approved"),
     flagColor: z.enum(["red", "orange", "yellow", "green", "blue", "purple"]).nullable().optional().describe("Flag color (null to remove)"),
-    subtransactions: z.array(subtransactionInputSchema).optional().describe("Convert the transaction into a split. Amounts must sum to the transaction total. Not supported on transactions that are already splits."),
+    subtransactions: z.array(subtransactionInputSchema).optional().describe("Convert the transaction into a split. Amounts must sum to the transaction total. Works on bank-imported and reconciled transactions. Rejected if the transaction is ALREADY a split; un-split it in the YNAB register first."),
   } },
   ({ budgetId, transactionId, accountId, date, amount, payeeId, payeeName, categoryId, memo, cleared, approved, flagColor, subtransactions }) =>
     run(async () => {
@@ -3205,7 +3227,7 @@ registerTool(
 
 registerTool(
   "prepare_split_for_matching",
-  { description: "Work around the YNAB API's inability to split an already-imported transaction: creates a NEW unapproved, uncleared split transaction with the given subtransactions, mirroring the original's account, date, amount, and payee. YNAB then offers to match it with the imported original in the web/mobile UI; approving that match merges the split onto the bank-linked transaction, preserving import linkage. Workflow: call this, then tell the user to open YNAB and approve the suggested match. Side effects: creates one real transaction; if the user never matches it, it should be deleted (the creation is journaled and reversible via undo_operation). The subtransaction amounts must sum exactly to the original amount. Requires confirmed:true after explicit user confirmation. Adapted from dgalarza/ynab-mcp-dgalarza.", inputSchema: {
+  { description: "Fallback for when update_transaction with subtransactions cannot be used on an imported transaction. Try that first: it splits imported and reconciled transactions in place and preserves import_id. This tool creates a NEW unapproved, uncleared split transaction with the given subtransactions, mirroring the original's account, date, amount, and payee. YNAB then offers to match it with the imported original in the web/mobile UI; approving that match merges the split onto the bank-linked transaction, preserving import linkage. Workflow: call this, then tell the user to open YNAB and approve the suggested match. Side effects: creates one real transaction; if the user never matches it, it should be deleted (the creation is journaled and reversible via undo_operation). The subtransaction amounts must sum exactly to the original amount. Requires confirmed:true after explicit user confirmation. Adapted from dgalarza/ynab-mcp-dgalarza.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     transactionId: z.string().describe("The existing imported transaction to mirror (its account, date, amount, and payee are copied)"),
     subtransactions: z.array(subtransactionInputSchema).min(2).describe("The split lines. Amounts are in dollars and must sum to the original transaction's amount."),
