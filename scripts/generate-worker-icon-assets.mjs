@@ -75,7 +75,7 @@ try {
     "576x576",
     "-strip",
     "-define",
-    "icon:auto-resize=16,32,48,256",
+    "icon:auto-resize=16,32,48,64,128,256",
     faviconPath,
   ]);
   generated.push({ name: "CONNECTOR_FAVICON_ICO", buffer: await readFile(faviconPath) });

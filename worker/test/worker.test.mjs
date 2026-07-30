@@ -169,7 +169,12 @@ test("hosted connector uses the exact Codex plugin icon and conventional favicon
     const response = await YnabHandler.request(`https://ynab.amesvt.com${path}`);
     assert.equal(response.status, 200);
     assert.match(response.headers.get("content-type") ?? "", new RegExp(`^${contentType.replace("+", "\\+")}(?:;|$)`));
-    assert.equal(response.headers.get("cache-control"), "public, max-age=31536000, immutable");
+    assert.equal(
+      response.headers.get("cache-control"),
+      path === "/favicon.ico"
+        ? "public, max-age=0, must-revalidate"
+        : "public, max-age=31536000, immutable"
+    );
     assert.equal(response.headers.get("access-control-allow-origin"), "*");
     assert.equal(response.headers.get("cross-origin-resource-policy"), "cross-origin");
     assert.match(response.headers.get("content-security-policy") ?? "", /default-src 'none'/);

@@ -1,5 +1,15 @@
 # Worklog
 
+## 2026-07-29 - Match TinyFish favicon structure for Claude testing
+
+**What changed**: Expanded the hosted favicon from four to six ICO entries at 16, 32, 48, 64, 128, and 256 pixels. The `/favicon.ico` response now uses `public, max-age=0, must-revalidate`, matching the observable TinyFish endpoint behavior while retaining ETag validation.
+
+**Verification**: Parsed the generated ICO directory table and confirmed all six 32-bit entries. All 24 Worker tests and 46 live-aware root tests pass, the release consistency check passes, and the Wrangler dry run succeeds.
+
+**Left off at**: This is an experimental compatibility change. It reproduces TinyFish's favicon structure but does not prove Claude will use the icon for a custom connector.
+
+---
+
 ## 2026-07-29 - Add Claude-discoverable hosted connector branding
 
 **What changed**: Replaced the hosted connector's conventional favicon set with the Blurple tree artwork from the SVG Oliver supplied. The generator now produces transparent 16px, 32px, 180px, and 256px PNGs plus an ICO containing 16px, 32px, 48px, and 256px frames. The landing page advertises the new 256px route, and MCP `serverInfo.icons` lists that card-sized tree icon before the existing 1024px connector artwork.

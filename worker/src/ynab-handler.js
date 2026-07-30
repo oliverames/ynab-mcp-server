@@ -79,10 +79,15 @@ function html(c, body, status = 200, { formActionUrls = [] } = {}) {
   return c.html(body, status);
 }
 
-function worksWithYnabAsset(c, { body, contentType, sha256 }) {
+function worksWithYnabAsset(c, {
+  body,
+  contentType,
+  sha256,
+  cacheControl = "public, max-age=31536000, immutable",
+}) {
   const etag = `"sha256-${sha256}"`;
   c.header("Content-Type", contentType);
-  c.header("Cache-Control", "public, max-age=31536000, immutable");
+  c.header("Cache-Control", cacheControl);
   c.header("Content-Security-Policy", "default-src 'none'; sandbox");
   c.header("Access-Control-Allow-Origin", "*");
   c.header("Cross-Origin-Resource-Policy", "cross-origin");
@@ -187,6 +192,7 @@ app.get("/favicon.ico", (c) => worksWithYnabAsset(c, {
   body: CONNECTOR_FAVICON_ICO,
   contentType: "image/x-icon",
   sha256: CONNECTOR_FAVICON_ICO_SHA256,
+  cacheControl: "public, max-age=0, must-revalidate",
 }));
 app.get("/favicon-16x16.png", (c) => worksWithYnabAsset(c, {
   body: CONNECTOR_FAVICON_16_PNG,
