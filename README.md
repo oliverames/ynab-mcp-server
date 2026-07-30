@@ -77,10 +77,13 @@ from the exact same `codex/assets/icon.png` artwork used by the Codex plugin.
 The hosted consent,
 callback, privacy, and deletion pages retain the permitted “Works with YNAB”
 integration mark. The landing page also exposes the Blurple YNAB tree through
-conventional ICO, 16px, 32px, 48px, 64px, 96px, 128px, 256px, and Apple touch icons for host favicon
-discovery. The ICO includes a
-256px frame for clients that derive connector-card branding from the origin
-favicon. The 256px discovery image uses standard 8-bit RGBA at the versioned
+an SVG favicon, a conventional ICO, 16px, 32px, 48px, 64px, 96px, 128px, 256px,
+and Apple touch icons for host favicon discovery. The page head advertises the
+SVG first with the ICO as its alternate, because icon resolvers take the first
+usable declaration; the remaining sizes stay served for other consumers. The
+ICO carries a single 32px frame, since a six-frame uncompressed ICO reached
+370 KB and resolvers skipped it rather than decode it. The 256px discovery
+image uses standard 8-bit RGBA at the versioned
 `/assets/ynab-tree-icon-v1.png` route. Host UIs can still cache an
 older card image, so those presentation fields may need to be refreshed or
 reindexed after the MCP metadata changes.
