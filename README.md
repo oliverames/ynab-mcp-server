@@ -80,7 +80,8 @@ integration mark. The landing page also exposes the Blurple YNAB tree through
 conventional ICO, 16px, 32px, 256px, and Apple touch icons for host favicon
 discovery. The ICO includes a
 256px frame for clients that derive connector-card branding from the origin
-favicon. Host UIs can still cache an
+favicon. The 256px discovery image uses standard 8-bit RGBA at the versioned
+`/assets/ynab-tree-icon-v1.png` route. Host UIs can still cache an
 older card image, so those presentation fields may need to be refreshed or
 reindexed after the MCP metadata changes.
 

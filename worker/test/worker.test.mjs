@@ -135,7 +135,7 @@ test("hosted connector uses the exact Codex plugin icon and conventional favicon
   assert.equal(REMOTE_SERVER_INFO.title, "YNAB");
   assert.deepEqual(REMOTE_SERVER_INFO.icons, [
     {
-      src: "https://ynab.amesvt.com/favicon-256x256.png",
+      src: "https://ynab.amesvt.com/assets/ynab-tree-icon-v1.png",
       mimeType: "image/png",
       sizes: ["256x256"],
     },
@@ -155,6 +155,7 @@ test("hosted connector uses the exact Codex plugin icon and conventional favicon
     ["/favicon-16x16.png", "image/png", CONNECTOR_FAVICON_16_PNG_SHA256],
     ["/favicon-32x32.png", "image/png", CONNECTOR_FAVICON_32_PNG_SHA256],
     ["/favicon-256x256.png", "image/png", CONNECTOR_FAVICON_256_PNG_SHA256],
+    ["/assets/ynab-tree-icon-v1.png", "image/png", CONNECTOR_FAVICON_256_PNG_SHA256],
   ];
   for (const [path, contentType, expectedSha256] of assets) {
     const response = await YnabHandler.request(`https://ynab.amesvt.com${path}`);
@@ -180,7 +181,7 @@ test("landing page advertises the connector icon", async () => {
   const response = await YnabHandler.request("https://ynab.amesvt.com/");
   const body = await response.text();
   assert.match(body, /<link rel="icon" href="\/favicon\.ico" sizes="any">/);
-  assert.match(body, /<link rel="icon" type="image\/png" sizes="256x256" href="\/favicon-256x256\.png">/);
+  assert.match(body, /<link rel="icon" type="image\/png" sizes="256x256" href="\/assets\/ynab-tree-icon-v1\.png">/);
   assert.match(body, /<link rel="icon" type="image\/png" sizes="32x32" href="\/favicon-32x32\.png">/);
   assert.match(body, /<link rel="icon" type="image\/png" sizes="16x16" href="\/favicon-16x16\.png">/);
   assert.doesNotMatch(body, /rel="icon"[^>]+favicon\.svg/);

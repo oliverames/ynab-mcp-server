@@ -47,10 +47,14 @@ try {
       "-extent",
       "576x576",
       "-strip",
+      "-depth",
+      "8",
       "-resize",
       `${variant.size}x${variant.size}`,
       "-define",
       "png:exclude-chunks=date,time",
+      "-define",
+      "png:color-type=6",
       generatedPath,
     ]);
     generated.push({ name: variant.name, buffer: await readFile(generatedPath) });

@@ -49,7 +49,7 @@ export const CONNECTOR_ICON_PNG_PATH = "/assets/icon.png";
 export const CONNECTOR_ICON_PNG_URL =
   `${CONNECTOR_ORIGIN}${CONNECTOR_ICON_PNG_PATH}`;
 export const CONNECTOR_FAVICON_256_PNG_URL =
-  `${CONNECTOR_ORIGIN}/favicon-256x256.png`;
+  `${CONNECTOR_ORIGIN}/assets/ynab-tree-icon-v1.png`;
 
 export const REMOTE_SERVER_INFO = {
   name: "YNAB",

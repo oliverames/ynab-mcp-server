@@ -77,7 +77,10 @@ ICO, 16px, 32px, 256px, and Apple touch icon routes
 use the Blurple YNAB tree artwork from `assets/ynab-tree-blurple.svg`, downloaded
 from YNAB's public Webflow CDN asset. The ICO includes a 256px frame so hosts that
 derive custom-connector branding from the origin favicon can use a card-sized
-asset. The generator, dimensions, MIME types, and
+asset. The Claude-facing 256px PNG is forced to 8-bit RGBA and served from the
+versioned `/assets/ynab-tree-icon-v1.png` route so a previously rejected image
+cannot remain pinned by the immutable asset cache. The generator, dimensions,
+MIME types, and
 SHA-256 digests are pinned in source and covered by the Worker tests.
 
 YNAB's API Terms expressly permit the integration mark and the "for YNAB"
