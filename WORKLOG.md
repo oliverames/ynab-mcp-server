@@ -4,9 +4,13 @@
 
 **What changed**: Expanded the hosted favicon from four to six ICO entries at 16, 32, 48, 64, 128, and 256 pixels. The `/favicon.ico` response now uses `public, max-age=0, must-revalidate`, matching the observable TinyFish endpoint behavior while retaining ETag validation.
 
+**Decisions made**: Reproduced only the observable TinyFish differences. This is an experiment, not evidence that Claude supports custom connector favicon branding.
+
 **Verification**: Parsed the generated ICO directory table and confirmed all six 32-bit entries. All 24 Worker tests and 46 live-aware root tests pass, the release consistency check passes, and the Wrangler dry run succeeds.
 
-**Left off at**: This is an experimental compatibility change. It reproduces TinyFish's favicon structure but does not prove Claude will use the icon for a custom connector.
+**Left off at**: Cloudflare deployment `12a23a70-249d-47d3-8bb2-c55c873066b4` is live. Disconnect and add YNAB again in Claude to test whether it refreshes the connector card.
+
+**Open questions**: Whether Claude reads the origin favicon for custom connectors remains undocumented.
 
 ---
 
