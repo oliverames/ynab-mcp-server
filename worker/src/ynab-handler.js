@@ -27,6 +27,14 @@ import {
   CONNECTOR_FAVICON_16_PNG_SHA256,
   CONNECTOR_FAVICON_32_PNG,
   CONNECTOR_FAVICON_32_PNG_SHA256,
+  CONNECTOR_FAVICON_48_PNG,
+  CONNECTOR_FAVICON_48_PNG_SHA256,
+  CONNECTOR_FAVICON_64_PNG,
+  CONNECTOR_FAVICON_64_PNG_SHA256,
+  CONNECTOR_FAVICON_96_PNG,
+  CONNECTOR_FAVICON_96_PNG_SHA256,
+  CONNECTOR_FAVICON_128_PNG,
+  CONNECTOR_FAVICON_128_PNG_SHA256,
   CONNECTOR_FAVICON_256_PNG,
   CONNECTOR_FAVICON_256_PNG_SHA256,
   CONNECTOR_FAVICON_ICO,
@@ -189,6 +197,26 @@ app.get("/favicon-32x32.png", (c) => worksWithYnabAsset(c, {
   body: CONNECTOR_FAVICON_32_PNG,
   contentType: "image/png",
   sha256: CONNECTOR_FAVICON_32_PNG_SHA256,
+}));
+app.get("/favicon-48x48.png", (c) => worksWithYnabAsset(c, {
+  body: CONNECTOR_FAVICON_48_PNG,
+  contentType: "image/png",
+  sha256: CONNECTOR_FAVICON_48_PNG_SHA256,
+}));
+app.get("/favicon-64x64.png", (c) => worksWithYnabAsset(c, {
+  body: CONNECTOR_FAVICON_64_PNG,
+  contentType: "image/png",
+  sha256: CONNECTOR_FAVICON_64_PNG_SHA256,
+}));
+app.get("/favicon-96x96.png", (c) => worksWithYnabAsset(c, {
+  body: CONNECTOR_FAVICON_96_PNG,
+  contentType: "image/png",
+  sha256: CONNECTOR_FAVICON_96_PNG_SHA256,
+}));
+app.get("/favicon-128x128.png", (c) => worksWithYnabAsset(c, {
+  body: CONNECTOR_FAVICON_128_PNG,
+  contentType: "image/png",
+  sha256: CONNECTOR_FAVICON_128_PNG_SHA256,
 }));
 app.get("/favicon-256x256.png", (c) => worksWithYnabAsset(c, {
   body: CONNECTOR_FAVICON_256_PNG,

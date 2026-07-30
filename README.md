@@ -77,7 +77,7 @@ from the exact same `codex/assets/icon.png` artwork used by the Codex plugin.
 The hosted consent,
 callback, privacy, and deletion pages retain the permitted “Works with YNAB”
 integration mark. The landing page also exposes the Blurple YNAB tree through
-conventional ICO, 16px, 32px, 256px, and Apple touch icons for host favicon
+conventional ICO, 16px, 32px, 48px, 64px, 96px, 128px, 256px, and Apple touch icons for host favicon
 discovery. The ICO includes a
 256px frame for clients that derive connector-card branding from the origin
 favicon. The 256px discovery image uses standard 8-bit RGBA at the versioned

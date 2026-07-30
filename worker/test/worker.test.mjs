@@ -7,6 +7,10 @@ import {
   CONNECTOR_MCP_URL,
   CONNECTOR_FAVICON_16_PNG_SHA256,
   CONNECTOR_FAVICON_32_PNG_SHA256,
+  CONNECTOR_FAVICON_48_PNG_SHA256,
+  CONNECTOR_FAVICON_64_PNG_SHA256,
+  CONNECTOR_FAVICON_96_PNG_SHA256,
+  CONNECTOR_FAVICON_128_PNG_SHA256,
   CONNECTOR_FAVICON_256_PNG_SHA256,
   CONNECTOR_FAVICON_ICO_SHA256,
   CONNECTOR_ICON_PNG_SHA256,
@@ -154,6 +158,10 @@ test("hosted connector uses the exact Codex plugin icon and conventional favicon
     ["/favicon.ico", "image/x-icon", CONNECTOR_FAVICON_ICO_SHA256],
     ["/favicon-16x16.png", "image/png", CONNECTOR_FAVICON_16_PNG_SHA256],
     ["/favicon-32x32.png", "image/png", CONNECTOR_FAVICON_32_PNG_SHA256],
+    ["/favicon-48x48.png", "image/png", CONNECTOR_FAVICON_48_PNG_SHA256],
+    ["/favicon-64x64.png", "image/png", CONNECTOR_FAVICON_64_PNG_SHA256],
+    ["/favicon-96x96.png", "image/png", CONNECTOR_FAVICON_96_PNG_SHA256],
+    ["/favicon-128x128.png", "image/png", CONNECTOR_FAVICON_128_PNG_SHA256],
     ["/favicon-256x256.png", "image/png", CONNECTOR_FAVICON_256_PNG_SHA256],
     ["/assets/ynab-tree-icon-v1.png", "image/png", CONNECTOR_FAVICON_256_PNG_SHA256],
   ];
@@ -182,6 +190,10 @@ test("landing page advertises the connector icon", async () => {
   const body = await response.text();
   assert.match(body, /<link rel="icon" href="\/favicon\.ico" sizes="any">/);
   assert.match(body, /<link rel="icon" type="image\/png" sizes="256x256" href="\/assets\/ynab-tree-icon-v1\.png">/);
+  assert.match(body, /sizes="128x128" href="\/favicon-128x128\.png"/);
+  assert.match(body, /sizes="96x96" href="\/favicon-96x96\.png"/);
+  assert.match(body, /sizes="64x64" href="\/favicon-64x64\.png"/);
+  assert.match(body, /sizes="48x48" href="\/favicon-48x48\.png"/);
   assert.match(body, /<link rel="icon" type="image\/png" sizes="32x32" href="\/favicon-32x32\.png">/);
   assert.match(body, /<link rel="icon" type="image\/png" sizes="16x16" href="\/favicon-16x16\.png">/);
   assert.doesNotMatch(body, /rel="icon"[^>]+favicon\.svg/);

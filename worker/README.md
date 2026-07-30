@@ -73,7 +73,7 @@ For connector discovery, MCP `initialize` advertises the 256px Blurple tree
 first, followed by `/assets/icon.png`, which is generated from the exact
 1024x1024 `codex/assets/icon.png` artwork displayed by the Codex plugin. The
 landing page publishes the latter artwork as its Open Graph image. Conventional
-ICO, 16px, 32px, 256px, and Apple touch icon routes
+ICO, 16px, 32px, 48px, 64px, 96px, 128px, 256px, and Apple touch icon routes
 use the Blurple YNAB tree artwork from `assets/ynab-tree-blurple.svg`, downloaded
 from YNAB's public Webflow CDN asset. The ICO includes a 256px frame so hosts that
 derive custom-connector branding from the origin favicon can use a card-sized

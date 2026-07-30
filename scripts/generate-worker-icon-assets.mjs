@@ -18,6 +18,10 @@ const temporaryDirectory = await mkdtemp(join(tmpdir(), "ynab-connector-icons-")
 const variants = [
   { name: "CONNECTOR_FAVICON_16_PNG", filename: "favicon-16x16.png", size: 16 },
   { name: "CONNECTOR_FAVICON_32_PNG", filename: "favicon-32x32.png", size: 32 },
+  { name: "CONNECTOR_FAVICON_48_PNG", filename: "favicon-48x48.png", size: 48 },
+  { name: "CONNECTOR_FAVICON_64_PNG", filename: "favicon-64x64.png", size: 64 },
+  { name: "CONNECTOR_FAVICON_96_PNG", filename: "favicon-96x96.png", size: 96 },
+  { name: "CONNECTOR_FAVICON_128_PNG", filename: "favicon-128x128.png", size: 128 },
   { name: "CONNECTOR_FAVICON_256_PNG", filename: "favicon-256x256.png", size: 256 },
   { name: "CONNECTOR_APPLE_TOUCH_ICON_PNG", filename: "apple-touch-icon.png", size: 180 },
 ];
