@@ -36,14 +36,38 @@ favicon, the square tree may be. Kept the larger PNG routes served for existing
 consumers and only removed them from the head.
 
 **Verification**: 25 of 25 Worker tests pass, including a new bound that fails
-if `favicon.ico` grows past 10 KB. Not yet deployed.
+if `favicon.ico` grows past 10 KB. Deployed as version
+`e433958f-44b6-46d9-9f49-e4793eb9d394`. The live `/favicon.ico` ETag is
+`sha256-eab3c55cf32b31bba1d0d3db419041e4af99a70fed81142906ca7823c687dfbc`,
+matching the generated asset byte for byte; `/favicon.svg` serves 4,953 bytes
+as `image/svg+xml`. Raw `curl` size readings taken right after deploy were
+inconsistent between hosts and should not be trusted. Compare the ETag instead:
+it is the SHA-256 of the served body, so it settles what is actually live.
 
-**Open questions**: Whether a correct same-origin icon on the subdomain stops
-the registrable-domain fallback, or whether Claude only ever resolves at the
-registrable domain. The apex fix in `amesvt-website` covers the second case for
-`amesvt.com` itself, but if the resolver is registrable-domain-only then no
-`*.amesvt.com` connector can carry distinct branding and separate domains are
-the remaining lever. Both fixes must deploy before this can be retested.
+**Retested, negative**: `amesvt-website` deployed its apex fix and
+`workspace.amesvt.com` deployed a correct same-origin Google mark. Claude still
+renders the green amesvt mark for that connector after a full sign-out,
+disconnect and reconnect. A correct icon on the subdomain does not win. Note
+what the apex fix actually accomplished: `amesvt.com/favicon.ico` now returns a
+real icon instead of an HTML page, but that icon is itself the green mark, so
+resolution now succeeds onto green.
+
+**Open questions**: Two readings remain, and they cannot be separated from
+outside. Either Claude resolves a custom connector's icon only at the
+registrable domain, or it holds a server-side icon cache keyed on the domain
+that a client reconnect does not clear. Supporting the first: every connector
+of Oliver's that renders correctly sits on an apex (`sosumi.ai`,
+`tinyfish.io`), and every one showing green is a subdomain of `amesvt.com`.
+Directory connectors prove nothing here, because those take their icons from
+Anthropic's catalog rather than from resolution.
+
+The decisive test, deliberately not run: temporarily recolor `amesvt.com`'s own
+favicon and re-check a connector. If every connector changes color, resolution
+is registrable-domain-only, and separate registrable domains are the only lever
+for distinct per-connector branding. If they stay green, it is a cache and the
+subdomain icons will win on their own. Oliver chose to wait and re-check later
+rather than alter the live utilities page. Every origin is correct and
+consistent now, so the retest costs only time.
 
 ---
 
