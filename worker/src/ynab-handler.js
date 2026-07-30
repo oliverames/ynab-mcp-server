@@ -39,6 +39,8 @@ import {
   CONNECTOR_FAVICON_256_PNG_SHA256,
   CONNECTOR_FAVICON_ICO,
   CONNECTOR_FAVICON_ICO_SHA256,
+  CONNECTOR_FAVICON_SVG,
+  CONNECTOR_FAVICON_SVG_SHA256,
   CONNECTOR_ICON_PNG,
   CONNECTOR_ICON_PNG_SHA256,
   WORKS_WITH_YNAB_PNG,
@@ -187,6 +189,12 @@ app.get("/assets/ynab-app-icon.png", (c) => worksWithYnabAsset(c, {
   body: CONNECTOR_ICON_PNG,
   contentType: "image/png",
   sha256: CONNECTOR_ICON_PNG_SHA256,
+}));
+app.get("/favicon.svg", (c) => worksWithYnabAsset(c, {
+  body: CONNECTOR_FAVICON_SVG,
+  contentType: "image/svg+xml; charset=utf-8",
+  sha256: CONNECTOR_FAVICON_SVG_SHA256,
+  cacheControl: "public, max-age=0, must-revalidate",
 }));
 app.get("/favicon.ico", (c) => worksWithYnabAsset(c, {
   body: CONNECTOR_FAVICON_ICO,

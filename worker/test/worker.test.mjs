@@ -12,7 +12,9 @@ import {
   CONNECTOR_FAVICON_96_PNG_SHA256,
   CONNECTOR_FAVICON_128_PNG_SHA256,
   CONNECTOR_FAVICON_256_PNG_SHA256,
+  CONNECTOR_FAVICON_ICO,
   CONNECTOR_FAVICON_ICO_SHA256,
+  CONNECTOR_FAVICON_SVG_SHA256,
   CONNECTOR_ICON_PNG_SHA256,
   CONNECTOR_RESOURCE_METADATA,
   REMOTE_SERVER_INFO,
@@ -156,6 +158,7 @@ test("hosted connector uses the exact Codex plugin icon and conventional favicon
     ["/assets/icon.png", "image/png", CONNECTOR_ICON_PNG_SHA256],
     ["/assets/ynab-app-icon.png", "image/png", CONNECTOR_ICON_PNG_SHA256],
     ["/favicon.ico", "image/x-icon", CONNECTOR_FAVICON_ICO_SHA256],
+    ["/favicon.svg", "image/svg+xml", CONNECTOR_FAVICON_SVG_SHA256],
     ["/favicon-16x16.png", "image/png", CONNECTOR_FAVICON_16_PNG_SHA256],
     ["/favicon-32x32.png", "image/png", CONNECTOR_FAVICON_32_PNG_SHA256],
     ["/favicon-48x48.png", "image/png", CONNECTOR_FAVICON_48_PNG_SHA256],
@@ -171,7 +174,7 @@ test("hosted connector uses the exact Codex plugin icon and conventional favicon
     assert.match(response.headers.get("content-type") ?? "", new RegExp(`^${contentType.replace("+", "\\+")}(?:;|$)`));
     assert.equal(
       response.headers.get("cache-control"),
-      path === "/favicon.ico"
+      path === "/favicon.ico" || path === "/favicon.svg"
         ? "public, max-age=0, must-revalidate"
         : "public, max-age=31536000, immutable"
     );
@@ -190,18 +193,30 @@ test("hosted connector uses the exact Codex plugin icon and conventional favicon
   }
 });
 
+test("favicon.ico stays small enough for icon resolvers", () => {
+  // A six-frame uncompressed ICO reached 370 KB, which resolvers skipped. The
+  // reference that does render in Claude, sosumi.ai, serves one 32x32 frame at
+  // 4,286 bytes. Keep a wide margin but fail loudly if the frame list grows
+  // back. See WORKLOG 2026-07-30.
+  assert.ok(
+    CONNECTOR_FAVICON_ICO.length < 10_000,
+    `favicon.ico is ${CONNECTOR_FAVICON_ICO.length} bytes; keep it to a single 32x32 frame`,
+  );
+});
+
 test("landing page advertises the connector icon", async () => {
   const response = await YnabHandler.request("https://ynab.amesvt.com/");
   const body = await response.text();
-  assert.match(body, /<link rel="icon" href="\/favicon\.ico" sizes="any">/);
-  assert.match(body, /<link rel="icon" type="image\/png" sizes="256x256" href="\/assets\/ynab-tree-icon-v1\.png">/);
-  assert.match(body, /sizes="128x128" href="\/favicon-128x128\.png"/);
-  assert.match(body, /sizes="96x96" href="\/favicon-96x96\.png"/);
-  assert.match(body, /sizes="64x64" href="\/favicon-64x64\.png"/);
-  assert.match(body, /sizes="48x48" href="\/favicon-48x48\.png"/);
+  // The square tree favicon leads, with a small ICO as the alternate. Icon
+  // resolvers take the first usable declaration, so nothing large or ambiguous
+  // is advertised ahead of it. See WORKLOG 2026-07-30.
+  assert.match(body, /<link rel="icon" href="\/favicon\.svg" type="image\/svg\+xml">/);
+  assert.match(body, /<link rel="alternate icon" href="\/favicon\.ico" sizes="32x32">/);
   assert.match(body, /<link rel="icon" type="image\/png" sizes="32x32" href="\/favicon-32x32\.png">/);
   assert.match(body, /<link rel="icon" type="image\/png" sizes="16x16" href="\/favicon-16x16\.png">/);
-  assert.doesNotMatch(body, /rel="icon"[^>]+favicon\.svg/);
+  // The "Works with YNAB" wordmark is 196x78 and must never be advertised as a
+  // favicon; only the square tree artwork may be.
+  assert.doesNotMatch(body, /rel="[^"]*icon"[^>]+works-with-ynab/);
   assert.match(body, /<meta property="og:image" content="https:\/\/ynab\.amesvt\.com\/assets\/icon\.png">/);
   assert.match(body, /<meta property="og:image:width" content="1024">/);
   assert.match(body, /<meta property="og:image:height" content="1024">/);

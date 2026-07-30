@@ -1,5 +1,52 @@
 # Worklog
 
+## 2026-07-30 - Found why Claude showed the wrong connector icon
+
+**Context**: Resolves the 2026-07-17 investigation, which ended undecided, and
+reverses the 2026-07-29 six-frame ICO experiment.
+
+**Root cause, measured**: The icon Claude rendered for this connector was never
+a fallback monogram. It was `amesvt.com`'s own favicon, a green rounded square
+with a white ring, served from `assets.amesvt.com`. Every `*.amesvt.com`
+connector showed that identical mark. Claude resolves a connector icon at the
+registrable domain, and `https://amesvt.com/favicon.ico` returned the Cloudflare
+Pages SPA fallback with `HTTP 200` and `content-type: text/html`. A 200 ends the
+fallback chain, so the resolver parsed the landing page instead and took the
+cross-origin favicon it found there.
+
+**Confirmed and closed**: `serverInfo.icons` is not the lever. sosumi.ai, whose
+icon renders correctly in Claude, returns `{"name":"sosumi.ai","version":
+"1.0.0"}` with no `icons`, no `title`, and no `websiteUrl`, and answers
+`initialize` without a bearer token. This connector ships a full `icons` array
+and gets nothing from it. The 2026-07-17 entry was right; treat that channel as
+ChatGPT-only.
+
+**What changed**: `/favicon.ico` dropped from six uncompressed frames
+(370,070 bytes) to a single 32x32 frame (4,286 bytes), the same shape and byte
+size sosumi.ai serves. Added `/favicon.svg`, a squared copy of the Blurple tree
+vector, and made it the leading `rel="icon"` with the ICO as `alternate icon`.
+The page head now advertises four icon links instead of nine, so a resolver
+taking the first usable declaration gets a small one.
+
+**Decisions made**: Reversed the test assertion that forbade any SVG favicon.
+That assertion dates to 2026-07-15, when the only SVG on hand was the 196x78
+"Works with YNAB" wordmark, which is the wrong shape for a favicon. The new
+assertion keeps that intent by name: the wordmark must never be advertised as a
+favicon, the square tree may be. Kept the larger PNG routes served for existing
+consumers and only removed them from the head.
+
+**Verification**: 25 of 25 Worker tests pass, including a new bound that fails
+if `favicon.ico` grows past 10 KB. Not yet deployed.
+
+**Open questions**: Whether a correct same-origin icon on the subdomain stops
+the registrable-domain fallback, or whether Claude only ever resolves at the
+registrable domain. The apex fix in `amesvt-website` covers the second case for
+`amesvt.com` itself, but if the resolver is registrable-domain-only then no
+`*.amesvt.com` connector can carry distinct branding and separate domains are
+the remaining lever. Both fixes must deploy before this can be retested.
+
+---
+
 ## 2026-07-29 - Match TinyFish favicon structure for Claude testing
 
 **What changed**: Expanded the hosted favicon from four to six ICO entries at 16, 32, 48, 64, 128, and 256 pixels. The `/favicon.ico` response now uses `public, max-age=0, must-revalidate`, matching the observable TinyFish endpoint behavior while retaining ETag validation.
