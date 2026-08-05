@@ -65,6 +65,20 @@ responses were also exercised end to end through an in-memory MCP client
 against stubbed YNAB payloads reproducing the exact Venmo, Adobe and B&amp;H
 rows from the findings.
 
+**Unrelated CI failure fixed in the same PR**: the `security` job went red on
+`npm audit --audit-level=high` for reasons that predate this branch — main last
+ran green on 2026-07-31 and the advisories (`fast-uri` GHSA-7p8r-x3mc-p8w7,
+`ip-address` GHSA-mwp4-54f8-5fhr and two siblings, `hono`
+GHSA-8j4g-w8fx-2239) published after it. Reproduced locally on an unmodified
+`package-lock.json`, so it is not caused by the code change. `fast-uri` has no
+fixed 3.x, so the override moves to `4.1.2` across ajv's `^3.0.1` range; the
+existing pin at `3.1.4` was itself inside the vulnerable range. `ip-address`
+and `hono` move within range. Both root and Worker manifests are updated, and
+both audits now report zero. The Worker lockfile diff also drops `libc`
+metadata on sharp's optional dev binaries — an artifact of the npm that
+regenerated it, functionally inert, and `npm ci` was rerun from clean in both
+packages to confirm.
+
 ## 2026-07-30 - Found why Claude showed the wrong connector icon
 
 **Context**: Resolves the 2026-07-17 investigation, which ended undecided, and
