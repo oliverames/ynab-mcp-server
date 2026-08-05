@@ -33,6 +33,12 @@ function writeJson(relativePath, value) {
   fs.writeFileSync(destination, `${JSON.stringify(value, null, 2)}\n`);
 }
 
+// The staged package.json must carry `overrides` alongside `dependencies`:
+// package-lock.json is copied verbatim, and it was resolved WITH the overrides
+// applied. Dropping them made the staged `npm ci` reject the lock as out of
+// sync ("Missing: @hono/node-server@... from lock file"), and would otherwise
+// install the unpinned — currently advisory-flagged — transitive versions into
+// the bundle users actually run.
 const bundlePackage = {
   name: pkg.name,
   version: pkg.version,
@@ -40,6 +46,7 @@ const bundlePackage = {
   type: pkg.type,
   main: pkg.main,
   dependencies: pkg.dependencies,
+  ...(pkg.overrides ? { overrides: pkg.overrides } : {}),
   engines: pkg.engines,
 };
 

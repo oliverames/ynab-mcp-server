@@ -1,5 +1,35 @@
 # Worklog
 
+## 2026-08-05 - Release prep for 5.2.0, and the MCPB build was already broken
+
+**Version**: 5.1.1 → 5.2.0. Minor, not patch: the connector fixes add response
+fields (`category_names`, `mixed_categories`, `inflow_total` / `outflow_total`,
+`newly_approved_count` and its siblings, `matched_on` / `matched_terms`) and a
+new `includeHidden` parameter on `search_categories`. Nothing was removed, and
+`approved_count` keeps its old meaning, so no consumer breaks.
+
+**`build:mcpb` was failing before this branch**: `./publish.sh` stops at the
+bundle step with ``npm ci`` rejecting the copied lockfile — "Missing:
+@hono/node-server@1.19.17 from lock file". Cause: `scripts/build-mcpb.mjs`
+writes a staged `package.json` from a field allow-list that omits `overrides`,
+then copies `package-lock.json` verbatim. The lock was resolved *with* the
+overrides applied, so the staged manifest and the lock disagree. Verified
+pre-existing by staging the v5.1.1 tree (commit `7d04e6d`) the same way: it
+fails identically. The dependency bump in this release only lengthened the list
+of missing packages.
+
+Beyond unblocking the release, this mattered on its own: had the staged install
+succeeded without the overrides, the `.mcpb` users actually run would have
+shipped the unpinned, advisory-flagged `fast-uri` and `hono`. The staged
+manifest now carries `overrides`, and the built bundle was unzipped and
+checked — `fast-uri 4.1.2`, `hono 4.13.0`, `ip-address 10.4.0`.
+
+**Not published**: `npm publish` needs registry credentials this environment
+does not have (`ENEEDAUTH`, no `~/.npmrc`, no token in env). Everything up to
+that call is done and green: all offline suites, the Wrangler dry-run, release
+consistency at 5.2.0, `npm pack --dry-run` (16 files, 860.9 kB), and
+`npm publish --dry-run`. The remaining step is one authenticated command.
+
 ## 2026-08-05 - Fixed seven connector findings from a live triage session
 
 **Context**: A live session using the hosted connector produced eight findings.
