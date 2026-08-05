@@ -28,6 +28,13 @@ const {
   parseToolExecuteInput,
   verifyBulkTransactionUpdates,
   beforeFieldsForUpdate,
+  summarizeApprovalChanges,
+  decodeHtmlEntities,
+  decodeTextFieldsDeep,
+  normalizeSearchText,
+  matchCategoriesByQuery,
+  slimUnapprovedTransaction,
+  buildUnapprovedPayeeGroups,
   summarizeIncomeExpenseByMonth,
   detectRecurringFromTransactions,
   csvEscape,
@@ -372,4 +379,224 @@ test("buildTransactionsCsv emits header plus one row per transaction", () => {
 
 test("currentBudgetMonth is the first of the current month", () => {
   assert.match(currentBudgetMonth(), /^\d{4}-\d{2}-01$/);
+});
+
+// --- v5.2 connector-finding fixes ---
+
+test("buildUnapprovedPayeeGroups reports every category a group spans", () => {
+  const txns = [
+    { id: "t1", payee_name: "Venmo", amount: -20, category_name: "🏖️ Cuttyhunk", flags: [] },
+    { id: "t2", payee_name: "Venmo", amount: -30, category_name: "🚲 eBike", flags: [] },
+    { id: "t3", payee_name: "Venmo", amount: -40, category_name: "🚲 eBike", flags: [] },
+    { id: "t4", payee_name: "Venmo", amount: -10, category_name: "🚲 eBike", flags: [] },
+  ];
+  const [group] = buildUnapprovedPayeeGroups(txns, { summary: true });
+  // The first row's category must not stand in for the whole group.
+  assert.equal(group.category_name, null);
+  assert.equal(group.mixed_categories, true);
+  assert.deepEqual(group.category_names, ["🏖️ Cuttyhunk", "🚲 eBike"]);
+  assert.equal(group.count, 4);
+  assert.equal(group.total, -100);
+});
+
+test("buildUnapprovedPayeeGroups keeps a single-category header simple", () => {
+  const txns = [
+    { id: "t1", payee_name: "Cafe", amount: -5, category_name: "Dining", flags: ["new_payee"] },
+    { id: "t2", payee_name: "Cafe", amount: -7, category_name: "Dining", flags: [] },
+  ];
+  const [group] = buildUnapprovedPayeeGroups(txns, { summary: true });
+  assert.equal(group.category_name, "Dining");
+  assert.equal(group.mixed_categories, false);
+  assert.deepEqual(group.category_names, ["Dining"]);
+  assert.equal(group.mixed_amount_signs, false);
+  assert.equal("inflow_total" in group, false);
+  assert.deepEqual(group.flags, ["new_payee"]);
+});
+
+test("buildUnapprovedPayeeGroups splits inflow and outflow when a net hides reversals", () => {
+  const txns = [
+    { id: "t1", payee_name: "Adobe", amount: -22.83, category_name: "Software", flags: [] },
+    { id: "t2", payee_name: "Adobe", amount: -10, category_name: "Software", flags: [] },
+    { id: "t3", payee_name: "Adobe", amount: 10, category_name: "Software", flags: [] },
+    { id: "t4", payee_name: "Adobe", amount: 9.99, category_name: "Software", flags: [] },
+    { id: "t5", payee_name: "Adobe", amount: 0.01, category_name: "Software", flags: [] },
+  ];
+  const [group] = buildUnapprovedPayeeGroups(txns, { summary: true });
+  assert.equal(group.total, -12.83);
+  assert.equal(group.mixed_amount_signs, true);
+  assert.equal(group.inflow_total, 20);
+  assert.equal(group.outflow_total, -32.83);
+});
+
+test("buildUnapprovedPayeeGroups treats a categoryless row as mixed", () => {
+  const txns = [
+    { id: "t1", payee_name: "Chase", amount: -100, category_name: null, flags: [] },
+    { id: "t2", payee_name: "Chase", amount: -20, category_name: "Fees", flags: [] },
+  ];
+  const [group] = buildUnapprovedPayeeGroups(txns, { summary: true });
+  assert.equal(group.mixed_categories, true);
+  assert.equal(group.category_name, null);
+  assert.deepEqual(group.category_names, ["Fees"]);
+});
+
+test("compact rows keep matched_transaction_id only for match_broken", () => {
+  const broken = slimUnapprovedTransaction({
+    id: "t1", date: "2026-07-01", payee_name: "Venmo", amount: -20,
+    category_name: "Dining", account_name: "Checking", memo: "bulky",
+    matched_transaction_id: "m1", import_id: null, flags: ["match_broken"],
+  });
+  assert.equal(broken.matched_transaction_id, "m1");
+  assert.equal("memo" in broken, false);
+
+  const clean = slimUnapprovedTransaction({
+    id: "t2", date: "2026-07-01", payee_name: "Cafe", amount: -5,
+    category_name: "Dining", account_name: "Checking",
+    matched_transaction_id: "m2", flags: [],
+  });
+  assert.equal("matched_transaction_id" in clean, false);
+});
+
+test("summarizeApprovalChanges separates newly approved from already approved", () => {
+  const requested = [
+    { id: "t1", approved: true },
+    { id: "t2", categoryId: "c1" },
+    { id: "t3", categoryId: "c2" },
+    { id: "t4", approved: true },
+  ];
+  const before = new Map([
+    ["t1", { approved: false }],
+    ["t2", { approved: true }],
+    ["t3", { approved: true }],
+    // t4 has no before-state (importId row whose refetch failed)
+  ]);
+  const verified = [
+    { id: "t1", approved: true },
+    { id: "t2", approved: true },
+    { id: "t3", approved: true },
+    { id: "t4", approved: true },
+  ];
+  assert.deepEqual(summarizeApprovalChanges(requested, before, verified), {
+    approved_count: 4,
+    newly_approved_count: 1,
+    already_approved_count: 2,
+    approval_state_unknown_count: 1,
+  });
+});
+
+test("summarizeApprovalChanges ignores rows that did not end approved", () => {
+  const requested = [{ id: "t1", memo: "x" }];
+  const before = new Map([["t1", { approved: false }]]);
+  assert.deepEqual(summarizeApprovalChanges(requested, before, [{ id: "t1", approved: false }]), {
+    approved_count: 0,
+    newly_approved_count: 0,
+    already_approved_count: 0,
+    approval_state_unknown_count: 0,
+  });
+});
+
+test("summarizeApprovalChanges matches composite scheduled ids to their before-state", () => {
+  const requested = [{ id: "abc_2026-07-30", approved: true }];
+  const before = new Map([["abc", { approved: false }]]);
+  assert.equal(
+    summarizeApprovalChanges(requested, before, [{ id: "abc", approved: true }]).newly_approved_count,
+    1,
+  );
+});
+
+test("decodeHtmlEntities decodes named and numeric references only", () => {
+  assert.equal(decodeHtmlEntities("B&amp;H Photo Video"), "B&H Photo Video");
+  assert.equal(decodeHtmlEntities("Ben &amp; Jerry&#39;s"), "Ben & Jerry's");
+  assert.equal(decodeHtmlEntities("Caf&eacute; &#x2014; Montpelier"), "Café — Montpelier");
+  // Bare ampersands and unknown entities are left exactly as they are.
+  assert.equal(decodeHtmlEntities("AT&T"), "AT&T");
+  assert.equal(decodeHtmlEntities("Tom &notanentity; Co"), "Tom &notanentity; Co");
+  // Lone surrogates would break JSON serialization; leave them encoded.
+  assert.equal(decodeHtmlEntities("&#xD800;"), "&#xD800;");
+  assert.equal(decodeHtmlEntities(null), null);
+  assert.equal(decodeHtmlEntities(42), 42);
+});
+
+test("decodeTextFieldsDeep rewrites only allow-listed text fields", () => {
+  const payload = {
+    id: "b&amp;h",
+    csv: "payee\nB&amp;H",
+    ready_to_approve: {
+      by_payee: [{
+        payee: "B&amp;H Photo Video",
+        category_name: "Photo &amp; Video",
+        transactions: [{ id: "t1", payee_name: "B&amp;H Photo Video", memo: "lens &amp; cap" }],
+      }],
+    },
+  };
+  decodeTextFieldsDeep(payload);
+  assert.equal(payload.id, "b&amp;h", "ids are never rewritten");
+  assert.equal(payload.csv, "payee\nB&amp;H", "raw payloads are never rewritten");
+  assert.equal(payload.ready_to_approve.by_payee[0].payee, "B&H Photo Video");
+  assert.equal(payload.ready_to_approve.by_payee[0].category_name, "Photo & Video");
+  assert.equal(payload.ready_to_approve.by_payee[0].transactions[0].payee_name, "B&H Photo Video");
+  assert.equal(payload.ready_to_approve.by_payee[0].transactions[0].memo, "lens & cap");
+});
+
+test("decodeTextFieldsDeep survives a cyclic payload", () => {
+  const node = { name: "A &amp; B" };
+  node.self = node;
+  decodeTextFieldsDeep(node);
+  assert.equal(node.name, "A & B");
+});
+
+test("normalizeSearchText folds case, entities, and whitespace", () => {
+  assert.equal(normalizeSearchText("  B&amp;H   Photo  "), "b&h photo");
+  assert.equal(normalizeSearchText(null), "");
+});
+
+const CATEGORY_GROUPS = [
+  { name: "Health & Medical", hidden: false, deleted: false, categories: [
+    { id: "c1", name: "🏊‍♂️ GMCF Membership", hidden: false, deleted: false },
+    { id: "c2", name: "💊 Pharmacy", hidden: false, deleted: false },
+  ] },
+  { name: "Recreation", hidden: false, deleted: false, categories: [
+    { id: "c3", name: "🚲 eBike", hidden: false, deleted: false },
+    { id: "c4", name: "Gym Towels", hidden: false, deleted: false },
+  ] },
+  { name: "Archive", hidden: true, deleted: false, categories: [
+    { id: "c5", name: "Old Gym", hidden: false, deleted: false },
+  ] },
+];
+
+test("matchCategoriesByQuery ORs multi-word queries instead of failing them", () => {
+  // "gym fitness membership" previously matched nothing; each word is tried.
+  const ids = matchCategoriesByQuery(CATEGORY_GROUPS, "gym fitness membership").map((m) => m.category.id);
+  assert.deepEqual(ids.slice().sort(), ["c1", "c4"]);
+  const gmcf = matchCategoriesByQuery(CATEGORY_GROUPS, "gym fitness membership")
+    .find((m) => m.category.id === "c1");
+  assert.deepEqual(gmcf.matched_terms, ["membership"]);
+  assert.deepEqual(gmcf.matched_on, ["name"]);
+});
+
+test("matchCategoriesByQuery searches group names as well as category names", () => {
+  const matches = matchCategoriesByQuery(CATEGORY_GROUPS, "health");
+  assert.deepEqual(matches.map((m) => m.category.id), ["c1", "c2"]);
+  assert.deepEqual(matches[0].matched_on, ["group"]);
+});
+
+test("matchCategoriesByQuery ranks whole-phrase and name hits first", () => {
+  const matches = matchCategoriesByQuery(CATEGORY_GROUPS, "gym towels");
+  assert.equal(matches[0].category.id, "c4");
+  assert.deepEqual(matches[0].matched_on, ["name"]);
+});
+
+test("matchCategoriesByQuery hides hidden groups unless asked", () => {
+  assert.deepEqual(matchCategoriesByQuery(CATEGORY_GROUPS, "old").map((m) => m.category.id), []);
+  assert.deepEqual(
+    matchCategoriesByQuery(CATEGORY_GROUPS, "old", { includeHidden: true }).map((m) => m.category.id),
+    ["c5"],
+  );
+});
+
+test("matchCategoriesByQuery matches across entity escaping and empty queries", () => {
+  const groups = [{ name: "Shopping", hidden: false, deleted: false, categories: [
+    { id: "c9", name: "B&amp;H Photo", hidden: false, deleted: false },
+  ] }];
+  assert.deepEqual(matchCategoriesByQuery(groups, "b&h").map((m) => m.category.id), ["c9"]);
+  assert.deepEqual(matchCategoriesByQuery(groups, "   "), []);
 });

@@ -1,5 +1,84 @@
 # Worklog
 
+## 2026-08-05 - Fixed seven connector findings from a live triage session
+
+**Context**: A live session using the hosted connector produced eight findings.
+Seven were defects; the eighth (`audit_account_reconciliation`) was a compliment
+and needed no change. The common thread across the defects is a response that a
+model can read correctly and still describe wrongly to a user.
+
+**Group headers described one row, not the group**: `review_unapproved` built
+each `by_payee` group header from the first transaction in it. A Venmo group
+reported `category_name: "🏖️ Cuttyhunk"` while three of its four rows were
+🚲 eBike. Groups now carry `category_names` (every distinct category) and
+`mixed_categories`; `category_name` is null whenever the group is mixed, so
+there is no single-category field left to quote for a group that has no single
+category. The same failure applied to `total`: an Adobe group reported
+`-12.83`, a plausible-looking small charge that was really five rows including
+two positive reversals. A group whose rows run both directions now reports
+`mixed_amount_signs: true` with `inflow_total` and `outflow_total` beside the
+net.
+
+**`approved_count` answered a different question than the one asked**: it
+counted rows that *end* approved, so a nine-row batch with one `approved: true`
+returned `approved_count: 3` because two rows arrived already approved.
+Reporting that to a user is a factual error about what the call did.
+`update_transactions` now returns `newly_approved_count`,
+`already_approved_count` and `approval_state_unknown_count` alongside it,
+measured against the before-state fetch the undo journal already performs — no
+extra API requests. `approve_transactions` reports the same field names, where
+the two counts are necessarily equal because it only touches rows that were
+unapproved when it fetched them.
+
+**`compact: true` dropped the field its own triage requires**: the tool
+description tells a model to GET `matched_transaction_id` to triage a
+`match_broken` flag, and compact mode dropped that id along with the other
+match/import fields. Compact rows now keep it, but only for rows carrying the
+flag, so the size saving survives for everything else.
+
+**`search_categories` could not answer multi-word queries and searched only
+names**: `gym fitness membership` returned nothing while `gym` worked. Queries
+are now tokenized and OR-matched over both the category name and its group
+name, ranked (whole-phrase above token, name above group), and each result
+reports `matched_on` / `matched_terms` so a group-only hit is not mistaken for
+a name hit. Worth being precise about the limit: group search does *not* make
+`gym` find `🏊‍♂️ GMCF Membership` in the "Health & Medical" group — no word is
+shared and this does no synonym expansion. What finds it is the tokenized
+query. The empty-result message now says exactly that and points at
+`list_categories`.
+
+**HTML entities reached the user**: a payee read as `B&amp;H Photo Video`.
+Decoding happens once, in `ok()`, over an allow-list of name/memo/note fields,
+so no per-tool formatter can forget it and no id, date or raw CSV payload is
+touched. Name search normalizes both sides, so `B&H` and `B&amp;H` behave
+identically. Writes still send exactly what the caller supplied.
+
+**Composite scheduled IDs are writable, which the format actively hides**:
+`d9e7c3c2-…_2026-07-30` accepted a memo, a category and approval and returned a
+full object. The suffix invites the opposite assumption, so this is now stated
+in `update_transaction`, in the `scheduled_transaction_realized` row of the
+flags reference, and in the README.
+
+**Verification**: 45 offline unit tests pass (17 new), 25 Worker tests pass,
+the safety-model check passes, and release consistency passes. The tool
+responses were also exercised end to end through an in-memory MCP client
+against stubbed YNAB payloads reproducing the exact Venmo, Adobe and B&amp;H
+rows from the findings.
+
+**Unrelated CI failure fixed in the same PR**: the `security` job went red on
+`npm audit --audit-level=high` for reasons that predate this branch — main last
+ran green on 2026-07-31 and the advisories (`fast-uri` GHSA-7p8r-x3mc-p8w7,
+`ip-address` GHSA-mwp4-54f8-5fhr and two siblings, `hono`
+GHSA-8j4g-w8fx-2239) published after it. Reproduced locally on an unmodified
+`package-lock.json`, so it is not caused by the code change. `fast-uri` has no
+fixed 3.x, so the override moves to `4.1.2` across ajv's `^3.0.1` range; the
+existing pin at `3.1.4` was itself inside the vulnerable range. `ip-address`
+and `hono` move within range. Both root and Worker manifests are updated, and
+both audits now report zero. The Worker lockfile diff also drops `libc`
+metadata on sharp's optional dev binaries — an artifact of the npm that
+regenerated it, functionally inert, and `npm ci` was rerun from clean in both
+packages to confirm.
+
 ## 2026-07-30 - Found why Claude showed the wrong connector icon
 
 **Context**: Resolves the 2026-07-17 investigation, which ended undecided, and

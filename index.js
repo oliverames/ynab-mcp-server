@@ -498,6 +498,83 @@ function withCurrencyFields(out, source, fields) {
   return out;
 }
 
+// ==================== Text decoding ====================
+// YNAB stores several human-readable strings HTML-escaped (bank imports are the
+// usual source), so a payee arrives as "B&amp;H Photo Video". Nothing downstream
+// renders HTML — the value is read by a model and repeated to a user — so the
+// escaping is pure noise that also breaks substring search ("B&H" never matches
+// "B&amp;H"). Decoding happens on the way out only; writes send exactly what the
+// caller supplied.
+const NAMED_HTML_ENTITIES = {
+  amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ",
+  ndash: "–", mdash: "—", hellip: "…", middot: "·", bull: "•",
+  lsquo: "‘", rsquo: "’", ldquo: "“", rdquo: "”",
+  copy: "©", reg: "®", trade: "™", deg: "°",
+  eacute: "é", egrave: "è", agrave: "à", ccedil: "ç",
+  ntilde: "ñ", uuml: "ü", ouml: "ö", auml: "ä",
+};
+
+function decodeHtmlEntities(value) {
+  if (typeof value !== "string" || !value.includes("&")) return value;
+  return value.replace(/&(#[0-9]+|#x[0-9a-f]+|[a-z][a-z0-9]*);/gi, (match, body) => {
+    if (body[0] === "#") {
+      const code = body[1] === "x" || body[1] === "X"
+        ? Number.parseInt(body.slice(2), 16)
+        : Number.parseInt(body.slice(1), 10);
+      // Reject lone surrogates and out-of-range code points rather than
+      // producing an unpaired surrogate that breaks JSON serialization.
+      if (!Number.isInteger(code) || code < 0 || code > 0x10ffff) return match;
+      if (code >= 0xd800 && code <= 0xdfff) return match;
+      return String.fromCodePoint(code);
+    }
+    const named = NAMED_HTML_ENTITIES[body.toLowerCase()];
+    return named === undefined ? match : named;
+  });
+}
+
+// Only human-readable name/memo fields are decoded. IDs, dates, enum values and
+// raw CSV payloads are left byte-for-byte alone.
+const DECODED_TEXT_FIELDS = new Set([
+  "name", "payee", "payee_name", "category_name", "account_name", "group",
+  "group_name", "category_group_name", "original_category_group_name",
+  "memo", "note", "flag_name", "import_payee_name", "import_payee_name_original",
+  "transfer_account_name", "from_payee_name", "to_payee_name",
+]);
+
+// Walks a freshly-built tool payload in place (no clone: these objects are
+// constructed per response and never shared) and decodes the allow-listed
+// fields wherever they appear, including inside arrays and nested groups.
+function decodeTextFieldsDeep(value, seen) {
+  if (value === null || typeof value !== "object") return value;
+  const visited = seen || new Set();
+  if (visited.has(value)) return value;
+  visited.add(value);
+  if (Array.isArray(value)) {
+    for (const item of value) decodeTextFieldsDeep(item, visited);
+    return value;
+  }
+  for (const key of Object.keys(value)) {
+    const child = value[key];
+    if (typeof child === "string") {
+      // Assign only on an actual change: some payloads embed objects owned by
+      // the runtime config, and an untouched string must stay untouched.
+      if (DECODED_TEXT_FIELDS.has(key)) {
+        const decoded = decodeHtmlEntities(child);
+        if (decoded !== child) value[key] = decoded;
+      }
+    } else if (child !== null && typeof child === "object") {
+      decodeTextFieldsDeep(child, visited);
+    }
+  }
+  return value;
+}
+
+// Case- and entity-insensitive haystack for name matching, so a query typed
+// either way ("B&H" or "B&amp;H") hits the same rows.
+function normalizeSearchText(value) {
+  return decodeHtmlEntities(value ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+}
+
 const subtransactionInputSchema = z.object({
   amount: z.number().describe("Subtransaction amount in dollars"),
   categoryId: z.string().optional().describe("Category ID"),
@@ -684,6 +761,30 @@ async function verifyBulkTransactionUpdates(budgetId, requestedUpdates, response
   return { verification, verified: results.map((r) => r.refetched) };
 }
 
+// Approval accounting for batch writes. "How many are approved now" and "how
+// many did this call approve" are different numbers whenever the batch contains
+// rows that were already approved, and only the second one can be reported to a
+// user as the result of their request. The before-states come from the
+// pre-write fetch; rows with no before-state are counted separately rather than
+// guessed at. verifiedTransactions is index-aligned with requestedUpdates.
+function summarizeApprovalChanges(requestedUpdates, beforeById, verifiedTransactions) {
+  const counts = {
+    approved_count: 0,
+    newly_approved_count: 0,
+    already_approved_count: 0,
+    approval_state_unknown_count: 0,
+  };
+  requestedUpdates.forEach((requested, i) => {
+    if (!verifiedTransactions[i]?.approved) return;
+    counts.approved_count += 1;
+    const before = beforeById?.get(normalizeTransactionId(requested?.id ?? ""));
+    if (!before) counts.approval_state_unknown_count += 1;
+    else if (before.approved) counts.already_approved_count += 1;
+    else counts.newly_approved_count += 1;
+  });
+  return counts;
+}
+
 // YNAB scheduled transactions that realize get composite IDs like `uuid_YYYY-MM-DD`.
 // Strip the date suffix so API lookups work correctly.
 function normalizeTransactionId(id) {
@@ -696,6 +797,9 @@ function normalizeTransactionId(id) {
 const PRETTY_PRINT_MAX_BYTES = 65536;
 
 function ok(data) {
+  // Single choke point for entity decoding: every tool returns through ok(),
+  // so no per-tool formatter can forget it.
+  decodeTextFieldsDeep(data);
   const compact = JSON.stringify(data);
   const text = compact.length > PRETTY_PRINT_MAX_BYTES ? compact : JSON.stringify(data, null, 2);
   const content = [{ type: "text", text }];
@@ -2108,9 +2212,9 @@ registerTool(
 
 registerTool(
   "update_transaction",
-  { description: "Update an existing transaction. Only provided fields are changed. Amounts in dollars. Passing subtransactions converts a non-split transaction into a split. This works on bank-imported transactions too, including reconciled ones, and preserves import_id — reach for prepare_split_for_matching only if this actually errors. What is NOT supported is changing an existing split: the API rejects that, and setting categoryId on the parent does not collapse it. Un-split in the YNAB web register first (select the row → Categorize → pick one category → confirm the un-split dialog), then call this.", inputSchema: {
+  { description: "Update an existing transaction. Only provided fields are changed. Amounts in dollars. Composite scheduled-transaction IDs (uuid_YYYY-MM-DD, the shape review_unapproved flags as scheduled_transaction_realized) are WRITABLE despite looking synthetic: pass the id exactly as returned and memo, category, approval and the rest apply to the realized transaction, which is returned in full. Do not strip the date suffix yourself and do not assume such a row is read-only. Passing subtransactions converts a non-split transaction into a split. This works on bank-imported transactions too, including reconciled ones, and preserves import_id — reach for prepare_split_for_matching only if this actually errors. What is NOT supported is changing an existing split: the API rejects that, and setting categoryId on the parent does not collapse it. Un-split in the YNAB web register first (select the row → Categorize → pick one category → confirm the un-split dialog), then call this.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
-    transactionId: z.string().describe("Transaction ID"),
+    transactionId: z.string().describe("Transaction ID. Composite scheduled-transaction IDs (uuid_YYYY-MM-DD) are accepted verbatim and are writable."),
     accountId: z.string().optional().describe("Account ID"),
     date: z.string().optional().describe("Transaction date (YYYY-MM-DD)"),
     amount: z.number().optional().describe("Amount in dollars"),
@@ -2173,7 +2277,7 @@ registerTool(
 
 registerTool(
   "update_transactions",
-  { description: "Batch update multiple transactions. Each transaction object must include its id and the fields to update. IMPORTANT: only use transaction IDs extracted from get_transactions / review_unapproved results — never compose IDs by hand (fabricated IDs return 'transaction does not exist in this budget' errors). For combined category+approval changes, include both 'categoryId' and 'approved: true' in the same entry. This tool refetches each transaction after the bulk update, verifies requested fields actually persisted, and retries mismatches once through single-transaction updates. Never trust review_unapproved counts alone after approving transactions; use this response's verification block or get_transaction to confirm fields.", inputSchema: {
+  { description: "Batch update multiple transactions. Each transaction object must include its id and the fields to update. IMPORTANT: only use transaction IDs extracted from get_transactions / review_unapproved results — never compose IDs by hand (fabricated IDs return 'transaction does not exist in this budget' errors). For combined category+approval changes, include both 'categoryId' and 'approved: true' in the same entry. This tool refetches each transaction after the bulk update, verifies requested fields actually persisted, and retries mismatches once through single-transaction updates. Never trust review_unapproved counts alone after approving transactions; use this response's verification block or get_transaction to confirm fields. APPROVAL COUNTS: approved_count is how many rows in the batch are approved NOW (including rows that arrived already approved); newly_approved_count is how many this call actually flipped from unapproved to approved, with already_approved_count and approval_state_unknown_count (before-state unavailable) accounting for the difference. Report newly_approved_count to a user as 'what was approved' — approved_count overstates it.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     transactions: z
       .array(
@@ -2194,7 +2298,7 @@ registerTool(
         })
       )
       .describe("Array of transaction updates"),
-    returnSummary: z.boolean().optional().describe("If true, return compact counts (updated_count, approved_count, and verification counts) instead of the full updated-transaction objects. Use for large batches (~50+) whose full response would exceed the inline tool-result limit; the write is performed identically either way."),
+    returnSummary: z.boolean().optional().describe("If true, return compact counts (updated_count, the approval counts, and verification counts) instead of the full updated-transaction objects. Use for large batches (~50+) whose full response would exceed the inline tool-result limit; the write is performed identically either way."),
   } },
   ({ budgetId, transactions: txns, returnSummary }) =>
     run(async () => {
@@ -2254,10 +2358,11 @@ registerTool(
           isError: true,
         };
       }
+      const approval = summarizeApprovalChanges(resolved, beforeById, verified);
       if (returnSummary) {
         return ok({
           updated_count: verified.length,
-          approved_count: verified.filter((t) => t.approved).length,
+          ...approval,
           duplicate_import_ids: data.duplicate_import_ids,
           verification: {
             checked: verification.checked,
@@ -2268,6 +2373,7 @@ registerTool(
       }
       return ok({
         updated: verified,
+        approval,
         duplicate_import_ids: data.duplicate_import_ids,
         verification,
       });
@@ -2276,7 +2382,7 @@ registerTool(
 
 registerTool(
   "approve_transactions",
-  { description: "Approve unapproved transactions in bulk by filter, without hand-listing IDs. Fetches the current unapproved queue, optionally narrows by payeeId / categoryId / accountId, and sets approved:true on the matches. By default SKIPS uncategorized transactions (no category and not a transfer) so nothing is approved without a category; set includeUncategorized:true to override. Returns a compact summary (approved_count + verification counts), never full objects, so it is safe on large batches. Requires confirmed:true after explicit user confirmation.", inputSchema: {
+  { description: "Approve unapproved transactions in bulk by filter, without hand-listing IDs. Fetches the current unapproved queue, optionally narrows by payeeId / categoryId / accountId, and sets approved:true on the matches. By default SKIPS uncategorized transactions (no category and not a transfer) so nothing is approved without a category; set includeUncategorized:true to override. Returns a compact summary (approval counts + verification counts), never full objects, so it is safe on large batches. Because this tool only ever touches rows that were unapproved when it fetched them, newly_approved_count equals approved_count here; report newly_approved_count for consistency with update_transactions, where the two can differ. Requires confirmed:true after explicit user confirmation.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     confirmed: z.literal(true).describe("Required. Pass true only after the user explicitly confirms this approval action."),
     expectedMatchedCount: z.number().int().nonnegative().optional().describe("Optional safety check. If provided and the current match count differs, no transactions are approved."),
@@ -2307,17 +2413,18 @@ registerTool(
         throw new Error(`approve_transactions matched ${txns.length} transactions, but expectedMatchedCount was ${expectedMatchedCount}; no transactions were approved.`);
       }
       if (txns.length === 0) {
-        return ok({ approved_count: 0, matched: 0, message: "No matching unapproved transactions to approve." });
+        return ok({ approved_count: 0, newly_approved_count: 0, matched: 0, message: "No matching unapproved transactions to approve." });
       }
       const updates = txns.map((t) => ({ id: t.id, approved: true }));
       const mapped = updates.map((t) => ({ id: t.id, ...mapTransactionUpdate(t) }));
       const { data: updData } = await api.transactions.updateTransactions(bid, { transactions: mapped });
       // The pre-write fetch above is the before-state: every row was unapproved.
+      const beforeById = new Map(txns.map((t) => [normalizeTransactionId(t.id), formatTransaction(t)]));
       await journalTransactionUpdates(
         "approve_transactions",
         bid,
         updates,
-        new Map(txns.map((t) => [normalizeTransactionId(t.id), formatTransaction(t)])),
+        beforeById,
         `Approved ${updates.length} transactions by filter`
       );
       const { verification, verified } = await verifyBulkTransactionUpdates(bid, updates, updData.transactions);
@@ -2329,7 +2436,7 @@ registerTool(
       }
       return ok({
         matched: txns.length,
-        approved_count: verified.filter((t) => t.approved).length,
+        ...summarizeApprovalChanges(updates, beforeById, verified),
         filters: { payeeId: payeeId || null, categoryId: categoryId || null, accountId: accountId || null, includeUncategorized: !!includeUncategorized },
         duplicate_import_ids: updData.duplicate_import_ids,
         verification: { checked: verification.checked, retried: verification.retried.length, failed: verification.failed.length },
@@ -2565,62 +2672,180 @@ registerTool(
 
 // ==================== Convenience Tools ====================
 
+// Category search over both the category name and its group name, tokenized so
+// a natural-language phrase still lands. A whole-phrase substring hit ranks
+// above per-token hits, and a name hit above a group hit, so the exact match a
+// single-word query would have found stays at the top of a multi-word result.
+function matchCategoriesByQuery(categoryGroups, query, { includeHidden = false } = {}) {
+  const phrase = normalizeSearchText(query);
+  const tokens = [...new Set(phrase.split(" ").filter(Boolean))];
+  if (tokens.length === 0) return [];
+  const scored = [];
+  for (const g of categoryGroups || []) {
+    if (g.hidden && !includeHidden) continue;
+    if (g.deleted) continue;
+    const groupText = normalizeSearchText(g.name);
+    for (const c of g.categories || []) {
+      if (c.hidden && !includeHidden) continue;
+      if (c.deleted) continue;
+      const nameText = normalizeSearchText(c.name);
+      const phraseInName = tokens.length > 1 && nameText.includes(phrase);
+      const phraseInGroup = tokens.length > 1 && groupText.includes(phrase);
+      const nameTokens = tokens.filter((t) => nameText.includes(t));
+      const groupTokens = tokens.filter((t) => groupText.includes(t));
+      const score = (phraseInName ? 100 : 0) + (phraseInGroup ? 40 : 0)
+        + nameTokens.length * 10 + groupTokens.length * 3;
+      if (score === 0) continue;
+      const matchedOn = [];
+      if (nameTokens.length > 0 || phraseInName) matchedOn.push("name");
+      if (groupTokens.length > 0 || phraseInGroup) matchedOn.push("group");
+      scored.push({
+        score,
+        category: c,
+        group: g,
+        matched_on: matchedOn,
+        matched_terms: [...new Set([...nameTokens, ...groupTokens])],
+      });
+    }
+  }
+  scored.sort((a, b) => b.score - a.score
+    || normalizeSearchText(a.category.name).localeCompare(normalizeSearchText(b.category.name)));
+  return scored;
+}
+
 registerTool(
   "search_categories",
-  { description: "Search categories by partial name match (case-insensitive). Useful for finding category IDs when you only know part of the name.", inputSchema: {
+  { description: "Search categories by name (case-insensitive, partial match), searching BOTH the category name and its category-group name. Multi-word queries are tokenized and OR-matched, so 'gym fitness membership' matches a category whose name contains any of those words — results are ranked, with whole-phrase and name matches above single-token and group-only matches. Each result reports matched_on ('name' and/or 'group') and matched_terms so a group-only hit is not mistaken for a name hit. Matching ignores HTML entity escaping and collapses runs of whitespace, so 'B&H' and 'B&amp;H' behave the same. Nothing here does synonym expansion: a category named 'GMCF Membership' will not surface for 'gym'. When a search comes back empty or looks wrong, fall back to list_categories (a full dump) before concluding the category does not exist.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
-    query: z.string().describe("Partial category name to search for (e.g. 'work' matches '💻 Work Expenses (Oliver LLC)')"),
+    query: z.string().describe("Category or group name to search for. Multi-word queries are OR-matched per word (e.g. 'work expenses' matches '💻 Work Expenses (Oliver LLC)' and anything in a 'Business Expenses' group)."),
+    includeHidden: z.boolean().optional().describe("If true, also search hidden categories and hidden category groups (default false)."),
   } },
-  ({ budgetId, query }) =>
+  ({ budgetId, query, includeHidden }) =>
     run(async () => {
       const { data } = await api.categories.getCategories(resolveBudgetId(budgetId));
-      const q = query.toLowerCase();
-      const matches = [];
-      for (const g of data.category_groups) {
-        if (g.hidden) continue;
-        for (const c of g.categories) {
-          if (c.hidden) continue;
-          if (c.name.toLowerCase().includes(q)) {
-            matches.push(withCurrencyFields({
-              id: c.id,
-              name: c.name,
-              group: g.name,
-              budgeted: dollars(c.budgeted),
-              activity: dollars(c.activity),
-              balance: dollars(c.balance),
-            }, c, ["budgeted", "activity", "balance"]));
-          }
-        }
+      const scored = matchCategoriesByQuery(data.category_groups, query, { includeHidden });
+      const matches = scored.map(({ category: c, group: g, matched_on, matched_terms }) =>
+        withCurrencyFields({
+          id: c.id,
+          name: c.name,
+          group: g.name,
+          matched_on,
+          matched_terms,
+          budgeted: dollars(c.budgeted),
+          activity: dollars(c.activity),
+          balance: dollars(c.balance),
+        }, c, ["budgeted", "activity", "balance"]));
+      if (matches.length === 0) {
+        return ok({
+          message: `No categories matching "${query}"`,
+          searched: "category names and category group names (hidden items excluded unless includeHidden:true)",
+          suggestions: "Try a single distinctive word, or call list_categories for the full list — this search does no synonym matching, so a category can exist under a name that shares no words with your query.",
+        });
       }
-      if (matches.length === 0) return ok({ message: `No categories matching "${query}"`, suggestions: "Try a shorter search term" });
       return ok(matches);
     })
 );
 
 registerTool(
   "search_payees",
-  { description: "Search payees by partial name match (case-insensitive). Useful for finding payee IDs.", inputSchema: {
+  { description: "Search payees by partial name match (case-insensitive). Matching ignores HTML entity escaping, so 'B&H' finds a payee YNAB stores as 'B&amp;H Photo Video'. Useful for finding payee IDs. Unlike search_categories this is a single substring match, not a tokenized OR — search one distinctive word at a time.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     query: z.string().describe("Partial payee name to search for"),
   } },
   ({ budgetId, query }) =>
     run(async () => {
       const { data } = await api.payees.getPayees(resolveBudgetId(budgetId));
-      const q = query.toLowerCase();
+      // Match against the entity-decoded name so "B&H" finds a payee YNAB
+      // stores as "B&amp;H Photo Video" (and vice versa).
+      const q = normalizeSearchText(query);
       const matches = data.payees
-        .filter((p) => p.name.toLowerCase().includes(q))
+        .filter((p) => normalizeSearchText(p.name).includes(q))
         .map((p) => ({ id: p.id, name: p.name, transfer_account_id: p.transfer_account_id, deleted: p.deleted }));
       if (matches.length === 0) return ok({ message: `No payees matching "${query}"` });
       return ok(matches);
     })
 );
 
+// Compact projection: only the fields needed to act on a transaction.
+// matched_transaction_id survives for match_broken rows specifically — the
+// triage this tool documents for that flag is "GET the matched id", which
+// compact mode made impossible by dropping the id along with the other
+// import/match fields.
+function slimUnapprovedTransaction(t) {
+  const slim = {
+    id: t.id,
+    date: t.date,
+    payee_name: t.payee_name,
+    amount: t.amount,
+    category_name: t.category_name,
+    account_name: t.account_name,
+    flags: t.flags,
+  };
+  if (t.flags?.includes("match_broken")) {
+    slim.matched_transaction_id = t.matched_transaction_id ?? null;
+  }
+  return slim;
+}
+
+// Net total plus, when the rows run both directions, the inflow/outflow split.
+// A bare net ("Adobe: -12.83") reads as one small charge even when it is five
+// rows including two refunds, so the split is what keeps a header honest.
+function summarizeGroupAmounts(transactions) {
+  let inflow = 0, outflow = 0;
+  for (const t of transactions) {
+    if (t.amount > 0) inflow += t.amount;
+    else if (t.amount < 0) outflow += t.amount;
+  }
+  const mixed = inflow > 0 && outflow < 0;
+  return {
+    total: round2(inflow + outflow),
+    mixed_amount_signs: mixed,
+    ...(mixed ? { inflow_total: round2(inflow), outflow_total: round2(outflow) } : {}),
+  };
+}
+
+// Group headers describe the whole group, never just its first row. When a
+// payee's rows span categories, category_name is null (there is no single true
+// answer) and category_names lists every one of them, so a model summarizing
+// from headers alone cannot attribute the group to the wrong category.
+function buildUnapprovedPayeeGroups(categorized, { summary = false, compact = false } = {}) {
+  const byPayee = new Map();
+  for (const t of categorized) {
+    const key = t.payee_name || "Unknown Payee";
+    if (!byPayee.has(key)) byPayee.set(key, []);
+    byPayee.get(key).push(t);
+  }
+  return [...byPayee].map(([payee, transactions]) => {
+    const names = [];
+    let hasCategorylessRow = false;
+    for (const t of transactions) {
+      if (t.category_name == null) hasCategorylessRow = true;
+      else if (!names.includes(t.category_name)) names.push(t.category_name);
+    }
+    // A transfer or split row carries no category name of its own; paired with
+    // any named category that still makes the group mixed.
+    const mixedCategories = names.length > 1 || (names.length > 0 && hasCategorylessRow);
+    const base = {
+      payee,
+      category_name: mixedCategories ? null : (names[0] ?? null),
+      category_names: names,
+      mixed_categories: mixedCategories,
+      count: transactions.length,
+      ...summarizeGroupAmounts(transactions),
+      // Aggregate flags across all transactions in the group (deduplicated)
+      flags: [...new Set(transactions.flatMap((t) => t.flags ?? []))],
+    };
+    if (summary) return base;
+    return { ...base, transactions: compact ? transactions.map(slimUnapprovedTransaction) : transactions };
+  });
+}
+
 registerTool(
   "review_unapproved",
-  { description: "Get all unapproved transactions grouped by status: those already categorized (ready to approve) and those still uncategorized (need category first). Each transaction includes a 'flags' array: manually_entered (not bank-imported), match_broken (matched reference is stale — the `matched_transaction_id` field is read-only via this API; YNAB web/iOS UI is required to clear that link. The transaction itself remains fully mutable: you CAN approve, recategorize, and edit memo via update_transaction. The broken match persists as a cosmetic flag until the user resolves it in the UI.), scheduled_transaction_realized, new_payee (no transaction history for this payee), no_prior_amount_match (novel amount for this payee), category_drift:was_X (payee categorized differently before). Never approve uncategorized transactions without explicit user instruction. For large budgets the full response can exceed 100KB; pass summary:true for counts + by-payee aggregates only, or compact:true to keep per-transaction rows (with IDs) while dropping bulky fields so the response fits inline.", inputSchema: {
+  { description: "Get all unapproved transactions grouped by status: those already categorized (ready to approve) and those still uncategorized (need category first). Each transaction includes a 'flags' array: manually_entered (not bank-imported), match_broken (matched reference is stale — the `matched_transaction_id` field is read-only via this API; YNAB web/iOS UI is required to clear that link. The transaction itself remains fully mutable: you CAN approve, recategorize, and edit memo via update_transaction. The broken match persists as a cosmetic flag until the user resolves it in the UI.), scheduled_transaction_realized (a realized scheduled entry; its id is composite, uuid_YYYY-MM-DD, and is fully writable — see update_transaction), new_payee (no transaction history for this payee), no_prior_amount_match (novel amount for this payee), category_drift:was_X (payee categorized differently before). GROUP HEADERS: each by_payee group reports category_names (every distinct category in the group) and mixed_categories; category_name is only set when the whole group shares one category and is null when mixed_categories is true — never describe a mixed group by a single category. 'total' is the NET of the group; when its rows run both directions the group also carries mixed_amount_signs:true with inflow_total and outflow_total, so a net that hides refunds is visible as such. Never approve uncategorized transactions without explicit user instruction. For large budgets the full response can exceed 100KB; pass summary:true for counts + by-payee aggregates only, or compact:true to keep per-transaction rows (with IDs) while dropping bulky fields so the response fits inline.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     summary: z.boolean().optional().describe("If true, omit per-transaction details from the response and return only counts + by-payee aggregates (for both ready_to_approve and needs_category_first). Use this when the full unapproved queue is large; drill into specifics with get_transactions afterwards."),
-    compact: z.boolean().optional().describe("If true (and summary is not set), keep per-transaction detail but return only the fields needed to act — id, date, payee_name, amount, category_name, account_name, flags — dropping bulky fields (import strings, subtransactions, matched/import ids) that push the full response past the inline size limit. Use when you need transaction IDs to approve or recategorize but the full queue would overflow."),
+    compact: z.boolean().optional().describe("If true (and summary is not set), keep per-transaction detail but return only the fields needed to act — id, date, payee_name, amount, category_name, account_name, flags — dropping bulky fields (import strings, subtransactions, import ids) that push the full response past the inline size limit. Rows flagged match_broken additionally keep matched_transaction_id, since triaging that flag means GETting the matched id. Use when you need transaction IDs to approve or recategorize but the full queue would overflow."),
   } },
   ({ budgetId, summary, compact }) =>
     run(async () => {
@@ -2686,54 +2911,21 @@ registerTool(
       const categorized = [], uncategorized = [];
       for (const t of flaggedTxns) (isCategorized(t) ? categorized : uncategorized).push(t);
 
-      // Compact projection: only the fields needed to act on a transaction
-      const slimTx = (t) => ({
-        id: t.id,
-        date: t.date,
-        payee_name: t.payee_name,
-        amount: t.amount,
-        category_name: t.category_name,
-        account_name: t.account_name,
-        flags: t.flags,
-      });
-
       // Group categorized transactions by payee for easier per-group review
-      const byPayee = {};
-      for (const t of categorized) {
-        const key = t.payee_name || "Unknown Payee";
-        if (!byPayee[key]) byPayee[key] = { payee: key, category_name: t.category_name, transactions: [] };
-        byPayee[key].transactions.push(t);
-      }
-      const groups = Object.values(byPayee).map((g) => {
-        // Aggregate flags across all transactions in the group (deduplicated)
-        const allFlags = [...new Set(g.transactions.flatMap((t) => t.flags))];
-        const base = {
-          payee: g.payee,
-          category_name: g.category_name,
-          count: g.transactions.length,
-          total: round2(g.transactions.reduce((sum, t) => sum + t.amount, 0)),
-          flags: allFlags,
-        };
-        return summary ? base : { ...base, transactions: compact ? g.transactions.map(slimTx) : g.transactions };
-      });
+      const groups = buildUnapprovedPayeeGroups(categorized, { summary, compact });
 
       // Build uncategorized payload — full transactions by default, by-payee aggregates when summary:true
       const uncategorizedPayload = (() => {
-        if (!summary) return compact ? uncategorized.map(slimTx) : uncategorized;
-        const byPayeeUncat = {};
-        for (const t of uncategorized) {
-          const key = t.payee_name || "Unknown Payee";
-          if (!byPayeeUncat[key]) byPayeeUncat[key] = { payee_name: key, count: 0, total: 0, flags: new Set() };
-          byPayeeUncat[key].count += 1;
-          byPayeeUncat[key].total += t.amount;
-          for (const f of t.flags) byPayeeUncat[key].flags.add(f);
-        }
-        return Object.values(byPayeeUncat).map((g) => ({
-          payee_name: g.payee_name,
-          count: g.count,
-          total: round2(g.total),
-          flags: [...g.flags],
-        }));
+        if (!summary) return compact ? uncategorized.map(slimUnapprovedTransaction) : uncategorized;
+        return buildUnapprovedPayeeGroups(uncategorized, { summary: true })
+          .map(({ payee, count, total, mixed_amount_signs, inflow_total, outflow_total, flags }) => ({
+            payee_name: payee,
+            count,
+            total,
+            mixed_amount_signs,
+            ...(mixed_amount_signs ? { inflow_total, outflow_total } : {}),
+            flags,
+          }));
       })();
 
       const needsCategoryFirst = {
@@ -3643,6 +3835,7 @@ const YNAB_WRITE_SAFETY_TEXT = `# Write Safety Rules for this server
 - Never batch-approve on vague instructions ("approve the rest"). List the exact transactions (payee, amount, category), get explicit confirmation, and state what you are NOT approving.
 - Never fabricate transaction IDs. Extract them from review_unapproved / get_transactions results. A batch failing with "transaction does not exist in this budget" is the signature of fabricated IDs.
 - After combined category+approval writes, check the returned verification block; require verification.failed to be empty. Do not use the approval-queue count as the only success check — approval can succeed while the category write did not persist.
+- Report newly_approved_count, not approved_count, when telling a user what you approved. approved_count includes rows that were already approved before the call; the two differ whenever a batch mixes approved and unapproved rows.
 - Recategorizing a transaction does not move budgeted dollars. To true-up the month, also call update_month_category (it sets an absolute value: compute old budgeted − amount and new budgeted + amount).
 - Transfers: use the destination account's transfer_payee_id as payeeId; do not invent a "Transfer : ..." payee name.
 - Every transaction write is journaled locally; list_undo_history shows the journal and undo_operation reverses a journaled write.`;
@@ -3661,13 +3854,16 @@ const YNAB_FLAGS_REFERENCE_TEXT = `# review_unapproved flags reference
 | Flag | Meaning | Suggested action |
 |------|---------|------------------|
 | manually_entered | Hand-keyed, not bank-imported | Confirm it's intentional |
-| match_broken | Stale matched_transaction_id reference | The transaction itself is fully editable; only the stale link is immutable via API. GET the matched id: not-found = orphan (safe), live = duplicate (keep one). UI cleanup of the link is cosmetic. |
+| match_broken | Stale matched_transaction_id reference | The transaction itself is fully editable; only the stale link is immutable via API. GET the matched id — kept in the row even under compact:true — to triage: not-found = orphan (safe), live = duplicate (keep one). UI cleanup of the link is cosmetic. |
 | no_prior_amount_match | First time this amount appeared for this payee | Review before approving |
 | category_drift:was_X | Payee previously categorized elsewhere | Surface the drift with prior-category evidence; ask before fixing |
 | new_payee | No history for this payee | Confirm payee and category |
-| scheduled_transaction_realized | Came from a scheduled entry | Verify amount and category match expectations |
+| scheduled_transaction_realized | Came from a scheduled entry; its id is composite (uuid_YYYY-MM-DD) | Verify amount and category match expectations. The composite id is writable — pass it verbatim to update_transaction / update_transactions; do not strip the date suffix and do not treat the row as read-only. |
 
-Transactions flagged match_broken, or manually_entered + no_prior_amount_match, should get explicit user sign-off regardless of batch size.`;
+Transactions flagged match_broken, or manually_entered + no_prior_amount_match, should get explicit user sign-off regardless of batch size.
+
+## Reading group headers
+by_payee groups carry \`category_names\` (every distinct category in the group) and \`mixed_categories\`. \`category_name\` is null whenever \`mixed_categories\` is true — describe such a group by its list, never by one category. \`total\` is the group's NET; when \`mixed_amount_signs\` is true the group also carries \`inflow_total\` and \`outflow_total\`, and the net alone will read as a single small charge when it is really charges minus refunds.`;
 
 const YNAB_RESOURCES = [
   ["methodology", "YNAB methodology primer: the Four Rules, credit card handling, reconciliation, age of money, and amount conventions for this server.", YNAB_METHODOLOGY_TEXT],
@@ -3756,6 +3952,13 @@ return {
     parseToolExecuteInput,
     verifyBulkTransactionUpdates,
     beforeFieldsForUpdate,
+    summarizeApprovalChanges,
+    decodeHtmlEntities,
+    decodeTextFieldsDeep,
+    normalizeSearchText,
+    matchCategoriesByQuery,
+    slimUnapprovedTransaction,
+    buildUnapprovedPayeeGroups,
     summarizeIncomeExpenseByMonth,
     detectRecurringFromTransactions,
     csvEscape,
@@ -3814,6 +4017,13 @@ const {
   parseToolExecuteInput,
   verifyBulkTransactionUpdates,
   beforeFieldsForUpdate,
+  summarizeApprovalChanges,
+  decodeHtmlEntities,
+  decodeTextFieldsDeep,
+  normalizeSearchText,
+  matchCategoriesByQuery,
+  slimUnapprovedTransaction,
+  buildUnapprovedPayeeGroups,
   summarizeIncomeExpenseByMonth,
   detectRecurringFromTransactions,
   csvEscape,
@@ -3842,6 +4052,13 @@ export {
   parseToolExecuteInput,
   verifyBulkTransactionUpdates,
   beforeFieldsForUpdate,
+  summarizeApprovalChanges,
+  decodeHtmlEntities,
+  decodeTextFieldsDeep,
+  normalizeSearchText,
+  matchCategoriesByQuery,
+  slimUnapprovedTransaction,
+  buildUnapprovedPayeeGroups,
   summarizeIncomeExpenseByMonth,
   detectRecurringFromTransactions,
   csvEscape,

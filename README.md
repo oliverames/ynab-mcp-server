@@ -371,8 +371,10 @@ Beyond tools, the server ships **6 MCP prompts** (guided workflows: monthly revi
 - **Bulk operations** - `create_transactions` and `update_transactions` handle arrays in a single API call. Bulk updates can look transactions up by `id` or by `importId`.
 - **Verified batch updates** - `update_transactions` refetches the whole batch in a single list request after the bulk API call (instead of one request per transaction, which used to consume the shared rate budget on large batches), retries mismatched fields once through single-transaction updates, and returns a `verification` block so approval counts cannot hide failed category writes.
 - **Fetch-then-merge updates** - scheduled transaction updates (which use PUT semantics) automatically fetch the current state and merge your changes, so you only specify what changed.
-- **Fuzzy search** - `search_categories` and `search_payees` do case-insensitive partial matching across all entries.
+- **Fuzzy search** - `search_categories` and `search_payees` do case-insensitive partial matching across all entries. Category search covers both the category name and its group name, tokenizes multi-word queries and OR-matches them (so `gym fitness membership` still lands), ranks whole-phrase and name hits above single-token and group-only hits, and reports `matched_on` / `matched_terms` per result. It does no synonym expansion — an empty result says so and points at `list_categories`.
+- **Decoded text** - YNAB stores some strings HTML-escaped (bank imports are the usual source). Names, memos and notes are entity-decoded on the way out, so a payee reads as `B&H Photo Video` rather than `B&amp;H Photo Video`, and name search matches either spelling. Writes send exactly what the caller supplied.
 - **Approval workflow with anomaly flags** - `review_unapproved` scans the full transaction history for unapproved entries (YNAB's API defaults to the last year, which would silently hide older stragglers) and groups transactions into "ready to approve" (categorized, split, or transfer) and "needs attention" (uncategorized), and attaches a `flags` array to each transaction surfacing anomalies: `manually_entered` (not bank-imported), `match_broken` (stale match reference), `scheduled_transaction_realized`, `new_payee`, `no_prior_amount_match` (novel amount for this payee), and `category_drift:was_X` (payee categorized differently in the prior 60 days). Group-level flags aggregate the union of all transaction flags. Bulk approval requires `confirmed: true`.
+- **Honest group headers** - a `by_payee` group describes all of its rows, not just the first one. Groups carry `category_names` (every distinct category in the group) plus `mixed_categories`, and `category_name` is `null` whenever the group spans more than one category. `total` is the net; a group whose rows run both directions also carries `mixed_amount_signs: true` with `inflow_total` and `outflow_total`, so a net that nets refunds against charges cannot be read as a single small charge.
 - **Nullable updates** - update tools accept `null` for clearable fields (`memo`, `payeeName`, `categoryId`, `flagColor`) to distinguish "don't change" (omit) from "clear this field" (`null`).
 - **Target behavior support** - category create/update tools expose `goalNeedsWholeAmount` for YNAB's "Set aside another" vs. "Refill up to" goal behavior.
 - **Delta request support** - high-volume list tools accept `lastKnowledgeOfServer` and return `server_knowledge` when that parameter is provided. `get_budget` supports full delta exports: pass `lastKnowledgeOfServer` to receive every entity changed since that knowledge in one response.
@@ -418,7 +420,7 @@ Read tools are available by default. Tools that create, update, import, or delet
 | `create_category` | Write tool: create a new category in an existing group (with optional goal) |
 | `create_category_group` | Write tool: create a new category group |
 | `update_category_group` | Write tool: rename a category group |
-| `search_categories` | Case-insensitive partial name search (e.g., "groc" finds "Groceries") |
+| `search_categories` | Case-insensitive partial name search over category names **and** category-group names (e.g., "groc" finds "Groceries"; "health" finds everything in a "Health & Medical" group). Multi-word queries are tokenized and OR-matched, results are ranked, and each result reports `matched_on` / `matched_terms`. Pass `includeHidden: true` to search hidden categories and groups. |
 
 ### Payees
 
@@ -462,8 +464,8 @@ Read tools are available by default. Tools that create, update, import, or delet
 | `get_transaction` | Get a single transaction by ID (includes subtransactions). Auto-handles composite scheduled-transaction IDs like `uuid_YYYY-MM-DD`; if the underlying matched transaction has been deleted, falls back to returning the active scheduled template wrapped as `{ resource_type: "scheduled_transaction", ... }`. |
 | `create_transaction` | Write tool: create a transaction with optional split (subtransactions must sum to total) |
 | `create_transactions` | Write tool: bulk create multiple transactions in a single API call (supports split transactions) |
-| `update_transaction` | Write tool: partial update - only specified fields change. Can convert a non-split transaction into a split via `subtransactions`. |
-| `update_transactions` | Write tool: batch update multiple transactions at once (look up each entry by `id` or `importId`), then verify requested fields persisted using a single batch refetch. Pass `returnSummary: true` for compact counts instead of full objects on large batches (avoids overflowing the tool-result size limit). |
+| `update_transaction` | Write tool: partial update - only specified fields change. Can convert a non-split transaction into a split via `subtransactions`. Composite scheduled-transaction IDs (`uuid_YYYY-MM-DD`) are writable — see below. |
+| `update_transactions` | Write tool: batch update multiple transactions at once (look up each entry by `id` or `importId`), then verify requested fields persisted using a single batch refetch. Returns `newly_approved_count` beside `approved_count`. Pass `returnSummary: true` for compact counts instead of full objects on large batches (avoids overflowing the tool-result size limit). |
 | `approve_transactions` | Write tool: approve unapproved transactions in bulk by filter (`payeeId` / `categoryId` / `accountId`) without hand-listing IDs. Skips uncategorized transactions by default, requires `confirmed: true`, and supports `expectedMatchedCount`. |
 | `reassign_payee_transactions` | Write tool: move all transactions from one payee to another, the merge workaround since the YNAB API has no payee delete/merge endpoint. Requires `confirmed: true` and supports `expectedMatchedCount`. |
 | `delete_transaction` | Write tool: delete a transaction. Requires `confirmed: true`. |
@@ -485,7 +487,7 @@ Read tools are available by default. Tools that create, update, import, or delet
 
 | Tool | Description |
 |------|-------------|
-| `review_unapproved` | Get unapproved transactions grouped by readiness: "ready to approve" (categorized, split, or transfer) vs. "needs category first" (uncategorized). Each transaction includes a `flags` array highlighting anomalies (manually_entered, match_broken, no_prior_amount_match, category_drift, new_payee, scheduled_transaction_realized) computed against 60 days of payee history. Includes a warning against blind approval. Pass `summary: true` for counts + by-payee aggregates only, or `compact: true` to keep per-transaction rows (with IDs) while dropping bulky fields so the response fits inline. |
+| `review_unapproved` | Get unapproved transactions grouped by readiness: "ready to approve" (categorized, split, or transfer) vs. "needs category first" (uncategorized). Each transaction includes a `flags` array highlighting anomalies (manually_entered, match_broken, no_prior_amount_match, category_drift, new_payee, scheduled_transaction_realized) computed against 60 days of payee history. Group headers report `category_names` / `mixed_categories` and, when the rows run both directions, `inflow_total` / `outflow_total` beside the net `total`. Includes a warning against blind approval. Pass `summary: true` for counts + by-payee aggregates only, or `compact: true` to keep per-transaction rows (with IDs) while dropping bulky fields so the response fits inline — `match_broken` rows keep `matched_transaction_id` in compact mode, since triaging that flag means looking the matched id up. |
 | `get_overspent_categories` | Get categories with negative balances for a month, useful for finding prior-month overspending that reduces the current month's Ready to Assign. |
 
 ### Workflows (v4.0)
@@ -557,6 +559,26 @@ When a batch operation categorizes and approves transactions at the same time, d
 ```
 
 Treat any `failed` entry as a real write failure and inspect the named transaction with `get_transaction`.
+
+#### Approval counts
+
+Batch responses report two different approval numbers, and only one of them answers "what did this call approve?":
+
+```json
+{
+  "updated_count": 9,
+  "approved_count": 3,
+  "newly_approved_count": 1,
+  "already_approved_count": 2,
+  "approval_state_unknown_count": 0
+}
+```
+
+`approved_count` is how many rows in the batch are approved **now**, including rows that were already approved when the batch was submitted. `newly_approved_count` is how many rows this call actually flipped, measured against the pre-write fetch; `already_approved_count` and `approval_state_unknown_count` (no before-state available, e.g. an `importId` row whose refetch failed) account for the rest. Report `newly_approved_count` to a user. `approve_transactions` only ever touches rows that were unapproved when it fetched them, so there the two are equal.
+
+### Composite Scheduled-Transaction IDs
+
+A scheduled transaction that has realized carries a composite ID of the form `d9e7c3c2-…_2026-07-30` (the shape `review_unapproved` flags as `scheduled_transaction_realized`). The suffix makes the ID look synthetic, and the natural assumption is that such a row is read-only or that the suffix must be stripped before writing. Neither is true: pass the ID exactly as returned and `update_transaction` / `update_transactions` apply memo, category and approval to the realized transaction, returning the full updated object. Reads are equally forgiving — `get_transaction` strips the suffix itself and falls back to the scheduled template when the underlying matched transaction has been deleted.
 
 ### Credit Card Payment Transfers
 
