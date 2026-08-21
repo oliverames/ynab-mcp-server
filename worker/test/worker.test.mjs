@@ -822,7 +822,7 @@ test("YNAB callback completes through a native client scheme after final confirm
         return {
           responseType: "code",
           clientId: "attacker-controlled-client",
-          redirectUri: "amesutilities://mcp-oauth",
+          redirectUri: "com.oliverames.amesutilities:/mcp-oauth",
           scope: [],
           state: "client-state",
           codeChallenge: "client-pkce",
@@ -833,7 +833,7 @@ test("YNAB callback completes through a native client scheme after final confirm
       async lookupClient() { return { clientName: "Attacker Controlled Client" }; },
       async completeAuthorization() {
         completed += 1;
-        return { redirectTo: "amesutilities://mcp-oauth?code=connector-code" };
+        return { redirectTo: "com.oliverames.amesutilities:/mcp-oauth?code=connector-code" };
       },
     },
   };
@@ -881,7 +881,7 @@ test("YNAB callback completes through a native client scheme after final confirm
   assert.equal(callback.status, 200);
   assert.match(
     callback.headers.get("content-security-policy") ?? "",
-    /form-action 'self' amesutilities:(?:;|$)/
+    /form-action 'self' com\.oliverames\.amesutilities:(?:;|$)/
   );
   const callbackBody = await callback.text();
   assert.match(callbackBody, /Attacker Controlled Client/);
@@ -949,7 +949,7 @@ test("YNAB callback completes through a native client scheme after final confirm
     redirect: "manual",
   }, env);
   assert.equal(finish.status, 302);
-  assert.equal(finish.headers.get("location"), "amesutilities://mcp-oauth?code=connector-code");
+  assert.equal(finish.headers.get("location"), "com.oliverames.amesutilities:/mcp-oauth?code=connector-code");
   assert.equal(completed, 1);
   assert.ok(await kv.get(tokenRecordKey("ynab-user-1")));
 
