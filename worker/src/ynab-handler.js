@@ -58,11 +58,18 @@ const app = new Hono();
 
 function formActionSources(urls) {
   const sources = new Set(["'self'"]);
+  const unsafeSchemes = new Set(["about:", "blob:", "data:", "file:", "javascript:"]);
   for (const value of urls) {
     try {
       const url = new URL(value);
       if (url.protocol === "https:" || url.protocol === "http:") {
         sources.add(url.origin);
+      } else if (!unsafeSchemes.has(url.protocol)) {
+        // Native OAuth callbacks have no web origin. CSP represents them as a
+        // scheme source, and Safari checks the form's redirect chain against
+        // `form-action`. Omitting this left the successful POST on screen,
+        // then made a second tap replay the already-consumed confirmation.
+        sources.add(url.protocol);
       }
     } catch {
       // Non-URL labels, such as the deletion flow description, stay self-only.

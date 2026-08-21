@@ -805,7 +805,7 @@ test("atomic transient state allows only one concurrent consent and callback", a
   assert.equal(callbackBodies.filter((text) => text.includes("Authorization state expired or did not match")).length, 1);
 });
 
-test("YNAB callback requires a final same-origin confirmation before creating a grant", async (t) => {
+test("YNAB callback completes through a native client scheme after final confirmation", async (t) => {
   const kv = new MemoryKV();
   const transient = new MemoryTransientNamespace();
   let completed = 0;
@@ -822,7 +822,7 @@ test("YNAB callback requires a final same-origin confirmation before creating a 
         return {
           responseType: "code",
           clientId: "attacker-controlled-client",
-          redirectUri: "https://attacker-client.example/callback",
+          redirectUri: "amesutilities://mcp-oauth",
           scope: [],
           state: "client-state",
           codeChallenge: "client-pkce",
@@ -833,7 +833,7 @@ test("YNAB callback requires a final same-origin confirmation before creating a 
       async lookupClient() { return { clientName: "Attacker Controlled Client" }; },
       async completeAuthorization() {
         completed += 1;
-        return { redirectTo: "https://attacker-client.example/callback?code=connector-code" };
+        return { redirectTo: "amesutilities://mcp-oauth?code=connector-code" };
       },
     },
   };
@@ -881,7 +881,7 @@ test("YNAB callback requires a final same-origin confirmation before creating a 
   assert.equal(callback.status, 200);
   assert.match(
     callback.headers.get("content-security-policy") ?? "",
-    /form-action 'self' https:\/\/attacker-client\.example(?:;|$)/
+    /form-action 'self' amesutilities:(?:;|$)/
   );
   const callbackBody = await callback.text();
   assert.match(callbackBody, /Attacker Controlled Client/);
@@ -949,7 +949,7 @@ test("YNAB callback requires a final same-origin confirmation before creating a 
     redirect: "manual",
   }, env);
   assert.equal(finish.status, 302);
-  assert.equal(finish.headers.get("location"), "https://attacker-client.example/callback?code=connector-code");
+  assert.equal(finish.headers.get("location"), "amesutilities://mcp-oauth?code=connector-code");
   assert.equal(completed, 1);
   assert.ok(await kv.get(tokenRecordKey("ynab-user-1")));
 
