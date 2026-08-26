@@ -43,7 +43,7 @@ const {
   currentBudgetMonth,
   invokeRegisteredTool,
 } = await import("../index.js");
-const { createYnabServer } = await import("../index.js");
+const { createYnabServer, createFsJournal } = await import("../index.js");
 
 test("dollars converts milliunits and passes null through", () => {
   assert.equal(dollars(-12340), -12.34);
@@ -198,6 +198,58 @@ test("stripTomlComment respects quotes and escapes", () => {
   assert.equal(stripTomlComment('"a # b" # comment'), '"a # b" ');
   assert.equal(stripTomlComment("plain # comment"), "plain ");
   assert.equal(stripTomlComment('"no comment"'), '"no comment"');
+});
+
+test("parseSimpleTomlSections flattens dotted keys into pseudo-sections", () => {
+  const sections = parseSimpleTomlSections([
+    "[mcp_servers.ynab]",
+    'command = "npx"',
+    "env.YNAB_API_TOKEN = \"dotted-token\"",
+    "env.YNAB_BUDGET_ID = 'dotted-budget'",
+  ].join("\n"));
+  assert.equal(sections["mcp_servers.ynab"].command, "npx");
+  assert.equal(sections["mcp_servers.ynab.env"].YNAB_API_TOKEN, "dotted-token");
+  assert.equal(sections["mcp_servers.ynab.env"].YNAB_BUDGET_ID, "dotted-budget");
+});
+
+test("parseSimpleTomlSections flattens inline-table env blocks", () => {
+  const sections = parseSimpleTomlSections([
+    "[mcp_servers.ynab]",
+    'command = "npx"',
+    'env = { YNAB_API_TOKEN = "inline-token", YNAB_ALLOW_WRITES = \'1\' }',
+  ].join("\n"));
+  assert.equal(sections["mcp_servers.ynab.env"].YNAB_API_TOKEN, "inline-token");
+  assert.equal(sections["mcp_servers.ynab.env"].YNAB_ALLOW_WRITES, "1");
+});
+
+test("inline tables keep quoted commas intact and reject nested values", () => {
+  const sections = parseSimpleTomlSections([
+    "[mcp_servers.ynab.env]",
+    'YNAB_API_TOKEN = { VALUE = "a,b#c" }',
+  ].join("\n"));
+  assert.equal(sections["mcp_servers.ynab.env.YNAB_API_TOKEN"].VALUE, "a,b#c");
+
+  // Nested or malformed tables stay opaque strings instead of crashing.
+  const opaque = parseSimpleTomlSections([
+    "[mcp_servers.x]",
+    "env = { outer = { inner = 1 } }",
+  ].join("\n"));
+  assert.equal(typeof opaque["mcp_servers.x"].env, "string");
+});
+
+test("createFsJournal persists entries atomically and reads them back", async (t) => {
+  const { mkdtempSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { rmSync, existsSync } = await import("node:fs");
+  const dir = mkdtempSync(join("/tmp", "ynab-journal-test-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+
+  const journalPath = join(dir, "undo.json");
+  const journal = createFsJournal(journalPath);
+  await journal.persist([{ id: "e1" }, { id: "e2" }]);
+  assert.deepEqual(await journal.read(), [{ id: "e1" }, { id: "e2" }]);
+  // The staging file must not survive a completed persist.
+  assert.equal(existsSync(`${journalPath}.tmp`), false);
 });
 
 test("buildYnabUrl only accepts safe absolute API paths", () => {

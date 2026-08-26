@@ -2,7 +2,7 @@
 
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -262,10 +262,38 @@ function parseSimpleTomlSections(text) {
       continue;
     }
 
-    const assignmentMatch = line.match(/^([A-Za-z0-9_]+)\s*=\s*(.+)$/);
+    const assignmentMatch = line.match(/^([A-Za-z0-9_.]+)\s*=\s*(.+)$/);
     if (!assignmentMatch || !currentSection) continue;
 
     const [, key, rawValue] = assignmentMatch;
+    const cleanedValue = stripTomlComment(rawValue).trim();
+
+    // Inline tables (`env = { KEY = "v" }`, the style current Codex docs use
+    // for MCP server env blocks) flatten into a pseudo-section named
+    // `<section>.<key>` so lookups like "mcp_servers.ynab.env" work the same
+    // as the explicit `[mcp_servers.ynab.env]` header style. Flat,
+    // string-valued tables only; anything else keeps the raw string.
+    if (cleanedValue.startsWith("{") && cleanedValue.endsWith("}")) {
+      const table = parseSimpleTomlInlineTable(cleanedValue);
+      if (table) {
+        sections[`${currentSection}.${key}`] = { ...(sections[`${currentSection}.${key}`] || {}), ...table };
+        continue;
+      }
+    }
+
+    // Dotted keys (`env.KEY = "v"` under [mcp_servers.ynab]) flatten the same way.
+    const lastDot = key.lastIndexOf(".");
+    if (lastDot !== -1) {
+      const parentKey = `${currentSection}.${key.slice(0, lastDot)}`;
+      const leafKey = key.slice(lastDot + 1);
+      const value = parseSimpleTomlString(rawValue);
+      if (value !== undefined) {
+        sections[parentKey] = { ...(sections[parentKey] || {}) };
+        sections[parentKey][leafKey] = value;
+      }
+      continue;
+    }
+
     const value = parseSimpleTomlString(rawValue);
     if (value !== undefined) {
       sections[currentSection] ||= {};
@@ -274,6 +302,39 @@ function parseSimpleTomlSections(text) {
   }
 
   return sections;
+}
+
+// Parse a flat inline TOML table of string values: `{ A = "x", B = 'y' }`.
+// Returns undefined for anything nested or non-string-valued so callers fall
+// back to treating it as an opaque string.
+function parseSimpleTomlInlineTable(value) {
+  const inner = value.slice(1, -1);
+  const parts = [];
+  let part = "";
+  let quote = null;
+  let escaped = false;
+  let depth = 0;
+  for (const char of inner) {
+    if (escaped) { part += char; escaped = false; continue; }
+    if (char === "\\") { part += char; escaped = true; continue; }
+    if (quote) { part += char; if (char === quote) quote = null; continue; }
+    if (char === "\"" || char === "'") { quote = char; part += char; continue; }
+    if (char === "{") { depth += 1; return undefined; }
+    if (char === "}") { return undefined; }
+    if (char === "," && depth === 0) { parts.push(part); part = ""; continue; }
+    part += char;
+  }
+  parts.push(part);
+
+  const table = {};
+  for (const entry of parts) {
+    const match = entry.trim().match(/^([A-Za-z0-9_]+)\s*=\s*(.+)$/s);
+    if (!match) return undefined;
+    const parsed = parseSimpleTomlString(match[2]);
+    if (parsed === undefined) return undefined;
+    table[match[1]] = parsed;
+  }
+  return Object.keys(table).length > 0 ? table : undefined;
 }
 
 function parseSimpleTomlString(rawValue) {
@@ -420,7 +481,12 @@ function createFsJournal(filePath) {
       }
     },
     async persist(entries) {
-      writeFileSync(filePath, JSON.stringify(entries.slice(0, UNDO_JOURNAL_MAX_ENTRIES), null, 2));
+      // Write-then-rename in the same directory: a crash mid-write must not
+      // leave a torn file, which readUndoJournal would silently treat as an
+      // empty journal and lose every recorded entry.
+      const tmpPath = `${filePath}.tmp`;
+      writeFileSync(tmpPath, JSON.stringify(entries.slice(0, UNDO_JOURNAL_MAX_ENTRIES), null, 2));
+      renameSync(tmpPath, filePath);
     },
   };
 }
@@ -3292,7 +3358,10 @@ registerTool(
             accountId: t.account_id,
             date: t.date,
             amount: t.amount,
-            payeeId: t.payee_id,
+            // Recreate through the payee name when no payee id survived the
+            // delete, so a named payee is not silently dropped.
+            payeeId: t.payee_id ?? undefined,
+            payeeName: t.payee_id ? undefined : (t.payee_name ?? undefined),
             categoryId: t.category_id,
             memo: t.memo,
             cleared: t.cleared,
@@ -3759,7 +3828,6 @@ registerTool(
       const ccAccounts = openAccounts.filter((a) => a.type === "creditCard" || a.type === "lineOfCredit");
       const ccDebt = round2(ccAccounts.reduce((sum, a) => sum + Math.min(0, dollars(a.balance)), 0));
 
-      const indicator = (value, green, yellow) => (value === null ? "unknown" : value ? green : yellow);
       const metrics = {
         savings_rate_pct: {
           value: savingsRate,
@@ -3784,7 +3852,7 @@ registerTool(
         },
         credit_card_debt: {
           value: ccDebt,
-          status: indicator(ccDebt === 0 ? true : null, "green", "yellow") === "green" ? "green" : "yellow",
+          status: ccDebt === 0 ? "green" : "yellow",
           guidance: "Card balances are fine when their payment categories are fully funded; run audit_credit_card_payments for the funding check.",
         },
       };
