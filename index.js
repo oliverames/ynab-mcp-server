@@ -696,22 +696,26 @@ async function prefetchUpdatedTransactions(budgetId, requestedUpdates, responseT
   for (const r of requestedUpdates) if (r.date) dates.push(r.date);
 
   const byId = new Map();
+  // Clamp the refetch to the window even when no row carried a date (e.g. an
+  // approval batch whose PATCH response omitted transactions): one bounded
+  // list request still beats N per-transaction GETs against the rate budget.
+  const windowStart = new Date(Date.now() - VERIFY_REFETCH_WINDOW_DAYS * 24 * 60 * 60 * 1000)
+    .toISOString().slice(0, 10);
+  let sinceDate = windowStart;
   if (dates.length > 0) {
     const minDate = dates.reduce((min, d) => (d < min ? d : min));
-    const windowStart = new Date(Date.now() - VERIFY_REFETCH_WINDOW_DAYS * 24 * 60 * 60 * 1000)
-      .toISOString().slice(0, 10);
-    const sinceDate = minDate > windowStart ? minDate : windowStart;
-    try {
-      const data = await fetchTransactions({ budgetId, sinceDate });
-      for (const t of data.transactions) {
-        const id = normalizeTransactionId(t.id);
-        if (wantedIds.has(id)) byId.set(id, formatTransaction(t));
-      }
-    } catch {
-      // The write already succeeded; a failed bulk refetch (e.g. a response
-      // over MAX_RESPONSE_BYTES on a very busy budget) must not fail the tool
-      // call. Fall through to per-transaction GETs below.
+    if (minDate > windowStart) sinceDate = minDate;
+  }
+  try {
+    const data = await fetchTransactions({ budgetId, sinceDate });
+    for (const t of data.transactions) {
+      const id = normalizeTransactionId(t.id);
+      if (wantedIds.has(id)) byId.set(id, formatTransaction(t));
     }
+  } catch {
+    // The write already succeeded; a failed bulk refetch (e.g. a response
+    // over MAX_RESPONSE_BYTES on a very busy budget) must not fail the tool
+    // call. Fall through to per-transaction GETs below.
   }
 
   // Fetch stragglers (outside the window, or absent from the list response)
@@ -3757,24 +3761,37 @@ registerTool(
 
 // ==================== Export ====================
 
-const CSV_COLUMNS = [
-  ["date", (t) => t.date],
-  ["amount", (t) => t.amount],
-  ["payee", (t) => t.payee_name],
-  ["category", (t) => t.category_name],
-  ["account", (t) => t.account_name],
-  ["memo", (t) => t.memo],
-  ["cleared", (t) => t.cleared],
-  ["approved", (t) => t.approved],
-  ["transfer", (t) => (t.transfer_account_id ? "yes" : "")],
-  ["id", (t) => t.id],
-];
-
 function csvEscape(value) {
   if (value === null || value === undefined) return "";
   const text = String(value);
   return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
+
+// Spreadsheet applications evaluate a cell whose text begins with =, +, -, @,
+// TAB, or CR as a formula. Payee names (often raw bank-import merchant
+// strings), memos, and account/category names are external or free-form text,
+// so those columns get the standard leading-apostrophe guard; date, amount,
+// and id columns stay byte-exact for programmatic consumers.
+const CSV_FORMULA_LEAD = /^[=+\-@\t\r]/;
+
+function csvSafeText(value) {
+  if (value === null || value === undefined) return value;
+  const text = String(value);
+  return CSV_FORMULA_LEAD.test(text) ? `'${text}` : text;
+}
+
+const CSV_COLUMNS = [
+  ["date", (t) => t.date],
+  ["amount", (t) => t.amount],
+  ["payee", (t) => csvSafeText(t.payee_name)],
+  ["category", (t) => csvSafeText(t.category_name)],
+  ["account", (t) => csvSafeText(t.account_name)],
+  ["memo", (t) => csvSafeText(t.memo)],
+  ["cleared", (t) => t.cleared],
+  ["approved", (t) => t.approved],
+  ["transfer", (t) => (t.transfer_account_id ? "yes" : "")],
+  ["id", (t) => t.id],
+];
 
 function buildTransactionsCsv(transactions) {
   const header = CSV_COLUMNS.map(([name]) => name).join(",");
@@ -3784,7 +3801,7 @@ function buildTransactionsCsv(transactions) {
 
 registerTool(
   "export_transactions",
-  { description: "Export transactions as CSV text (same filters as get_transactions). Columns: date, amount (dollars, negative = outflow), payee, category, account, memo, cleared, approved, transfer, id. Use when the user wants data for a spreadsheet or offline analysis; for programmatic work prefer get_transactions (structured JSON). Read-only. Large date ranges produce large output — narrow with filters when possible.", inputSchema: {
+  { description: "Export transactions as CSV text (same filters as get_transactions). Columns: date, amount (dollars, negative = outflow), payee, category, account, memo, cleared, approved, transfer, id. Free-text columns (payee, category, account, memo) get a leading apostrophe when the value starts with a formula character (= + - @ tab CR), so spreadsheet applications cannot execute a bank-imported merchant string as a formula. Use when the user wants data for a spreadsheet or offline analysis; for programmatic work prefer get_transactions (structured JSON). Read-only. Large date ranges produce large output — narrow with filters when possible.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     sinceDate: z.string().optional().describe("Only export transactions on or after this date (YYYY-MM-DD). If omitted, YNAB defaults to one year ago."),
     untilDate: z.string().optional().describe("Only export transactions on or before this date (YYYY-MM-DD)"),
@@ -3962,6 +3979,7 @@ return {
     summarizeIncomeExpenseByMonth,
     detectRecurringFromTransactions,
     csvEscape,
+    csvSafeText,
     buildTransactionsCsv,
     readUndoJournal,
     undoJournalPath,
@@ -4027,6 +4045,7 @@ const {
   summarizeIncomeExpenseByMonth,
   detectRecurringFromTransactions,
   csvEscape,
+  csvSafeText,
   buildTransactionsCsv,
   ynabRequestsRemaining,
   currentBudgetMonth,
@@ -4062,6 +4081,7 @@ export {
   summarizeIncomeExpenseByMonth,
   detectRecurringFromTransactions,
   csvEscape,
+  csvSafeText,
   buildTransactionsCsv,
   readUndoJournal,
   undoJournalPath,

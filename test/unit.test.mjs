@@ -38,6 +38,7 @@ const {
   summarizeIncomeExpenseByMonth,
   detectRecurringFromTransactions,
   csvEscape,
+  csvSafeText,
   buildTransactionsCsv,
   currentBudgetMonth,
 } = await import("../index.js");
@@ -286,6 +287,30 @@ test("verifyBulkTransactionUpdates verifies a batch with a single list refetch",
   assert.match(requests[0], /\/plans\/plan-1\/transactions\?since_date=2026-06-01/);
 });
 
+test("verifyBulkTransactionUpdates bounds the refetch when no row carries a date", async (t) => {
+  const requests = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    requests.push(String(url));
+    return new Response(JSON.stringify({ data: { transactions: [
+      { id: "t1", date: "2026-06-01", amount: -10000, approved: true, deleted: false },
+    ] } }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  t.after(() => { globalThis.fetch = realFetch; });
+
+  // An approval-style batch ({ id, approved } only) whose PATCH response
+  // omitted transactions must still produce one windowed list refetch rather
+  // than falling straight into one GET per transaction.
+  const { verification } = await verifyBulkTransactionUpdates("plan-1", [{ id: "t1", approved: true }]);
+
+  assert.equal(verification.failed.length, 0);
+  assert.equal(requests.length, 1);
+  assert.match(requests[0], /\/plans\/plan-1\/transactions\?since_date=\d{4}-\d{2}-\d{2}/);
+});
+
 test("parseToolExecuteInput validates against the target tool schema", () => {
   // Valid input passes through with defaults/stripping applied.
   assert.deepEqual(
@@ -375,6 +400,40 @@ test("buildTransactionsCsv emits header plus one row per transaction", () => {
   assert.equal(lines.length, 2);
   assert.equal(lines[0], "date,amount,payee,category,account,memo,cleared,approved,transfer,id");
   assert.equal(lines[1], '2026-06-01,-12.34,"Cafe, The",Dining,Checking,,cleared,true,,t1');
+});
+
+test("buildTransactionsCsv neutralizes formula-leading text cells but keeps numeric columns exact", () => {
+  const csv = buildTransactionsCsv([
+    {
+      date: "2026-06-01", amount: -12.34,
+      payee_name: "=cmd|'/c'!A0", category_name: "+SUM(A1)", account_name: "@x", memo: "-1+1",
+      cleared: "cleared", approved: true, transfer_account_id: null, id: "t1",
+    },
+  ]);
+  const cells = csv.split("\n")[1].split(",");
+  // Free-text columns are guarded with a leading apostrophe.
+  assert.equal(cells[2], "'=cmd|'/c'!A0");
+  assert.equal(cells[3], "'+SUM(A1)");
+  assert.equal(cells[4], "'@x");
+  assert.equal(cells[5], "'-1+1");
+  // Date, amount, and id must stay byte-exact for programmatic consumers.
+  assert.equal(cells[0], "2026-06-01");
+  assert.equal(cells[1], "-12.34");
+  assert.equal(cells[9], "t1");
+});
+
+test("csvSafeText only guards values that begin with a formula character", () => {
+  assert.equal(csvSafeText("=HYPERLINK(1)"), "'=HYPERLINK(1)");
+  assert.equal(csvSafeText("+1"), "'+1");
+  assert.equal(csvSafeText("-refi"), "'-refi");
+  assert.equal(csvSafeText("@sum"), "'@sum");
+  assert.equal(csvSafeText("\tcmd"), "'\tcmd");
+  assert.equal(csvSafeText("\rline"), "'\rline");
+  assert.equal(csvSafeText("-40.50 adjustment"), "'-40.50 adjustment");
+  assert.equal(csvSafeText("plain text"), "plain text");
+  assert.equal(csvSafeText(""), "");
+  assert.equal(csvSafeText(null), null);
+  assert.equal(csvSafeText(undefined), undefined);
 });
 
 test("currentBudgetMonth is the first of the current month", () => {
