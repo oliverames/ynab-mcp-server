@@ -9,6 +9,7 @@ process.env.YNAB_API_TOKEN = "unit-test-token";
 delete process.env.YNAB_BUDGET_ID;
 
 const {
+  envNumber,
   dollars,
   milliunits,
   round2,
@@ -735,4 +736,83 @@ test("matchCategoriesByQuery matches across entity escaping and empty queries", 
   ] }];
   assert.deepEqual(matchCategoriesByQuery(groups, "b&h").map((m) => m.category.id), ["c9"]);
   assert.deepEqual(matchCategoriesByQuery(groups, "   "), []);
+});
+
+// --- Config parsing and field-length limits ---
+
+test("envNumber falls back and warns for unparseable and out-of-range values", () => {
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (message) => warnings.push(message);
+  try {
+    process.env.YNAB_UNIT_TEST_NUMBER = "not-a-number";
+    assert.equal(envNumber("YNAB_UNIT_TEST_NUMBER", 42), 42);
+
+    process.env.YNAB_UNIT_TEST_NUMBER = "-3";
+    assert.equal(envNumber("YNAB_UNIT_TEST_NUMBER", 42, { min: 1 }), 42);
+
+    process.env.YNAB_UNIT_TEST_NUMBER = "7";
+    assert.equal(envNumber("YNAB_UNIT_TEST_NUMBER", 42), 7);
+
+    // Zero is a documented setting for the timeout and retry knobs, so the
+    // default min of 0 must accept it without a warning.
+    process.env.YNAB_UNIT_TEST_NUMBER = "0";
+    assert.equal(envNumber("YNAB_UNIT_TEST_NUMBER", 42), 0);
+
+    delete process.env.YNAB_UNIT_TEST_NUMBER;
+    assert.equal(envNumber("YNAB_UNIT_TEST_NUMBER", 42), 42);
+  } finally {
+    console.warn = originalWarn;
+    delete process.env.YNAB_UNIT_TEST_NUMBER;
+  }
+
+  assert.equal(warnings.length, 2);
+  assert.match(warnings[0], /YNAB_UNIT_TEST_NUMBER: 'not-a-number' is not a number/);
+  assert.match(warnings[1], /YNAB_UNIT_TEST_NUMBER: -3 is below the minimum of 1/);
+});
+
+test("write tool schemas enforce YNAB's documented field lengths", () => {
+  const instance = createYnabServer({ hasCredentials: true, writesEnabled: true, journal: null });
+  const parse = instance.internals.parseToolExecuteInput;
+
+  // Category group name: YNAB caps SaveCategoryGroup.name at 50.
+  parse("create_category_group", { name: "g".repeat(50) });
+  assert.throws(
+    () => parse("create_category_group", { name: "g".repeat(51) }),
+    /Invalid input for create_category_group: name/,
+  );
+  assert.throws(
+    () => parse("update_category_group", { categoryGroupId: "cg1", name: "g".repeat(51) }),
+    /Invalid input for update_category_group: name/,
+  );
+
+  // Payee resource name: PostPayee and SavePayee cap name at 500.
+  parse("create_payee", { name: "p".repeat(500) });
+  assert.throws(
+    () => parse("create_payee", { name: "p".repeat(501) }),
+    /Invalid input for create_payee: name/,
+  );
+
+  // Transaction payee_name is capped at 200, not 500, by the same API.
+  assert.throws(
+    () => parse("create_transaction", {
+      accountId: "a1", date: "2026-08-26", amount: -1, payeeName: "p".repeat(201),
+    }),
+    /Invalid input for create_transaction: payeeName/,
+  );
+
+  // Memo: SaveTransaction.memo is capped at 500.
+  parse("create_transaction", {
+    accountId: "a1", date: "2026-08-26", amount: -1, memo: "m".repeat(500),
+  });
+  assert.throws(
+    () => parse("create_transaction", {
+      accountId: "a1", date: "2026-08-26", amount: -1, memo: "m".repeat(501),
+    }),
+    /Invalid input for create_transaction: memo/,
+  );
+  assert.throws(
+    () => parse("update_transaction", { transactionId: "t1", memo: "m".repeat(501) }),
+    /Invalid input for update_transaction: memo/,
+  );
 });

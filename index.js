@@ -63,7 +63,15 @@ function envNumber(name, fallback, { min = 0 } = {}) {
   const raw = process.env[name];
   if (raw === undefined || raw === "") return fallback;
   const parsed = Number.parseFloat(raw);
-  return Number.isFinite(parsed) && parsed >= min ? parsed : fallback;
+  if (!Number.isFinite(parsed)) {
+    console.warn(`Invalid ${name}: '${raw}' is not a number. Using fallback: ${fallback}`);
+    return fallback;
+  }
+  if (parsed < min) {
+    console.warn(`Invalid ${name}: ${parsed} is below the minimum of ${min}. Using fallback: ${fallback}`);
+    return fallback;
+  }
+  return parsed;
 }
 
 function resolveYnabRuntimeConfig() {
@@ -646,7 +654,7 @@ const subtransactionInputSchema = z.object({
   categoryId: z.string().optional().describe("Category ID"),
   payeeId: z.string().optional().describe("Payee ID"),
   payeeName: z.string().max(200).optional().describe("Payee name"),
-  memo: z.string().optional().describe("Memo"),
+  memo: z.string().max(500).optional().describe("Memo"),
 });
 
 function mapSubtransactions(subtransactions) {
@@ -1838,7 +1846,7 @@ registerTool(
   "create_category_group",
   { description: "Create a new category group", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
-    name: z.string().describe("Category group name (max 50 characters)"),
+    name: z.string().max(50).describe("Category group name (max 50 characters)"),
   } },
   ({ budgetId, name }) =>
     run(async () => {
@@ -1855,7 +1863,7 @@ registerTool(
   { description: "Rename a category group", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     categoryGroupId: z.string().describe("Category group ID"),
-    name: z.string().describe("New category group name (max 50 characters)"),
+    name: z.string().max(50).describe("New category group name (max 50 characters)"),
   } },
   ({ budgetId, categoryGroupId, name }) =>
     run(async () => {
@@ -2242,7 +2250,7 @@ registerTool(
     payeeId: z.string().optional().describe("Payee ID"),
     payeeName: z.string().max(200).optional().describe("Payee name (creates new payee if no payeeId)"),
     categoryId: z.string().optional().describe("Category ID"),
-    memo: z.string().optional().describe("Transaction memo"),
+    memo: z.string().max(500).optional().describe("Transaction memo"),
     cleared: z.enum(["cleared", "uncleared", "reconciled"]).optional().describe("Cleared status"),
     approved: z.boolean().optional().describe("Whether transaction is approved"),
     flagColor: z.enum(["red", "orange", "yellow", "green", "blue", "purple"]).optional().describe("Flag color"),
@@ -2278,7 +2286,7 @@ registerTool(
       payeeId: z.string().optional().describe("Payee ID"),
       payeeName: z.string().max(200).optional().describe("Payee name (creates new payee if no payeeId)"),
       categoryId: z.string().optional().describe("Category ID"),
-      memo: z.string().optional().describe("Transaction memo"),
+      memo: z.string().max(500).optional().describe("Transaction memo"),
       cleared: z.enum(["cleared", "uncleared", "reconciled"]).optional().describe("Cleared status"),
       approved: z.boolean().optional().describe("Whether transaction is approved"),
       flagColor: z.enum(["red", "orange", "yellow", "green", "blue", "purple"]).optional().describe("Flag color"),
@@ -2320,7 +2328,7 @@ registerTool(
     payeeId: z.string().nullable().optional().describe("Payee ID (null to remove)"),
     payeeName: z.string().max(200).nullable().optional().describe("Payee name (null to clear)"),
     categoryId: z.string().nullable().optional().describe("Category ID (null to uncategorize)"),
-    memo: z.string().nullable().optional().describe("Transaction memo (null to clear)"),
+    memo: z.string().max(500).nullable().optional().describe("Transaction memo (null to clear)"),
     cleared: z.enum(["cleared", "uncleared", "reconciled"]).optional().describe("Cleared status"),
     approved: z.boolean().optional().describe("Whether transaction is approved"),
     flagColor: z.enum(["red", "orange", "yellow", "green", "blue", "purple"]).nullable().optional().describe("Flag color (null to remove)"),
@@ -2389,7 +2397,7 @@ registerTool(
           payeeId: z.string().nullable().optional().describe("Payee ID (null to remove)"),
           payeeName: z.string().max(200).nullable().optional().describe("Payee name (null to clear)"),
           categoryId: z.string().nullable().optional().describe("Category ID (null to uncategorize)"),
-          memo: z.string().nullable().optional().describe("Transaction memo (null to clear)"),
+          memo: z.string().max(500).nullable().optional().describe("Transaction memo (null to clear)"),
           cleared: z.enum(["cleared", "uncleared", "reconciled"]).optional().describe("Cleared status"),
           approved: z.boolean().optional().describe("Whether transaction is approved"),
           flagColor: z.enum(["red", "orange", "yellow", "green", "blue", "purple"]).nullable().optional().describe("Flag color (null to remove)"),
@@ -2690,7 +2698,7 @@ registerTool(
     payeeId: z.string().optional().describe("Payee ID"),
     payeeName: z.string().max(200).optional().describe("Payee name"),
     categoryId: z.string().optional().describe("Category ID"),
-    memo: z.string().optional().describe("Memo"),
+    memo: z.string().max(500).optional().describe("Memo"),
     flagColor: z.enum(["red", "orange", "yellow", "green", "blue", "purple"]).optional().describe("Flag color"),
   } },
   ({ budgetId, accountId, dateFirst, frequency, amount, payeeId, payeeName, categoryId, memo, flagColor }) =>
@@ -2724,7 +2732,7 @@ registerTool(
     payeeId: z.string().nullable().optional().describe("Payee ID"),
     payeeName: z.string().max(200).nullable().optional().describe("Payee name"),
     categoryId: z.string().nullable().optional().describe("Category ID"),
-    memo: z.string().nullable().optional().describe("Memo"),
+    memo: z.string().max(500).nullable().optional().describe("Memo"),
     flagColor: z.enum(["red", "orange", "yellow", "green", "blue", "purple"]).nullable().optional().describe("Flag color"),
   } },
   ({ budgetId, scheduledTransactionId, accountId, date, frequency, amount, payeeId, payeeName, categoryId, memo, flagColor }) =>
@@ -4164,6 +4172,7 @@ const {
 } = defaultInstance.internals;
 
 export {
+  envNumber,
   dollars,
   milliunits,
   round2,

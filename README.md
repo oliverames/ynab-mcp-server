@@ -606,6 +606,33 @@ Manual YNAB transfer fixes can replace one side of the pair with a new transacti
 
 *`YNAB_API_TOKEN` is required unless `YNAB_API_TOKEN_FILE` or `YNAB_OP_PATH` is set. These values may come from direct process env, Codex config, or Claude settings.
 
+### Configuration Validation
+
+Numeric environment variables are parsed at startup. A value that is not a number,
+or that falls below the minimum for its setting, is ignored: the server keeps the
+documented default and writes a warning to stderr naming the variable, the offending
+value, and the fallback it used. This covers `YNAB_RATE_LIMIT_PER_HOUR`,
+`YNAB_RATE_LIMIT_BURST`, `YNAB_HTTP_TIMEOUT_MS`, `YNAB_HTTP_RETRIES`, and
+`YNAB_MAX_RESPONSE_BYTES`.
+
+Zero is a valid, documented setting for `YNAB_RATE_LIMIT_PER_HOUR`,
+`YNAB_HTTP_TIMEOUT_MS`, and `YNAB_HTTP_RETRIES`, so it is accepted rather than
+replaced.
+
+### Input Validation
+
+Write tools reject over-long text before the request reaches YNAB, using the limits
+in YNAB's own API specification:
+
+- **Payee names on transactions** (`payeeName`): 200 characters
+- **Payee names on `create_payee` and `update_payee`**: 500 characters
+- **Category group names**: 50 characters
+- **Memos**: 500 characters
+
+The two payee limits differ because YNAB's API sets them differently. The
+transaction endpoints cap `payee_name` at 200, while the payee endpoints cap the
+payee resource name at 500.
+
 ### 1Password Integration
 
 If you store your YNAB token in [1Password CLI](https://developer.1password.com/docs/cli/), set `YNAB_OP_PATH` to your secret reference and omit `YNAB_API_TOKEN`:
