@@ -88,7 +88,7 @@ writeJson("manifest.json", {
   compatibility: {
     platforms: ["darwin", "win32", "linux"],
     runtimes: {
-      node: ">=18.0.0",
+      node: ">=20.0.0",
     },
   },
   user_config: {

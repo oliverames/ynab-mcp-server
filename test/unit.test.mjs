@@ -41,7 +41,9 @@ const {
   csvSafeText,
   buildTransactionsCsv,
   currentBudgetMonth,
+  invokeRegisteredTool,
 } = await import("../index.js");
+const { createYnabServer } = await import("../index.js");
 
 test("dollars converts milliunits and passes null through", () => {
   assert.equal(dollars(-12340), -12.34);
@@ -329,6 +331,29 @@ test("parseToolExecuteInput validates against the target tool schema", () => {
   );
   // Tools without an input schema accept any object.
   assert.deepEqual(parseToolExecuteInput("get_user", undefined), {});
+});
+
+test("export_transactions accepts the same type filter as get_transactions", () => {
+  assert.deepEqual(
+    parseToolExecuteInput("export_transactions", { type: "unapproved" }),
+    { type: "unapproved" },
+  );
+  assert.throws(
+    () => parseToolExecuteInput("export_transactions", { type: "everything" }),
+    /Invalid input for export_transactions: type/,
+  );
+});
+
+test("invokeRegisteredTool wraps passthrough results like a direct call", async () => {
+  const instance = createYnabServer({ hasCredentials: false, writesEnabled: false, journal: null });
+  const result = await instance.internals.invokeRegisteredTool("ynab_auth_status", {});
+  assert.equal(result.isError ?? false, false);
+  assert.deepEqual(result.structuredContent, { result: JSON.parse(result.content[0].text) });
+});
+
+test("invokeRegisteredTool cannot reach write tools when writes are disabled", async () => {
+  const instance = createYnabServer({ hasCredentials: true, writesEnabled: false, journal: null });
+  assert.equal(await instance.internals.invokeRegisteredTool("delete_transaction", {}), null);
 });
 
 // --- v4.0 helpers ---

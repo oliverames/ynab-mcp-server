@@ -709,7 +709,7 @@ npm run test:safety
 cd worker && npm test
 ```
 
-The root suites run in CI (`.github/workflows/ci.yml`) on Node 18, 20, and 22 for every push and pull request, along with `release:check` and a credential-free MCP smoke test. The Worker suite covers consent-page escaping, OAuth state and PKCE, encrypted KV records, token refresh races, and paginated grant deletion.
+The root suites run in CI (`.github/workflows/ci.yml`) on Node 20, 22, and 24 for every push and pull request, along with `release:check` and a credential-free MCP smoke test. The Worker suite covers consent-page escaping, OAuth state and PKCE, encrypted KV records, token refresh races, and paginated grant deletion.
 
 ### Live Integration Tests
 

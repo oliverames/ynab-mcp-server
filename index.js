@@ -905,6 +905,27 @@ async function fetchTransactions({
 // workaround that damages the record. Attach the known-good procedure instead.
 const ERROR_HINTS = [
   {
+    match: /unauthorized_scope/i,
+    hint:
+      "HTTP 403 unauthorized_scope: this connection's grant is read-only, so YNAB rejected the write. " +
+      "On the hosted connector, reconnect from your MCP client and enable write access on the YNAB consent screen. " +
+      "On a local install, restart with YNAB_ALLOW_WRITES=1.",
+  },
+  {
+    match: /too_many_requests/i,
+    hint:
+      "YNAB allows 200 requests per hour per token on a rolling window (HTTP 429 too_many_requests), and the " +
+      "automatic retries could not clear it. Wait for the window to drain rather than retrying immediately; then " +
+      "prefer delta requests (lastKnowledgeOfServer), summary/compact modes, month-scoped reads, and batch writes.",
+  },
+  {
+    match: /not_authorized/i,
+    hint:
+      "HTTP 401 not_authorized: the access token is missing, invalid, revoked, or expired. Generate a fresh token " +
+      "in YNAB Developer Settings and update your configured credential source (YNAB_API_TOKEN, YNAB_API_TOKEN_FILE, " +
+      "or YNAB_OP_PATH), or reconnect the hosted connector from your MCP client.",
+  },
+  {
     match: /subtransactions cannot be updated on an existing split/i,
     hint:
       "There is no API route out of a split: setting categoryId on the parent does not collapse it either " +
@@ -1224,6 +1245,14 @@ function parseToolExecuteInput(toolName, input) {
     throw new Error(`Invalid input for ${toolName}: ${issues}`);
   }
   return parsed.data;
+}
+
+// Run a registered tool's handler through the same structured-content wrapper
+// a direct call gets, so passthrough responses keep one response shape.
+function invokeRegisteredTool(toolName, input) {
+  const tool = registeredTools.get(toolName);
+  if (!tool) return null;
+  return withStructuredContent(tool.handler, input ?? {});
 }
 
 function registerTool(name, config, handler) {
@@ -1966,7 +1995,7 @@ registerTool(
   { description: "List all money movements — the history of budget re-allocations between categories (who moved how much from where to where, when). Read-only. Use to answer 'why did this category's assigned amount change'; these are budget moves, not transactions. Can be long on old budgets; prefer get_money_movements_by_month for a specific month.", inputSchema: { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") } },
   ({ budgetId }) =>
     run(async () => {
-      const data = await ynabFetch(`/plans/${resolveBudgetId(budgetId)}/money_movements`);
+      const { data } = await api.money_movements.getMoneyMovements(resolveBudgetId(budgetId));
       return ok(data.money_movements.map(formatMoneyMovement));
     })
 );
@@ -1979,7 +2008,7 @@ registerTool(
   } },
   ({ budgetId, month }) =>
     run(async () => {
-      const data = await ynabFetch(`/plans/${resolveBudgetId(budgetId)}/months/${month}/money_movements`);
+      const { data } = await api.money_movements.getMoneyMovementsByMonth(resolveBudgetId(budgetId), month);
       return ok(data.money_movements.map(formatMoneyMovement));
     })
 );
@@ -1989,7 +2018,7 @@ registerTool(
   { description: "List all money movement groups — batches of related money movements applied together (e.g. one multi-category re-allocation). Read-only. Join to list_money_movements rows via money_movement_group_id.", inputSchema: { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") } },
   ({ budgetId }) =>
     run(async () => {
-      const data = await ynabFetch(`/plans/${resolveBudgetId(budgetId)}/money_movement_groups`);
+      const { data } = await api.money_movements.getMoneyMovementGroups(resolveBudgetId(budgetId));
       return ok(data.money_movement_groups);
     })
 );
@@ -2002,7 +2031,7 @@ registerTool(
   } },
   ({ budgetId, month }) =>
     run(async () => {
-      const data = await ynabFetch(`/plans/${resolveBudgetId(budgetId)}/months/${month}/money_movement_groups`);
+      const { data } = await api.money_movements.getMoneyMovementGroupsByMonth(resolveBudgetId(budgetId), month);
       return ok(data.money_movement_groups);
     })
 );
@@ -2859,13 +2888,25 @@ registerTool(
       // omitted since_date to one year ago, which would silently hide older
       // unapproved transactions from the review queue (approve_transactions
       // already fetches full history; keep the two views consistent).
-      const { data: unapprovedData } = await api.transactions.getTransactions(bid, allHistorySinceDate(), "unapproved");
+      const { data: unapprovedData } = await api.transactions.getTransactions(bid, allHistorySinceDate(), undefined, "unapproved");
       const txns = unapprovedData.transactions.map(formatTransaction);
       const unapprovedIds = new Set(txns.map((t) => t.id));
 
-      // Fetch 60 days of approved history for context
+      // Fetch approved history for the payee-context lookups below. YNAB's own
+      // default lookback for transaction lists is one year, and flags like
+      // new_payee / no_prior_amount_match mislabel payees last seen outside a
+      // short window (quarterly bills especially), so match that default. If
+      // the larger response cannot be fetched (e.g. over MAX_RESPONSE_BYTES on
+      // a huge budget), fall back to a bounded recent window rather than
+      // failing the whole review.
+      const yearAgo = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
       const since60 = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-      const { data: histData } = await api.transactions.getTransactions(bid, since60);
+      let histData;
+      try {
+        histData = (await api.transactions.getTransactions(bid, yearAgo)).data;
+      } catch {
+        histData = (await api.transactions.getTransactions(bid, since60)).data;
+      }
       const histTxns = histData.transactions.filter((t) => t.approved && !unapprovedIds.has(t.id));
 
       // Build payee history lookups (using raw milliunits for history, convert to dollars for the set)
@@ -3051,7 +3092,7 @@ registerTool(
         content: [{ type: "text", text: `Error: ${e.message}` }],
       };
     }
-    return tool.handler(parsedInput);
+    return invokeRegisteredTool(toolName, parsedInput);
   }
 );
 
@@ -3100,7 +3141,7 @@ registerTool(
         content: [{ type: "text", text: `Error: ${e.message}` }],
       };
     }
-    return tool.handler(parsedInput);
+    return invokeRegisteredTool(toolName, parsedInput);
   }
 );
 
@@ -3801,18 +3842,19 @@ function buildTransactionsCsv(transactions) {
 
 registerTool(
   "export_transactions",
-  { description: "Export transactions as CSV text (same filters as get_transactions). Columns: date, amount (dollars, negative = outflow), payee, category, account, memo, cleared, approved, transfer, id. Free-text columns (payee, category, account, memo) get a leading apostrophe when the value starts with a formula character (= + - @ tab CR), so spreadsheet applications cannot execute a bank-imported merchant string as a formula. Use when the user wants data for a spreadsheet or offline analysis; for programmatic work prefer get_transactions (structured JSON). Read-only. Large date ranges produce large output — narrow with filters when possible.", inputSchema: {
+  { description: "Export transactions as CSV text (same filters as get_transactions, including type). Columns: date, amount (dollars, negative = outflow), payee, category, account, memo, cleared, approved, transfer, id. Free-text columns (payee, category, account, memo) get a leading apostrophe when the value starts with a formula character (= + - @ tab CR), so spreadsheet applications cannot execute a bank-imported merchant string as a formula. Use when the user wants data for a spreadsheet or offline analysis; for programmatic work prefer get_transactions (structured JSON). Read-only. Large date ranges produce large output — narrow with filters when possible.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     sinceDate: z.string().optional().describe("Only export transactions on or after this date (YYYY-MM-DD). If omitted, YNAB defaults to one year ago."),
     untilDate: z.string().optional().describe("Only export transactions on or before this date (YYYY-MM-DD)"),
+    type: z.enum(["unapproved", "uncategorized"]).optional().describe("Filter by approval/categorization status (e.g. export the unapproved queue for offline review)"),
     accountId: z.string().optional().describe("Filter by account ID"),
     categoryId: z.string().optional().describe("Filter by category ID"),
     payeeId: z.string().optional().describe("Filter by payee ID"),
     month: z.string().optional().describe("Filter by month (YYYY-MM-DD, first of month)"),
   } },
-  ({ budgetId, sinceDate, untilDate, accountId, categoryId, payeeId, month }) =>
+  ({ budgetId, sinceDate, untilDate, type, accountId, categoryId, payeeId, month }) =>
     run(async () => {
-      const data = await fetchTransactions({ budgetId, sinceDate, untilDate, accountId, categoryId, payeeId, month });
+      const data = await fetchTransactions({ budgetId, sinceDate, untilDate, type, accountId, categoryId, payeeId, month });
       const txns = data.transactions.filter((t) => !t.deleted).map(formatTransaction);
       return { content: [{ type: "text", text: buildTransactionsCsv(txns) }] };
     })
@@ -3967,6 +4009,7 @@ return {
     sanitizeErrorMessage,
     withWriteGateDescription,
     parseToolExecuteInput,
+    invokeRegisteredTool,
     verifyBulkTransactionUpdates,
     beforeFieldsForUpdate,
     summarizeApprovalChanges,
@@ -4033,6 +4076,7 @@ const {
   sanitizeErrorMessage,
   withWriteGateDescription,
   parseToolExecuteInput,
+  invokeRegisteredTool,
   verifyBulkTransactionUpdates,
   beforeFieldsForUpdate,
   summarizeApprovalChanges,
@@ -4069,6 +4113,7 @@ export {
   sanitizeErrorMessage,
   withWriteGateDescription,
   parseToolExecuteInput,
+  invokeRegisteredTool,
   verifyBulkTransactionUpdates,
   beforeFieldsForUpdate,
   summarizeApprovalChanges,
