@@ -1,5 +1,66 @@
 # Worklog
 
+## 2026-08-26 - Reviewed and cleaned up an uncommitted work-in-progress change
+
+**Context**: The tree carried an uncommitted change touching `index.js`,
+`README.md`, and `package.json` on top of `1c32d9b`. Oliver asked for a review
+of completeness and reasoning, then for the findings to be fixed. The committed
+work in `1c32d9b` held up on inspection; the uncommitted work did not.
+
+**What changed** (commit `f6c7160`):
+
+- Deleted the caching layer. `SimpleCache`, `responseCache`, `generateCacheKey`,
+  and `withCache` were never called from any code path, so `YNAB_CACHE_ENABLED`
+  and `YNAB_CACHE_TTL_MS` did nothing while the README claimed read-only tools
+  cached automatically. A working version would also need write-time
+  invalidation and a size bound, and had neither.
+- Reverted the `YNAB_API_HOST` override. `assertYnabApiUrl` is the guard that
+  keeps the bearer token from reaching a non-YNAB host, and the override made
+  that guard follow an unvalidated environment variable. It was half-wired
+  besides: `YNAB_API_HOST` went into `YNAB_RUNTIME_KEYS`, but the constant reads
+  `process.env` at line 23, before `resolveYnabRuntimeConfig` runs, and that
+  function never writes back to `process.env`. A config-file value would have
+  shown as found in diagnostics and then been ignored.
+- Removed an unused `maxRetries` in `createYnabRateLimiter`. The real retry loop
+  reads `YNAB_HTTP_RETRIES` itself, and the dead copy clamped to a different
+  minimum.
+- `envNumber` now separates an unparseable value from an in-range parse below
+  the minimum, so `YNAB_RATE_LIMIT_BURST=0` no longer warns "is not a valid
+  number".
+- Capped all seven memo schemas at 500 characters, matching YNAB's spec. The
+  README had claimed a 200-character memo cap that no schema enforced.
+- Kept the incoming `.max(50)` on both category group name fields.
+- Rewrote the README's validation sections to describe real behavior, including
+  why payee names cap at 200 on transactions and 500 on the payee endpoints.
+
+**Decisions made**:
+
+- Field limits come from YNAB's own OpenAPI spec, fetched from
+  `https://api.ynab.com/papi/open_api_spec.yaml` on 2026-08-26, not from the
+  bundled `ynab` SDK. The SDK's generated types carry no `maxLength`.
+- Reverted the hand bump to 5.1.2 in `package.json` and `serverInfo` rather than
+  finishing it. `package-lock.json`, the six plugin manifests, and
+  `worker/src/brand-assets.js` were all still at 5.1.1, and `publish.sh` owns
+  the bump. This keeps the deliberate 5.1.2 release hold intact.
+- Exported `envNumber` so the warning paths can be tested. It joins the existing
+  test-support export surface rather than widening the runtime API.
+
+**Verification**: `test:unit` 57/57, including two new tests covering the
+`envNumber` warning paths and all four field-length caps. A mutation check
+(removing one `.max(500)`) confirmed the memo test fails without the cap.
+`smoke:list-tools` connects and lists 62 tools. `npm test` was deliberately not
+run, since it writes to the live budget.
+
+**Left off at**: `main` clean and pushed at `f6c7160`. Version deliberately
+still 5.1.1 everywhere. The 5.1.2 release remains held exactly as the
+2026-07-18 entry describes, and the release steps there are still the ones to
+follow when Oliver wants to ship.
+
+**Open questions**: none. NEW this session: nothing carried forward. Still open:
+the held 5.1.2 npm publish and hosted worker deploy, unchanged by this session.
+
+---
+
 ## 2026-08-05 - Fixed seven connector findings from a live triage session
 
 **Context**: A live session using the hosted connector produced eight findings.
