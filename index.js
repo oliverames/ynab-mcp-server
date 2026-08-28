@@ -7,6 +7,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import * as ynab from "ynab";
 
@@ -517,6 +518,33 @@ function createFsJournal(filePath) {
 //     sources_checked, values, tokenLookupError, setupGuide } — auth-status
 //     reporting only; all fields optional.
 //   serverInfo: { name, version } override.
+
+// The installed MCP SDK (@modelcontextprotocol/sdk 1.29-1.30) converts every
+// tool's zod input/output schema to JSON Schema without passing a dialect
+// target, so `tools/list` always advertises
+// "$schema": "http://json-schema.org/draft-07/schema#" — even for zod v4,
+// where the SDK's own converter defaults to draft-7 whenever no target is
+// given. Our tool schemas are plain (type/properties/required/
+// additionalProperties), which is valid under 2020-12 as-is, but MCP clients
+// whose default validator only accepts the 2020-12 dialect reject every tool
+// call outright before any handler runs. Rewrite the advertised dialect
+// after the SDK builds its response instead of patching node_modules.
+const JSON_SCHEMA_2020_12 = "https://json-schema.org/draft/2020-12/schema";
+
+function fixListToolsSchemaDialect(server) {
+  const rawServer = server.server;
+  const originalHandler = rawServer._requestHandlers.get("tools/list");
+  if (!originalHandler) return;
+  rawServer.setRequestHandler(ListToolsRequestSchema, async (request, extra) => {
+    const result = await originalHandler(request, extra);
+    for (const tool of result.tools ?? []) {
+      if (tool.inputSchema?.$schema) tool.inputSchema.$schema = JSON_SCHEMA_2020_12;
+      if (tool.outputSchema?.$schema) tool.outputSchema.$schema = JSON_SCHEMA_2020_12;
+    }
+    return result;
+  });
+}
+
 export function createYnabServer(options = {}) {
 
 const {
@@ -4064,6 +4092,8 @@ const YNAB_PROMPTS = [
 for (const [slug, description, text] of YNAB_PROMPTS) {
   server.registerPrompt(slug, { title: slug.replace(/-/g, " "), description }, promptText(text));
 }
+
+fixListToolsSchemaDialect(server);
 
 return {
   server,
