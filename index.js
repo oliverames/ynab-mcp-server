@@ -526,7 +526,7 @@ const {
   writesEnabled: allowWrites = false,
   journal = null,
   runtime = {},
-  serverInfo = { name: "YNAB Local", version: "5.1.1" },
+  serverInfo = { name: "YNAB Local", version: "5.2.0" },
 } = options;
 
 // Most-recently-seen access token, kept only so sanitizeErrorMessage can
