@@ -43,7 +43,11 @@ const bundlePackage = {
   engines: pkg.engines,
 };
 
-writeJson("package.json", bundlePackage);
+// npm ci refuses to install when package.json and the lock file disagree,
+// so stage the project's real manifest for the install and swap in the
+// trimmed bundle manifest afterwards. Staging only the production
+// dependencies would not describe the tree the lock actually resolved.
+writeJson("package.json", pkg);
 copyFile("package-lock.json");
 copyFile("index.js");
 copyFile("README.md");
@@ -119,6 +123,9 @@ execFileSync("npm", ["ci", "--omit=dev", "--no-audit", "--no-fund"], {
   cwd: stagingDir,
   stdio: "inherit",
 });
+
+// The shipped bundle carries only what the runtime needs to start.
+writeJson("package.json", bundlePackage);
 
 fs.mkdirSync(distDir, { recursive: true });
 if (force) {
