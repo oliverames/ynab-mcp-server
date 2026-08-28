@@ -1,5 +1,32 @@
 # Worklog
 
+## 2026-08-27 - Released 5.2.0 and fixed the bundle build that blocked it
+
+**What changed**: Thirty-one commits had accumulated since v5.1.1 with no
+release. The first publish attempt failed at `build:mcpb` with "Missing:
+fast-uri@3.1.6 from lock file". `build-mcpb.mjs` staged a production-only
+`package.json` beside a copy of the full `package-lock.json`; `npm ci` verifies
+the two agree, so the trimmed manifest no longer described the tree the lock had
+resolved. The mismatch was latent until the recent dependency refresh moved that
+transitive package. Commit `92b25f4` installs with the project's real manifest
+and writes the trimmed bundle manifest afterwards. Published 5.2.0.
+
+**Decisions made**: Chose a minor bump because the backlog carries features
+(native OAuth callback redirects, Claude-discoverable branding) alongside fixes
+and security bumps.
+
+**Verification**: `publish.sh minor` ran the full gate (unit, safety,
+smoke:list-tools, worker tests, wrangler dry run, release:check) before touching
+version files. The published bundle carries the trimmed manifest with 3
+production dependencies, no devDependencies, and its node_modules. Registry
+check confirms npm latest is 5.2.0, and the v5.2.0 GitHub release was created.
+
+**Left off at**: Released and clean at 5.2.0.
+
+**Open questions**: None new.
+
+---
+
 ## 2026-08-26 - Reviewed and cleaned up an uncommitted work-in-progress change
 
 **Context**: The tree carried an uncommitted change touching `index.js`,
