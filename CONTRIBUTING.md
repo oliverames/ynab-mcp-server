@@ -4,7 +4,7 @@ Bug reports and focused pull requests are welcome. Please open an issue before s
 
 ## Local checks
 
-Use Node.js 18 or newer, then install the locked dependencies and run the same checks as CI:
+Use Node.js 20 or newer, then install the locked dependencies and run the same checks as CI. Validation commands check for dependencies but never install them automatically:
 
 ```bash
 npm ci --no-audit --no-fund
@@ -13,6 +13,15 @@ npm run test:safety
 npm run release:check
 YNAB_DISABLE_AGENT_CONFIG_FALLBACK=1 npm run smoke:list-tools
 ```
+
+In Windows PowerShell, set the environment variable before discovery:
+
+```powershell
+$env:YNAB_DISABLE_AGENT_CONFIG_FALLBACK = "1"
+npm run smoke:list-tools
+```
+
+Offline unit, safety, and discovery checks run on both Windows and Linux in CI.
 
 The live integration suite writes temporary records to a real YNAB budget. Use a dedicated test budget when you need live coverage. Leave `YNAB_RUN_NONREVERSIBLE_TESTS` unset unless you intend to create category records that the API cannot delete.
 

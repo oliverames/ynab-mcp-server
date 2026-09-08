@@ -35,10 +35,11 @@ jobs:
           GITLEAKS_ENABLE_COMMENTS: "false"
 
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest, windows-latest]
         node-version: ["20.x", "22.x", "24.x"]
     steps:
       - uses: actions/checkout@v7
