@@ -6,6 +6,8 @@ import assert from "node:assert/strict";
 process.env.YNAB_MCP_NO_AUTOSTART = "1";
 process.env.YNAB_DISABLE_AGENT_CONFIG_FALLBACK = "1";
 process.env.YNAB_API_TOKEN = "unit-test-token";
+// Mocked HTTP calls must not wait on the wall-clock API rate limiter.
+process.env.YNAB_RATE_LIMIT_PER_HOUR = "0";
 delete process.env.YNAB_BUDGET_ID;
 
 const {
@@ -241,8 +243,9 @@ test("inline tables keep quoted commas intact and reject nested values", () => {
 test("createFsJournal persists entries atomically and reads them back", async (t) => {
   const { mkdtempSync } = await import("node:fs");
   const { join } = await import("node:path");
+  const { tmpdir } = await import("node:os");
   const { rmSync, existsSync } = await import("node:fs");
-  const dir = mkdtempSync(join("/tmp", "ynab-journal-test-"));
+  const dir = mkdtempSync(join(tmpdir(), "ynab-journal-test-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
 
   const journalPath = join(dir, "undo.json");
@@ -309,6 +312,8 @@ test("withWriteGateDescription appends the gate note exactly once", () => {
 });
 
 test("verifyBulkTransactionUpdates verifies a batch with a single list refetch", async (t) => {
+  // Keep the fixture inside the 90-day window regardless of the test date.
+  t.mock.method(Date, "now", () => Date.parse("2026-06-15T12:00:00Z"));
   const requests = [];
   const listTransactions = [
     { id: "t1", date: "2026-06-01", amount: -10000, approved: true, deleted: false },
@@ -343,6 +348,7 @@ test("verifyBulkTransactionUpdates verifies a batch with a single list refetch",
 });
 
 test("verifyBulkTransactionUpdates bounds the refetch when no row carries a date", async (t) => {
+  t.mock.method(Date, "now", () => Date.parse("2026-06-15T12:00:00Z"));
   const requests = [];
   const realFetch = globalThis.fetch;
   globalThis.fetch = async (url) => {
@@ -363,7 +369,7 @@ test("verifyBulkTransactionUpdates bounds the refetch when no row carries a date
 
   assert.equal(verification.failed.length, 0);
   assert.equal(requests.length, 1);
-  assert.match(requests[0], /\/plans\/plan-1\/transactions\?since_date=\d{4}-\d{2}-\d{2}/);
+  assert.match(requests[0], /\/plans\/plan-1\/transactions\?since_date=2026-03-17/);
 });
 
 test("parseToolExecuteInput validates against the target tool schema", () => {
