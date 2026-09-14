@@ -54,7 +54,9 @@ that the override pins `sharp@0.35.4`.
 
 **Open questions**: Still open from 2026-09-08 - the amesvt.com rate-limit rule
 name. NEW - the tool list is still about 21K tokens; the next cut is the
-repeated per-field descriptions (for example `budgetId` appears on 60 tools).
+repeated per-field descriptions (for example `budgetId` appears on 60 tools),
+tracked in #23. NEW - hosted-connector deploys are still verified only by
+rebuilding the bundle locally; an authenticated post-deploy smoke check is #24.
 
 ---
 
