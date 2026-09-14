@@ -20,6 +20,9 @@ const {
   mapTransactionUpdate,
   findTransferAccount,
   transferInputMismatch,
+  goalFrequencyMismatch,
+  capRows,
+  reviewResponseMode,
   transactionMatchesSearch,
   searchTransactionsPage,
   transactionUpdateMismatches,
@@ -1098,4 +1101,143 @@ test("tool-execute validation names the accepted arguments so a wrong key is sel
     parse("create_transactions", { transactions: [{ accountId: "a", date: "2026-09-14", amount: -1, transferToAccountId: "b" }] }).transactions[0].transferToAccountId,
     "b",
   );
+});
+
+// --- 5.4.0: goal_frequency, row caps, review degrade, instructions ---
+
+test("goalFrequencyMismatch enforces YNAB 1.86 recurring-target rules", () => {
+  assert.equal(goalFrequencyMismatch({ goalFrequency: undefined }), null);
+  assert.equal(goalFrequencyMismatch({ goalFrequency: "monthly", goalTarget: 50 }), null);
+  assert.match(goalFrequencyMismatch({ goalFrequency: "monthly" }), /requires goalTarget/);
+  assert.match(goalFrequencyMismatch({ goalFrequency: "monthly", goalTarget: null }), /requires goalTarget/);
+  assert.match(goalFrequencyMismatch({ goalFrequency: "weekly", goalTarget: 20, goalTargetDate: "2026-12-01" }), /cannot be combined with goalTargetDate/);
+});
+
+test("capRows keeps the bare shape under the cap and pages above it", () => {
+  const rows = Array.from({ length: 7 }, (_, i) => ({ id: `t${i}` }));
+  const under = capRows(rows, {});
+  assert.equal(under.capped, false);
+  assert.equal(under.rows.length, 7);
+
+  const capped = capRows(rows, { limit: 3 });
+  assert.equal(capped.capped, true);
+  assert.deepEqual(capped.rows.map((r) => r.id), ["t0", "t1", "t2"]);
+  assert.equal(capped.meta.has_more, true);
+  assert.equal(capped.meta.next_offset, 3);
+  assert.equal("hint" in capped.meta, false, "explicit limit needs no hint");
+
+  const last = capRows(rows, { limit: 3, offset: 6 });
+  assert.deepEqual(last.rows.map((r) => r.id), ["t6"]);
+  assert.equal(last.meta.has_more, false);
+  assert.equal(last.meta.next_offset, null);
+
+  const big = Array.from({ length: 501 }, (_, i) => ({ id: i }));
+  const auto = capRows(big, {});
+  assert.equal(auto.capped, true);
+  assert.equal(auto.rows.length, 500);
+  assert.match(auto.meta.hint, /capped at 500 of 501 rows/);
+});
+
+test("reviewResponseMode steps full -> compact -> summary past the cap and never upgrades", () => {
+  assert.deepEqual(reviewResponseMode({ count: 10 }), { mode: "full", summary: false, compact: false, notice: null });
+  const c = reviewResponseMode({ count: 401 });
+  assert.equal(c.mode, "compact");
+  assert.match(c.notice, /returned compact instead of full/);
+  const sm = reviewResponseMode({ count: 801 });
+  assert.equal(sm.mode, "summary");
+  assert.equal(sm.summary, true);
+  // compact requested stays compact until the summary threshold
+  assert.equal(reviewResponseMode({ compact: true, count: 500 }).mode, "compact");
+  assert.equal(reviewResponseMode({ compact: true, count: 900 }).mode, "summary");
+  // summary requested is left alone; raising the cap restores detail
+  assert.equal(reviewResponseMode({ summary: true, count: 5 }).mode, "summary");
+  assert.equal(reviewResponseMode({ count: 900, maxTransactions: 1000 }).mode, "full");
+});
+
+test("get_transactions returns a bare array under the cap and a paged object above it", async (t) => {
+  const instance = createYnabServer({ hasCredentials: true, writesEnabled: false, journal: null, getAccessToken: async () => "unit-token", defaultBudgetId: "plan-1" });
+  const rows = Array.from({ length: 502 }, (_, i) => ({ id: `t${i}`, date: `2026-01-${String(1 + (i % 28)).padStart(2, "0")}`, amount: -1000, account_id: "a", deleted: false, subtransactions: [] }));
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({ data: { transactions: rows } }), { status: 200, headers: { "content-type": "application/json" } });
+  t.after(() => { globalThis.fetch = realFetch; });
+
+  const capped = JSON.parse((await instance.internals.invokeRegisteredTool("get_transactions", {})).content[0].text);
+  assert.equal(Array.isArray(capped), false);
+  assert.equal(capped.total, 502);
+  assert.equal(capped.returned, 500);
+  assert.equal(capped.has_more, true);
+  assert.equal(capped.next_offset, 500);
+  assert.match(capped.hint, /search_transactions/);
+
+  const page2 = JSON.parse((await instance.internals.invokeRegisteredTool("get_transactions", { offset: 500 })).content[0].text);
+  assert.equal(page2.returned, 2);
+  assert.equal(page2.has_more, false);
+
+  const under = JSON.parse((await instance.internals.invokeRegisteredTool("get_transactions", { limit: 2000 })).content[0].text);
+  assert.equal(under.returned, 502, "explicit limit always returns the paged object");
+
+  // Delta requests are never capped and keep their { transactions, server_knowledge } shape.
+  globalThis.fetch = async () => new Response(JSON.stringify({ data: { transactions: rows, server_knowledge: 99 } }), { status: 200, headers: { "content-type": "application/json" } });
+  const delta = JSON.parse((await instance.internals.invokeRegisteredTool("get_transactions", { lastKnowledgeOfServer: 5 })).content[0].text);
+  assert.equal(delta.transactions.length, 502);
+  assert.equal(delta.server_knowledge, 99);
+});
+
+test("export_transactions keeps the newest rows and reports truncation in a second block", async (t) => {
+  const instance = createYnabServer({ hasCredentials: true, writesEnabled: false, journal: null, getAccessToken: async () => "unit-token", defaultBudgetId: "plan-1" });
+  const rows = Array.from({ length: 5 }, (_, i) => ({ id: `t${i}`, date: `2026-02-0${i + 1}`, amount: -1000 * (i + 1), account_name: "A", deleted: false, cleared: "cleared", approved: true, subtransactions: [] }));
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({ data: { transactions: rows } }), { status: 200, headers: { "content-type": "application/json" } });
+  t.after(() => { globalThis.fetch = realFetch; });
+
+  const result = await instance.internals.invokeRegisteredTool("export_transactions", { maxRows: 2 });
+  assert.equal(result.content.length, 2);
+  const lines = result.content[0].text.trim().split("\n");
+  assert.equal(lines.length, 3, "header plus two rows");
+  assert.match(lines[1], /^2026-02-04/);
+  assert.match(lines[2], /^2026-02-05/);
+  assert.match(result.content[1].text, /2 newest of 5 rows/);
+
+  const full = await instance.internals.invokeRegisteredTool("export_transactions", {});
+  assert.equal(full.content.length, 1);
+});
+
+test("create_category and update_category send goal_frequency and reject bad combinations before the write", async (t) => {
+  const instance = createYnabServer({ hasCredentials: true, writesEnabled: true, journal: null, getAccessToken: async () => "unit-token", defaultBudgetId: "plan-1" });
+  const calls = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    calls.push({ url: String(url), method: init.method, body: init.body ? JSON.parse(init.body) : null });
+    return new Response(JSON.stringify({ data: { category: { id: "c1", name: "Gym", goal_type: "NEED", goal_target: 50000, goal_cadence: 1, goal_cadence_frequency: 1, internal: false, deleted: false } } }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  t.after(() => { globalThis.fetch = realFetch; });
+
+  const created = await instance.internals.invokeRegisteredTool("create_category", { categoryGroupId: "g1", name: "Gym", goalTarget: 50, goalFrequency: "monthly" });
+  assert.equal(created.isError ?? false, false, created.content?.[0]?.text);
+  assert.equal(calls.at(-1).body.category.goal_frequency, "monthly");
+  assert.equal(calls.at(-1).body.category.goal_target, 50000);
+  assert.equal(JSON.parse(created.content[0].text).internal, false);
+
+  const updated = await instance.internals.invokeRegisteredTool("update_category", { categoryId: "c1", goalTarget: 20, goalFrequency: "weekly" });
+  assert.equal(updated.isError ?? false, false, updated.content?.[0]?.text);
+  assert.equal(calls.at(-1).method, "PATCH");
+  assert.equal(calls.at(-1).body.category.goal_frequency, "weekly");
+
+  const before = calls.length;
+  const bad = await instance.internals.invokeRegisteredTool("update_category", { categoryId: "c1", goalFrequency: "monthly" });
+  assert.equal(bad.isError, true);
+  assert.match(bad.content[0].text, /requires goalTarget/);
+  const bad2 = await instance.internals.invokeRegisteredTool("create_category", { categoryGroupId: "g1", name: "X", goalTarget: 5, goalTargetDate: "2026-12-01", goalFrequency: "yearly" });
+  assert.equal(bad2.isError, true);
+  assert.match(bad2.content[0].text, /cannot be combined with goalTargetDate/);
+  assert.equal(calls.length, before, "no request reaches YNAB for a rejected combination");
+});
+
+test("server advertises instructions at initialize", () => {
+  const instance = createYnabServer({ hasCredentials: false, writesEnabled: false, journal: null });
+  const instructions = instance.server?.server?._instructions ?? instance.server?._instructions;
+  assert.equal(typeof instructions, "string");
+  assert.match(instructions, /search_transactions/);
+  assert.match(instructions, /transferToAccountId/);
+  assert.match(instructions, /transactionId/);
 });

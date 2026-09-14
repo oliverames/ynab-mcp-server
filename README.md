@@ -326,7 +326,7 @@ YNAB_API_TOKEN=your-token-here npm run smoke:review-unapproved -- --published
 
 ## Features
 
-**YNAB API v1.85 coverage** with 59 tools when writes are enabled, plus MCP prompts and resources:
+**YNAB API v1.86 coverage** with 59 tools when writes are enabled, plus MCP prompts and resources:
 
 | Resource | Tools | Capabilities |
 |----------|-------|-------------|
@@ -350,7 +350,7 @@ Beyond tools, the server ships **6 MCP prompts** (guided workflows: monthly revi
 ### Design Decisions
 
 - **Read-only by default** - write tools are not registered unless `YNAB_ALLOW_WRITES=1` is set. Read tools are annotated with `readOnlyHint: true`; write tools are annotated with `readOnlyHint: false`, idempotency hints, and destructive hints for delete operations.
-- **Structured contracts for app clients** - every tool exposes a human-readable title, an input schema even when it takes no arguments, an output schema, and matching `structuredContent`. Impact hints describe YNAB as a private, bounded system so app clients can distinguish reads, writes, and destructive operations accurately.
+- **Server instructions and structured contracts** - the server sends a compact `instructions` block at initialize (dollar amounts, `search_transactions` before unfiltered pulls, `transactionId`, the transfer convenience, write-safety rules), so clients that never open a prompt or resource still get the rules that matter. Every tool exposes a human-readable title, an input schema even when it takes no arguments, a minimal output schema, and matching `structuredContent`. Impact hints describe YNAB as a private, bounded system so app clients can distinguish reads, writes, and destructive operations accurately.
 - **Explicit destructive confirmation** - delete tools require `confirmed: true` in their input after user confirmation. Bulk-filter writes also require `confirmed: true`, and support `expectedMatchedCount` when the current match count needs to be locked before mutation.
 - **Dollar amounts everywhere** - inputs and outputs are in dollars (`-12.34`), never milliunits (`-12340`). Conversion is automatic and transparent.
 - **Smart budget resolution** - set `YNAB_BUDGET_ID` for a default, or omit it to auto-resolve to your last-used budget. Every tool accepts an optional `budgetId` override.
@@ -403,12 +403,12 @@ Read tools are available by default. Tools that create, update, import, or delet
 
 | Tool | Description |
 |------|-------------|
-| `list_categories` | List all category groups and their categories with budgeted/activity/balance |
+| `list_categories` | List all category groups and their categories with budgeted/activity/balance. Groups and categories carry `hidden`, `deleted`, and `internal` flags (`internal` marks YNAB's own categories such as Credit Card Payments). |
 | `get_category` | Get full category details including goal progress and cadence |
 | `get_month_category` | Get category budget for a specific month |
 | `update_month_category` | Write tool: set the budgeted amount for a category in a month |
-| `update_category` | Write tool: update name, note, goal target, goal target date, or move to a different group |
-| `create_category` | Write tool: create a new category in an existing group (with optional goal) |
+| `update_category` | Write tool: update name, note, goal target, goal target date, or move to a different group. `goalFrequency` (`monthly` / `weekly` / `yearly`, YNAB API 1.86) sets a recurring target; it requires `goalTarget` and cannot be combined with `goalTargetDate`. |
+| `create_category` | Write tool: create a new category in an existing group, with an optional goal including a recurring `goalFrequency` target |
 | `create_category_group` | Write tool: create a new category group |
 | `update_category_group` | Write tool: rename a category group |
 | `search_categories` | Case-insensitive partial name search over category names **and** category-group names (e.g., "groc" finds "Groceries"; "health" finds everything in a "Health & Medical" group). Multi-word queries are tokenized and OR-matched, results are ranked, and each result reports `matched_on` / `matched_terms`. Pass `includeHidden: true` to search hidden categories and groups. |
@@ -451,7 +451,7 @@ Read tools are available by default. Tools that create, update, import, or delet
 
 | Tool | Description |
 |------|-------------|
-| `get_transactions` | Get transactions with filters: by account, category, payee, month, status (`unapproved`/`uncategorized`), `sinceDate`, and `untilDate`. Unfiltered on a busy budget it can return more than a client tool timeout allows; prefer `search_transactions` when you are looking for specific rows. |
+| `get_transactions` | Get transactions with filters: by account, category, payee, month, status (`unapproved`/`uncategorized`), `sinceDate`, and `untilDate`. Non-delta results stop at 500 rows by default (`limit` up to 2000, page with `offset`); a capped or paged result returns `{ transactions, total, returned, offset, has_more, next_offset }` instead of a bare array. Prefer `search_transactions` when you are looking for specific rows. |
 | `search_transactions` | Server-side search with pagination: `query` is a case-insensitive substring match over payee name, raw bank import string, memo, account, category, and split rows; `amount` matches on absolute value (12.34 finds a -12.34 outflow). Optional `accountId` / `sinceDate` / `untilDate` bound the scan; `limit` (default 50) and `offset` page through `total_matches`, newest first, with `next_offset` for the following page. |
 | `get_transaction` | Get a single transaction by ID. The argument is `transactionId`, not `id` (includes subtransactions). Auto-handles composite scheduled-transaction IDs like `uuid_YYYY-MM-DD`; if the underlying matched transaction has been deleted, falls back to returning the active scheduled template wrapped as `{ resource_type: "scheduled_transaction", ... }`. |
 | `create_transaction` | Write tool: create a transaction with optional split (subtransactions must sum to total). For a transfer (including a credit card payment) pass `transferToAccountId` or `transferToAccountName` instead of a payee; the server resolves the destination account's internal transfer payee, since YNAB rejects a literal `Transfer : …` payee name. |
@@ -479,7 +479,7 @@ Read tools are available by default. Tools that create, update, import, or delet
 
 | Tool | Description |
 |------|-------------|
-| `review_unapproved` | Get unapproved transactions grouped by readiness: "ready to approve" (categorized, split, or transfer) vs. "needs category first" (uncategorized). Each transaction includes a `flags` array highlighting anomalies (manually_entered, match_broken, no_prior_amount_match, category_drift, new_payee, scheduled_transaction_realized) computed against 60 days of payee history. Group headers report `category_names` / `mixed_categories` and, when the rows run both directions, `inflow_total` / `outflow_total` beside the net `total`. Includes a warning against blind approval. Pass `summary: true` for counts + by-payee aggregates only, or `compact: true` to keep per-transaction rows (with IDs) while dropping bulky fields so the response fits inline — `match_broken` rows keep `matched_transaction_id` in compact mode, since triaging that flag means looking the matched id up. |
+| `review_unapproved` | Get unapproved transactions grouped by readiness: "ready to approve" (categorized, split, or transfer) vs. "needs category first" (uncategorized). Each transaction includes a `flags` array highlighting anomalies (manually_entered, match_broken, no_prior_amount_match, category_drift, new_payee, scheduled_transaction_realized) computed against 60 days of payee history. Group headers report `category_names` / `mixed_categories` and, when the rows run both directions, `inflow_total` / `outflow_total` beside the net `total`. Includes a warning against blind approval. Pass `summary: true` for counts + by-payee aggregates only, or `compact: true` to keep per-transaction rows (with IDs) while dropping bulky fields so the response fits inline — `match_broken` rows keep `matched_transaction_id` in compact mode, since triaging that flag means looking the matched id up. Above `maxTransactions` unapproved rows (default 400) a full response degrades to `compact`, and above twice that to `summary`; the response reports `mode` and a `notice`. |
 | `get_overspent_categories` | Get categories with negative balances for a month, useful for finding prior-month overspending that reduces the current month's Ready to Assign. |
 
 ### Workflows (v4.0)
@@ -501,7 +501,7 @@ The YNAB API has no category merge/delete endpoint and cannot split an already-i
 | `get_budget_health` | Snapshot with green/yellow/red indicators: savings rate, age of money, Ready to Assign, overspending, credit card debt. |
 | `get_income_expense_summary` | Income vs. spending by month with savings rate, transfers excluded. |
 | `detect_recurring_charges` | Find subscriptions/recurring charges from history by payee + amount + cadence, with estimated annual cost. |
-| `export_transactions` | Export filtered transactions as CSV text. |
+| `export_transactions` | Export filtered transactions as CSV text. Capped at `maxRows` (default 500, max 2000); when exceeded the newest rows are kept and a second text block reports the truncation. |
 
 ### Undo Journal (v4.0)
 

@@ -1,5 +1,53 @@
 # Worklog
 
+## 2026-09-14 - Audited the connector against YNAB API 1.86 and the Claude tool surface
+
+**What changed**: Five findings from a same-day audit, shipped as 5.4.0.
+(1) YNAB API 1.86.0 (2026-07-01) added `goal_frequency`; `create_category` and
+`update_category` now take `goalFrequency` (monthly / weekly / yearly) and
+reject it client-side without `goalTarget` or alongside `goalTargetDate`, the
+two combinations the API refuses. The 1.84 `internal` flag is surfaced on
+categories and groups in `list_categories`, `search_categories`, and every
+`formatCategory` result. (2) The tool list a client loads every turn was 92 KB
+(about 23K tokens). The seven longest descriptions were cut to their operative
+content, the placeholder output schema lost its per-tool description string,
+and the list now measures 85 KB. (3) The server sends an `instructions` block at
+initialize carrying the rules clients most often get wrong; the long form stays
+in the `ynab://guide/*` resources. (4) Row caps close the timeout class that
+prompted the earlier handoff: `get_transactions` stops at 500 non-delta rows
+(`limit` up to 2000, `offset` to page) and returns a paged object only when
+capped or paged, so the bare-array shape survives for small results;
+`export_transactions` keeps the newest `maxRows` and reports truncation in a
+second text block; `review_unapproved` degrades full -> compact -> summary past
+`maxTransactions` (default 400) and reports `mode` plus a `notice`. (5) The
+Worker's `sharp` override moved 0.35.3 -> 0.35.4, clearing Dependabot alert 27
+(libheif advisories in a transitive miniflare dependency).
+
+**Decisions made**: Kept an output schema on every tool because the README
+records "structured contracts for app clients" as a deliberate decision;
+shrinking it beat removing it. Trimmed descriptions rather than rewriting all
+63, because input schemas, not descriptions, are most of the payload; the
+remaining reduction would need per-field description cuts and was left for a
+later pass. Caps change response shape only when they bite, and delta requests
+are never capped because truncating a delta would desynchronise
+`server_knowledge`.
+
+**Verification**: `test:unit` 76/76 (7 new: goal-frequency rules and both
+category writes with a mocked fetch, `capRows`, `reviewResponseMode`, the
+`get_transactions` cap and delta bypass, export truncation, instructions
+present). `test:safety` passes with new assertions for `limit` and
+`goalFrequency`. Worker tests 25/25 with `sharp@0.35.4`; wrangler dry-run
+builds; `release:check` 26/26. Tool-list payload measured before and after with
+a local MCP client: 92,240 -> 85,078 bytes.
+
+**Left off at**: See the release note appended below.
+
+**Open questions**: Still open from 2026-09-08 - the amesvt.com rate-limit rule
+name. NEW - the tool list is still about 21K tokens; the next cut is the
+repeated per-field descriptions (for example `budgetId` appears on 60 tools).
+
+---
+
 ## 2026-09-14 - Added transaction search and a transfer convenience from a live triage
 
 **What changed**: Three connector findings from a live session on 2026-09-14
