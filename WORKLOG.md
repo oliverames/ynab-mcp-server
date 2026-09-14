@@ -40,7 +40,17 @@ present). `test:safety` passes with new assertions for `limit` and
 builds; `release:check` 26/26. Tool-list payload measured before and after with
 a local MCP client: 92,240 -> 85,078 bytes.
 
-**Left off at**: See the release note appended below.
+**Left off at**: Released as v5.4.0. `./publish.sh minor` published
+`@oliverames/mcp-server-for-ynab@5.4.0`; the trailing registry check failed on
+npm propagation lag again (about four minutes this time) and passed on re-run.
+Bump commit `a061c23`, unsigned annotated tag `v5.4.0`, Release workflow green
+with `mcp-server-for-ynab-5.4.0.mcpb`. Worker deployed as version `99713eb3` to
+`ynab.amesvt.com` with the same 1Password deploy token as 5.3.0. Verified the
+deployed bundle and the npm tarball both carry `version: "5.4.0"`,
+`goal_frequency`, the instructions block, and the row-cap helper; live `/mcp`
+returns 401 unauthenticated. Dependabot had not yet re-evaluated alert 27 at
+push time; it should close on its next scan of `worker/package-lock.json` now
+that the override pins `sharp@0.35.4`.
 
 **Open questions**: Still open from 2026-09-08 - the amesvt.com rate-limit rule
 name. NEW - the tool list is still about 21K tokens; the next cut is the
