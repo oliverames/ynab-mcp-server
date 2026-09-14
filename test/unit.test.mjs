@@ -18,6 +18,10 @@ const {
   normalizeTransactionId,
   mapTransactionInput,
   mapTransactionUpdate,
+  findTransferAccount,
+  transferInputMismatch,
+  transactionMatchesSearch,
+  searchTransactionsPage,
   transactionUpdateMismatches,
   updateFieldMatches,
   parseSimpleTomlSections,
@@ -850,5 +854,248 @@ test("write tool schemas enforce YNAB's documented field lengths", () => {
   assert.throws(
     () => parse("update_transaction", { transactionId: "t1", memo: "m".repeat(501) }),
     /Invalid input for update_transaction: memo/,
+  );
+});
+
+// --- search_transactions and transfer convenience (2026-09-14) ---
+
+const searchRows = [
+  { id: "t1", date: "2026-09-01", amount: -45.2, payee_name: "Chase Card", memo: "September payment", import_payee_name_original: "CHASE CREDIT CRD AUTOPAY", account_name: "Checking", category_name: null, deleted: false },
+  { id: "t2", date: "2026-09-03", amount: -12.34, payee_name: "Onion River Co-op", memo: null, import_payee_name_original: "AplPay LS ONION RIVEMONTPELIER VT", account_name: "Checking", category_name: "Groceries", deleted: false },
+  { id: "t3", date: "2026-09-05", amount: 12.34, payee_name: "Refund", memo: "co-op return", account_name: "Checking", category_name: "Groceries", deleted: false },
+  { id: "t4", date: "2026-09-06", amount: -99, payee_name: "Split Store", memo: null, account_name: "Card", category_name: "Split", subtransactions: [{ amount: -50, memo: "batteries", category_name: "Household" }, { amount: -49, payee_name: "Hidden Payee", category_name: "Gifts" }], deleted: false },
+  { id: "t5", date: "2026-09-07", amount: -45.2, payee_name: "Chase Card", memo: "deleted row", account_name: "Checking", deleted: true },
+];
+
+test("transactionMatchesSearch covers payee, raw import string, memo, and split rows", () => {
+  assert.equal(transactionMatchesSearch(searchRows[0], { query: "chase" }), true);
+  assert.equal(transactionMatchesSearch(searchRows[1], { query: "MONTPELIER" }), true);
+  assert.equal(transactionMatchesSearch(searchRows[2], { query: "co-op return" }), true);
+  assert.equal(transactionMatchesSearch(searchRows[3], { query: "batteries" }), true);
+  assert.equal(transactionMatchesSearch(searchRows[3], { query: "hidden payee" }), true);
+  assert.equal(transactionMatchesSearch(searchRows[3], { query: "chase" }), false);
+});
+
+test("transactionMatchesSearch matches amounts on absolute value with half-cent tolerance", () => {
+  assert.equal(transactionMatchesSearch(searchRows[1], { amount: 12.34 }), true);
+  assert.equal(transactionMatchesSearch(searchRows[2], { amount: -12.34 }), true);
+  assert.equal(transactionMatchesSearch(searchRows[1], { amount: 12.35 }), false);
+  // Amount and query combine with AND.
+  assert.equal(transactionMatchesSearch(searchRows[1], { amount: 12.34, query: "refund" }), false);
+  assert.equal(transactionMatchesSearch(searchRows[2], { amount: 12.34, query: "refund" }), true);
+});
+
+test("searchTransactionsPage skips deleted rows, sorts newest-first, and paginates", () => {
+  const all = searchTransactionsPage(searchRows, { query: "e", limit: 2 });
+  // t1 (Chase), t2 (River), t3 (Refund), t4 (Store) all match; t5 is deleted.
+  assert.equal(all.total_matches, 4);
+  assert.equal(all.returned, 2);
+  assert.deepEqual(all.transactions.map((t) => t.id), ["t4", "t3"]);
+  assert.equal(all.has_more, true);
+  assert.equal(all.next_offset, 2);
+
+  const next = searchTransactionsPage(searchRows, { query: "e", limit: 2, offset: all.next_offset });
+  assert.deepEqual(next.transactions.map((t) => t.id), ["t2", "t1"]);
+  assert.equal(next.has_more, false);
+  assert.equal(next.next_offset, null);
+
+  const byAmount = searchTransactionsPage(searchRows, { amount: 45.2 });
+  assert.deepEqual(byAmount.transactions.map((t) => t.id), ["t1"]);
+});
+
+const accounts = [
+  { id: "a-check", name: "Checking", transfer_payee_id: "tp-check", deleted: false },
+  { id: "a-visa", name: "Chase Sapphire Visa", transfer_payee_id: "tp-visa", deleted: false },
+  { id: "a-amex", name: "Chase Freedom", transfer_payee_id: "tp-freedom", deleted: false },
+  { id: "a-old", name: "Old Visa", transfer_payee_id: "tp-old", deleted: true },
+];
+
+test("findTransferAccount resolves by id, exact name, or unique partial name", () => {
+  assert.equal(findTransferAccount(accounts, { transferToAccountId: "a-visa" }).transfer_payee_id, "tp-visa");
+  assert.equal(findTransferAccount(accounts, { transferToAccountName: "checking" }).id, "a-check");
+  assert.equal(findTransferAccount(accounts, { transferToAccountName: "sapphire" }).id, "a-visa");
+  // Exact match wins over a partial match on another account.
+  assert.equal(findTransferAccount(accounts, { transferToAccountName: "Chase Freedom" }).id, "a-amex");
+});
+
+test("findTransferAccount rejects unknown, ambiguous, and deleted targets with guidance", () => {
+  assert.throws(() => findTransferAccount(accounts, { transferToAccountId: "nope" }), /does not match any account/);
+  assert.throws(() => findTransferAccount(accounts, { transferToAccountName: "chase" }), /ambiguous \(Chase Sapphire Visa, Chase Freedom\)/);
+  assert.throws(() => findTransferAccount(accounts, { transferToAccountName: "Old Visa" }), /does not match any account\. Accounts: Checking/);
+  assert.throws(() => findTransferAccount(accounts, {}), /Provide transferToAccountId or transferToAccountName/);
+});
+
+test("transferInputMismatch forbids mixing a transfer target with a payee", () => {
+  assert.equal(transferInputMismatch({ accountId: "a", payeeName: "Store" }), null);
+  assert.equal(transferInputMismatch({ accountId: "a", transferToAccountName: "Checking" }), null);
+  assert.match(transferInputMismatch({ transferToAccountId: "x", payeeName: "Transfer : Checking" }), /do not pass payeeId or payeeName/);
+  assert.match(transferInputMismatch({ transferToAccountId: "x", transferToAccountName: "y" }), /not both/);
+});
+
+test("create_transaction resolves transferToAccountName into the destination transfer payee", async (t) => {
+  const instance = createYnabServer({
+    hasCredentials: true,
+    writesEnabled: true,
+    journal: null,
+    getAccessToken: async () => "unit-token",
+    defaultBudgetId: "plan-1",
+  });
+  const calls = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    const u = String(url);
+    calls.push({ url: u, method: init.method ?? "GET", body: init.body ? JSON.parse(init.body) : null });
+    if (u.includes("/accounts")) {
+      return new Response(JSON.stringify({ data: { accounts } }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (u.endsWith("/transactions") && init.method === "POST") {
+      const body = JSON.parse(init.body).transaction;
+      return new Response(JSON.stringify({ data: { transaction: {
+        id: "new-1", date: body.date, amount: body.amount, account_id: body.account_id, account_name: "Checking",
+        payee_id: body.payee_id, payee_name: "Transfer : Chase Sapphire Visa", transfer_account_id: "a-visa",
+        cleared: "uncleared", approved: true, deleted: false, subtransactions: [],
+      } } }), { status: 201, headers: { "content-type": "application/json" } });
+    }
+    throw new Error(`unexpected request ${init.method ?? "GET"} ${u}`);
+  };
+  t.after(() => { globalThis.fetch = realFetch; });
+
+  const result = await instance.internals.invokeRegisteredTool("create_transaction", {
+    accountId: "a-check", date: "2026-09-14", amount: -250, transferToAccountName: "sapphire", memo: "card payment",
+  });
+  assert.equal(result.isError ?? false, false, result.content?.[0]?.text);
+  const created = JSON.parse(result.content[0].text);
+  assert.equal(created.payee_id, "tp-visa");
+  assert.equal(created.transfer_account_id, "a-visa");
+
+  const post = calls.find((c) => c.method === "POST");
+  assert.equal(post.body.transaction.payee_id, "tp-visa");
+  assert.equal(post.body.transaction.payee_name, undefined);
+  assert.equal("transferToAccountName" in post.body.transaction, false);
+  assert.equal(calls.filter((c) => c.url.includes("/accounts")).length, 1);
+});
+
+test("create_transactions fetches accounts once for a batch and rejects a transfer paired with a payee", async (t) => {
+  const instance = createYnabServer({
+    hasCredentials: true,
+    writesEnabled: true,
+    journal: null,
+    getAccessToken: async () => "unit-token",
+    defaultBudgetId: "plan-1",
+  });
+  const calls = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    const u = String(url);
+    calls.push({ url: u, method: init.method ?? "GET" });
+    if (u.includes("/accounts")) {
+      return new Response(JSON.stringify({ data: { accounts } }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (init.method === "POST") {
+      const rows = JSON.parse(init.body).transactions;
+      return new Response(JSON.stringify({ data: { transactions: rows.map((r, i) => ({
+        id: `n${i}`, date: r.date, amount: r.amount, account_id: r.account_id, payee_id: r.payee_id, deleted: false, subtransactions: [],
+      })), duplicate_import_ids: [] } }), { status: 201, headers: { "content-type": "application/json" } });
+    }
+    throw new Error(`unexpected request ${u}`);
+  };
+  t.after(() => { globalThis.fetch = realFetch; });
+
+  const ok = await instance.internals.invokeRegisteredTool("create_transactions", { transactions: [
+    { accountId: "a-check", date: "2026-09-14", amount: -100, transferToAccountId: "a-visa" },
+    { accountId: "a-check", date: "2026-09-14", amount: -50, transferToAccountName: "Chase Freedom" },
+    { accountId: "a-check", date: "2026-09-14", amount: -5, payeeName: "Coffee" },
+  ] });
+  assert.equal(ok.isError ?? false, false, ok.content?.[0]?.text);
+  const body = JSON.parse(ok.content[0].text);
+  assert.deepEqual(body.created.map((c) => c.payee_id), ["tp-visa", "tp-freedom", null]);
+  assert.equal(calls.filter((c) => c.url.includes("/accounts")).length, 1);
+
+  const bad = await instance.internals.invokeRegisteredTool("create_transactions", { transactions: [
+    { accountId: "a-check", date: "2026-09-14", amount: -100, transferToAccountId: "a-visa", payeeName: "Transfer : Chase Sapphire Visa" },
+  ] });
+  assert.equal(bad.isError, true);
+  assert.match(bad.content[0].text, /do not pass payeeId or payeeName/);
+  // No write reached YNAB for the rejected batch.
+  assert.equal(calls.filter((c) => c.method === "POST").length, 1);
+});
+
+test("create_transaction surfaces the transfer hint on YNAB's internal-payee rejection", async (t) => {
+  const instance = createYnabServer({
+    hasCredentials: true,
+    writesEnabled: true,
+    journal: null,
+    getAccessToken: async () => "unit-token",
+    defaultBudgetId: "plan-1",
+  });
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({ error: {
+    id: "400", name: "bad_request", detail: "payee name must not start with an internal payee name",
+  } }), { status: 400, headers: { "content-type": "application/json" } });
+  t.after(() => { globalThis.fetch = realFetch; });
+
+  const result = await instance.internals.invokeRegisteredTool("create_transaction", {
+    accountId: "a-check", date: "2026-09-14", amount: -250, payeeName: "Transfer : Chase Sapphire Visa",
+  });
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text, /pass transferToAccountId \(or transferToAccountName\)/);
+});
+
+test("search_transactions filters server-side and pages the results", async (t) => {
+  const instance = createYnabServer({
+    hasCredentials: true,
+    writesEnabled: false,
+    journal: null,
+    getAccessToken: async () => "unit-token",
+    defaultBudgetId: "plan-1",
+  });
+  const requests = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    requests.push(String(url));
+    const rows = searchRows.map((r) => ({ ...r, amount: Math.round(r.amount * 1000), account_id: "a-check", cleared: "cleared", approved: true }));
+    return new Response(JSON.stringify({ data: { transactions: rows } }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  t.after(() => { globalThis.fetch = realFetch; });
+
+  const result = await instance.internals.invokeRegisteredTool("search_transactions", { query: "chase", sinceDate: "2026-09-01", limit: 10 });
+  assert.equal(result.isError ?? false, false, result.content?.[0]?.text);
+  const body = JSON.parse(result.content[0].text);
+  assert.equal(body.scanned, 5);
+  assert.equal(body.total_matches, 1);
+  assert.deepEqual(body.transactions.map((x) => x.id), ["t1"]);
+  assert.equal(body.transactions[0].amount, -45.2);
+  assert.match(requests[0], /\/plans\/plan-1\/transactions\?since_date=2026-09-01/);
+
+  const byAmount = await instance.internals.invokeRegisteredTool("search_transactions", { amount: 12.34, limit: 1 });
+  const page = JSON.parse(byAmount.content[0].text);
+  assert.equal(page.total_matches, 2);
+  assert.deepEqual(page.transactions.map((x) => x.id), ["t3"]);
+  assert.equal(page.next_offset, 1);
+
+  const empty = await instance.internals.invokeRegisteredTool("search_transactions", {});
+  assert.equal(empty.isError, true);
+  assert.match(empty.content[0].text, /Provide a query, an amount, or both/);
+});
+
+test("tool-execute validation names the accepted arguments so a wrong key is self-correcting", () => {
+  assert.throws(
+    () => parseToolExecuteInput("get_transaction", { id: "abc" }),
+    /Invalid input for get_transaction: transactionId: .*Accepted arguments: budgetId, transactionId\./,
+  );
+  assert.throws(
+    () => parseToolExecuteInput("search_transactions", { query: "x", limit: 501 }),
+    /Invalid input for search_transactions: limit/,
+  );
+  // The transfer fields are part of both create schemas.
+  const instance = createYnabServer({ hasCredentials: true, writesEnabled: true, journal: null });
+  const parse = instance.internals.parseToolExecuteInput;
+  assert.deepEqual(
+    parse("create_transaction", { accountId: "a", date: "2026-09-14", amount: -1, transferToAccountName: "Checking" }).transferToAccountName,
+    "Checking",
+  );
+  assert.equal(
+    parse("create_transactions", { transactions: [{ accountId: "a", date: "2026-09-14", amount: -1, transferToAccountId: "b" }] }).transactions[0].transferToAccountId,
+    "b",
   );
 });

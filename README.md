@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <code>58 tools with writes enabled</code> &bull;
+  <code>59 tools with writes enabled</code> &bull;
   <code>6 guided prompts</code> &bull;
   <code>undo journal</code> &bull;
   <code>YNAB API v1.85</code> &bull;
@@ -307,6 +307,8 @@ YNAB_API_TOKEN=your-token-here npm run smoke:review-unapproved -- --published
 | "How much did I spend on groceries this month?" | `search_categories` → `get_month_category` |
 | "Show me all unapproved transactions" | `review_unapproved` groups by readiness |
 | "Log a $50 Costco trip under groceries" | `search_payees` → `search_categories` → `create_transaction` |
+| "Record my $250 Visa payment from checking" | `create_transaction` with `transferToAccountName: "Visa"` (the server resolves the transfer payee) |
+| "Find the $12.34 charge from last week" | `search_transactions` with `amount: 12.34` (or `query: "onion river"`) |
 | "Set up monthly $1,500 rent on the 1st" | `create_scheduled_transaction` with `monthly` frequency |
 | "Move $200 from emergency fund to dining" | `search_categories` → `update_month_category` (x2) |
 | "Categorize all my Amazon orders from this week" | `get_transactions` (filtered) → `update_transactions` (batch) |
@@ -324,7 +326,7 @@ YNAB_API_TOKEN=your-token-here npm run smoke:review-unapproved -- --published
 
 ## Features
 
-**YNAB API v1.85 coverage** with 58 tools when writes are enabled, plus MCP prompts and resources:
+**YNAB API v1.85 coverage** with 59 tools when writes are enabled, plus MCP prompts and resources:
 
 | Resource | Tools | Capabilities |
 |----------|-------|-------------|
@@ -359,7 +361,8 @@ Beyond tools, the server ships **6 MCP prompts** (guided workflows: monthly revi
 - **Bulk operations** - `create_transactions` and `update_transactions` handle arrays in a single API call. Bulk updates can look transactions up by `id` or by `importId`.
 - **Verified batch updates** - `update_transactions` refetches the whole batch in a single list request after the bulk API call (instead of one request per transaction, which used to consume the shared rate budget on large batches), retries mismatched fields once through single-transaction updates, and returns a `verification` block so approval counts cannot hide failed category writes.
 - **Fetch-then-merge updates** - scheduled transaction updates (which use PUT semantics) automatically fetch the current state and merge your changes, so you only specify what changed.
-- **Fuzzy search** - `search_categories` and `search_payees` do case-insensitive partial matching across all entries. Category search covers both the category name and its group name, tokenizes multi-word queries and OR-matches them (so `gym fitness membership` still lands), ranks whole-phrase and name hits above single-token and group-only hits, and reports `matched_on` / `matched_terms` per result. It does no synonym expansion — an empty result says so and points at `list_categories`.
+- **Transfer convenience** - `create_transaction` and `create_transactions` accept `transferToAccountId` or `transferToAccountName` and resolve the destination account's `transfer_payee_id` themselves, so a credit card payment is one call with no payee lookup. YNAB's own error for a `Transfer : …` payee name now carries the same pointer.
+- **Fuzzy search** - `search_categories` and `search_payees` do case-insensitive partial matching across all entries, and `search_transactions` does the same over transactions (payee, raw import string, memo, account, category, split rows) with an optional absolute-amount match and `limit` / `offset` paging. Category search covers both the category name and its group name, tokenizes multi-word queries and OR-matches them (so `gym fitness membership` still lands), ranks whole-phrase and name hits above single-token and group-only hits, and reports `matched_on` / `matched_terms` per result. It does no synonym expansion — an empty result says so and points at `list_categories`.
 - **Decoded text** - YNAB stores some strings HTML-escaped (bank imports are the usual source). Names, memos and notes are entity-decoded on the way out, so a payee reads as `B&H Photo Video` rather than `B&amp;H Photo Video`, and name search matches either spelling. Writes send exactly what the caller supplied.
 - **Approval workflow with anomaly flags** - `review_unapproved` scans the full transaction history for unapproved entries (YNAB's API defaults to the last year, which would silently hide older stragglers) and groups transactions into "ready to approve" (categorized, split, or transfer) and "needs attention" (uncategorized), and attaches a `flags` array to each transaction surfacing anomalies: `manually_entered` (not bank-imported), `match_broken` (stale match reference), `scheduled_transaction_realized`, `new_payee`, `no_prior_amount_match` (novel amount for this payee), and `category_drift:was_X` (payee categorized differently in the prior 60 days). Group-level flags aggregate the union of all transaction flags. Bulk approval requires `confirmed: true`.
 - **Honest group headers** - a `by_payee` group describes all of its rows, not just the first one. Groups carry `category_names` (every distinct category in the group) plus `mixed_categories`, and `category_name` is `null` whenever the group spans more than one category. `total` is the net; a group whose rows run both directions also carries `mixed_amount_signs: true` with `inflow_total` and `outflow_total`, so a net that nets refunds against charges cannot be read as a single small charge.
@@ -448,10 +451,11 @@ Read tools are available by default. Tools that create, update, import, or delet
 
 | Tool | Description |
 |------|-------------|
-| `get_transactions` | Get transactions with filters: by account, category, payee, month, status (`unapproved`/`uncategorized`), `sinceDate`, and `untilDate` |
-| `get_transaction` | Get a single transaction by ID (includes subtransactions). Auto-handles composite scheduled-transaction IDs like `uuid_YYYY-MM-DD`; if the underlying matched transaction has been deleted, falls back to returning the active scheduled template wrapped as `{ resource_type: "scheduled_transaction", ... }`. |
-| `create_transaction` | Write tool: create a transaction with optional split (subtransactions must sum to total) |
-| `create_transactions` | Write tool: bulk create multiple transactions in a single API call (supports split transactions) |
+| `get_transactions` | Get transactions with filters: by account, category, payee, month, status (`unapproved`/`uncategorized`), `sinceDate`, and `untilDate`. Unfiltered on a busy budget it can return more than a client tool timeout allows; prefer `search_transactions` when you are looking for specific rows. |
+| `search_transactions` | Server-side search with pagination: `query` is a case-insensitive substring match over payee name, raw bank import string, memo, account, category, and split rows; `amount` matches on absolute value (12.34 finds a -12.34 outflow). Optional `accountId` / `sinceDate` / `untilDate` bound the scan; `limit` (default 50) and `offset` page through `total_matches`, newest first, with `next_offset` for the following page. |
+| `get_transaction` | Get a single transaction by ID. The argument is `transactionId`, not `id` (includes subtransactions). Auto-handles composite scheduled-transaction IDs like `uuid_YYYY-MM-DD`; if the underlying matched transaction has been deleted, falls back to returning the active scheduled template wrapped as `{ resource_type: "scheduled_transaction", ... }`. |
+| `create_transaction` | Write tool: create a transaction with optional split (subtransactions must sum to total). For a transfer (including a credit card payment) pass `transferToAccountId` or `transferToAccountName` instead of a payee; the server resolves the destination account's internal transfer payee, since YNAB rejects a literal `Transfer : …` payee name. |
+| `create_transactions` | Write tool: bulk create multiple transactions in a single API call (supports split transactions and the same `transferToAccountId` / `transferToAccountName` convenience per entry) |
 | `update_transaction` | Write tool: partial update - only specified fields change. Can convert a non-split transaction into a split via `subtransactions`. Composite scheduled-transaction IDs (`uuid_YYYY-MM-DD`) are writable — see below. |
 | `update_transactions` | Write tool: batch update multiple transactions at once (look up each entry by `id` or `importId`), then verify requested fields persisted using a single batch refetch. Returns `newly_approved_count` beside `approved_count`. Pass `returnSummary: true` for compact counts instead of full objects on large batches (avoids overflowing the tool-result size limit). |
 | `approve_transactions` | Write tool: approve unapproved transactions in bulk by filter (`payeeId` / `categoryId` / `accountId`) without hand-listing IDs. Skips uncategorized transactions by default, requires `confirmed: true`, and supports `expectedMatchedCount`. |
@@ -756,7 +760,7 @@ YNAB_API_TOKEN=your-token YNAB_BUDGET_ID=your-budget-id npm run smoke:review-una
 YNAB_API_TOKEN=your-token YNAB_BUDGET_ID=your-budget-id YNAB_ALLOW_WRITES=1 npm run smoke:batch-verify -- --published
 ```
 
-`smoke:list-tools` verifies that high-value read tools such as `review_unapproved`, `get_transactions`, `search_categories`, and `search_payees` are present. When `YNAB_ALLOW_WRITES=1` is set, it also verifies `update_transactions`. `smoke:review-unapproved` calls `review_unapproved` with `summary: true` and prints only aggregate counts. `smoke:batch-verify` creates a temporary transaction, uses `update_transactions` to categorize and approve it in one call, refetches it through the MCP server, and deletes it afterward.
+`smoke:list-tools` verifies that high-value read tools such as `review_unapproved`, `get_transactions`, `search_transactions`, `search_categories`, and `search_payees` are present. When `YNAB_ALLOW_WRITES=1` is set, it also verifies `update_transactions`. `smoke:review-unapproved` calls `review_unapproved` with `summary: true` and prints only aggregate counts. `smoke:batch-verify` creates a temporary transaction, uses `update_transactions` to categorize and approve it in one call, refetches it through the MCP server, and deletes it afterward.
 
 ---
 

@@ -1,5 +1,53 @@
 # Worklog
 
+## 2026-09-14 - Added transaction search and a transfer convenience from a live triage
+
+**What changed**: Three connector findings from a live session on 2026-09-14
+that was recording credit card payments through `ynab.amesvt.com/mcp`. First,
+an unfiltered `get_transactions` on a real budget exceeded the client's ~120s
+tool timeout, forcing a `search_payees` plus per-payee pull workaround. New
+`search_transactions` fetches the (optionally account- and date-bounded) list
+from YNAB and filters it server-side: `query` is a case-insensitive substring
+match over payee name, raw bank import string, memo, account, category and
+split rows; `amount` matches on absolute value with half-cent tolerance; results
+are newest-first and page through `limit` / `offset` with `next_offset`.
+Second, `payeeName: "Transfer : <Account>"` is rejected by YNAB with
+`payee name must not start with an internal payee name`, and the
+`transfer_payee_id` workaround was undiscoverable. `create_transaction` and
+`create_transactions` now accept `transferToAccountId` or
+`transferToAccountName`, fetch the account list once per call, and set the
+destination account's transfer payee; mixing a transfer target with a payee is
+rejected before any write. YNAB's own rejection now carries an error hint
+pointing at the new fields. Third, `get_transaction` called with `id` failed
+validation with no hint. The tool description and README now name
+`transactionId`, and `parseToolExecuteInput` appends the accepted argument list
+to every validation failure so a guessed key is self-correcting.
+
+**Decisions made**: Server-side search rather than pagination on
+`get_transactions`, because the timeout came from payload size rather than the
+YNAB call and a filtered page is what the client actually wanted. Amount
+matching ignores sign so a caller who saw "$12.34" on a statement does not have
+to know the outflow convention. Name resolution prefers an exact match, then a
+unique partial match, and reports the candidates when ambiguous rather than
+guessing. Kept the transfer convenience to the two create tools named in the
+handoff; scheduled transactions still take `transfer_payee_id`.
+
+**Verification**: `npm run test:unit` 69/69 (11 new tests, including
+handler-level tests with a mocked fetch for both create tools, the error hint,
+and the search page shape). `npm run test:safety` passes with
+`search_transactions` in the required read-tool set. `smoke:list-tools` lists
+63 tools with writes enabled (was 62). Worker tests 25/25, `wrangler deploy
+--dry-run` builds, `release:check` 26/26 after the README count moved to 59.
+
+**Left off at**: Committed and pushed to `main`. Not deployed to the Cloudflare
+Worker and not published to npm; both wait on an explicit release decision
+(`publish.sh minor`, then `wrangler deploy` from `worker/`).
+
+**Open questions**: Still open from 2026-09-08 - the amesvt.com rate-limit rule
+name and the Dependabot alerts (partly addressed by #21).
+
+---
+
 ## 2026-09-08 - Unblocked non-browser MCP clients at the Cloudflare edge
 
 **What changed**: A third-party client (Meta's Muse) could not reach

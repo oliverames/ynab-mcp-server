@@ -706,6 +706,90 @@ function mapTransactionUpdate(t) {
   return out;
 }
 
+// Transfer convenience for create_transaction(s). YNAB models a transfer as a
+// transaction whose payee is the destination account's internal transfer
+// payee; the API rejects the visible "Transfer : <Account>" name, and the
+// transfer_payee_id workaround is easy to miss. Callers name the account
+// instead and the server resolves the payee.
+function findTransferAccount(accounts, { transferToAccountId, transferToAccountName } = {}) {
+  const open = (accounts ?? []).filter((a) => !a.deleted);
+  if (transferToAccountId) {
+    const byId = open.find((a) => a.id === transferToAccountId);
+    if (!byId) throw new Error(`transferToAccountId ${transferToAccountId} does not match any account in this budget. Use list_accounts to find account IDs.`);
+    return byId;
+  }
+  const wanted = normalizeSearchText(transferToAccountName ?? "");
+  if (!wanted) throw new Error("Provide transferToAccountId or transferToAccountName.");
+  const exact = open.filter((a) => normalizeSearchText(a.name) === wanted);
+  const candidates = exact.length > 0 ? exact : open.filter((a) => normalizeSearchText(a.name).includes(wanted));
+  if (candidates.length === 1) return candidates[0];
+  if (candidates.length === 0) {
+    throw new Error(`transferToAccountName "${transferToAccountName}" does not match any account. Accounts: ${open.map((a) => a.name).join(", ")}.`);
+  }
+  throw new Error(`transferToAccountName "${transferToAccountName}" is ambiguous (${candidates.map((a) => a.name).join(", ")}). Use the full account name or transferToAccountId.`);
+}
+
+function transferInputMismatch(t) {
+  const hasTransfer = Boolean(t.transferToAccountId || t.transferToAccountName);
+  if (!hasTransfer) return null;
+  if (t.transferToAccountId && t.transferToAccountName) {
+    return "Provide either transferToAccountId or transferToAccountName, not both.";
+  }
+  if (t.payeeId || t.payeeName) {
+    return "A transfer's payee is the destination account; do not pass payeeId or payeeName together with transferToAccountId/transferToAccountName.";
+  }
+  return null;
+}
+
+// Server-side text/amount search over already-fetched transactions. Matching
+// covers the fields a person recognises a row by: payee (cleaned and raw
+// import string), memo, account, category, and split rows' payee/memo.
+// Amounts compare on absolute value so 12.34 finds a -12.34 outflow.
+const TRANSACTION_SEARCH_TEXT_FIELDS = [
+  "payee_name",
+  "memo",
+  "import_payee_name",
+  "import_payee_name_original",
+  "account_name",
+  "category_name",
+];
+
+function transactionMatchesSearch(t, { query, amount, amountTolerance = 0.005 } = {}) {
+  if (amount !== undefined && amount !== null) {
+    const rowAmount = Math.abs(Number(t.amount ?? 0));
+    if (Math.abs(rowAmount - Math.abs(amount)) > amountTolerance) return false;
+  }
+  const q = normalizeSearchText(query ?? "");
+  if (!q) return true;
+  const haystack = [];
+  for (const field of TRANSACTION_SEARCH_TEXT_FIELDS) {
+    if (t[field]) haystack.push(t[field]);
+  }
+  for (const s of t.subtransactions ?? []) {
+    if (s.payee_name) haystack.push(s.payee_name);
+    if (s.memo) haystack.push(s.memo);
+    if (s.category_name) haystack.push(s.category_name);
+  }
+  return haystack.some((value) => normalizeSearchText(value).includes(q));
+}
+
+function searchTransactionsPage(transactions, { query, amount, limit = 50, offset = 0 } = {}) {
+  const matches = (transactions ?? [])
+    .filter((t) => !t.deleted && transactionMatchesSearch(t, { query, amount }))
+    .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+  const page = matches.slice(offset, offset + limit);
+  const nextOffset = offset + page.length;
+  return {
+    total_matches: matches.length,
+    offset,
+    limit,
+    returned: page.length,
+    has_more: nextOffset < matches.length,
+    next_offset: nextOffset < matches.length ? nextOffset : null,
+    transactions: page,
+  };
+}
+
 const TRANSACTION_UPDATE_VERIFICATION_FIELDS = [
   ["accountId", "account_id"],
   ["date", "date"],
@@ -998,6 +1082,14 @@ const ERROR_HINTS = [
       "HTTP 401 not_authorized: the access token is missing, invalid, revoked, or expired. Generate a fresh token " +
       "in YNAB Developer Settings and update your configured credential source (YNAB_API_TOKEN, YNAB_API_TOKEN_FILE, " +
       "or YNAB_OP_PATH), or reconnect the hosted connector from your MCP client.",
+  },
+  {
+    match: /must not start with an internal payee name/i,
+    hint:
+      "YNAB rejects 'Transfer : <Account>' as a payeeName because transfer payees are internal. To record a " +
+      "transfer, pass transferToAccountId (or transferToAccountName) on create_transaction / create_transactions " +
+      "and the server resolves the destination account's transfer_payee_id for you. Equivalently, pass that " +
+      "account's transfer_payee_id from list_accounts as payeeId.",
   },
   {
     match: /subtransactions cannot be updated on an existing split/i,
@@ -1316,7 +1408,10 @@ function parseToolExecuteInput(toolName, input) {
     const issues = parsed.error.issues
       .map((issue) => `${issue.path.join(".") || "(input)"}: ${issue.message}`)
       .join("; ");
-    throw new Error(`Invalid input for ${toolName}: ${issues}`);
+    // Name the accepted keys so a caller who guessed a field (id instead of
+    // transactionId) can correct it without another round trip.
+    const accepted = Object.keys(shape).join(", ");
+    throw new Error(`Invalid input for ${toolName}: ${issues}. Accepted arguments: ${accepted}.`);
   }
   return parsed.data;
 }
@@ -2200,9 +2295,62 @@ registerTool(
     })
 );
 
+// Resolve transferToAccountId/transferToAccountName on create inputs into
+// payee_id, fetching the account list once per call however many rows ask.
+async function resolveTransferPayees(bid, txns) {
+  for (const t of txns) {
+    const problem = transferInputMismatch(t);
+    if (problem) throw new Error(problem);
+  }
+  const wantsTransfer = txns.filter((t) => t.transferToAccountId || t.transferToAccountName);
+  if (wantsTransfer.length === 0) return txns;
+  const { data } = await api.accounts.getAccounts(bid);
+  return txns.map((t) => {
+    if (!t.transferToAccountId && !t.transferToAccountName) return t;
+    const account = findTransferAccount(data.accounts, t);
+    if (!account.transfer_payee_id) {
+      throw new Error(`Account "${account.name}" has no transfer payee; YNAB cannot receive transfers into it.`);
+    }
+    if (account.id === t.accountId) {
+      throw new Error(`Cannot transfer from account "${account.name}" to itself.`);
+    }
+    const { transferToAccountId, transferToAccountName, ...rest } = t;
+    return { ...rest, payeeId: account.transfer_payee_id };
+  });
+}
+
+registerTool(
+  "search_transactions",
+  { description: "Search transactions by text and/or amount, with pagination. The server fetches the (optionally account- and date-bounded) transaction list from YNAB and filters it before responding, so a busy budget returns a small page instead of a multi-megabyte dump that can exceed client tool timeouts. 'query' is a case-insensitive substring match over payee_name, import_payee_name_original (raw bank string), memo, account_name, category_name, and split rows' payee/memo/category. 'amount' matches on absolute value with half-cent tolerance, so 12.34 finds a -12.34 outflow. Results are newest-first; page with limit/offset using the returned next_offset. Provide at least one of query or amount.", inputSchema: {
+    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+    query: z.string().optional().describe("Text to find in payee, raw import payee, memo, account, or category (case-insensitive substring)"),
+    amount: z.number().optional().describe("Amount in dollars to match on absolute value (12.34 matches -12.34 and 12.34)"),
+    accountId: z.string().optional().describe("Restrict the search to one account"),
+    sinceDate: z.string().optional().describe("Only search transactions on or after this date (YYYY-MM-DD). If omitted, YNAB defaults to one year ago."),
+    untilDate: z.string().optional().describe("Only search transactions on or before this date (YYYY-MM-DD)"),
+    limit: z.number().int().min(1).max(500).optional().describe("Page size (default 50, max 500)"),
+    offset: z.number().int().nonnegative().optional().describe("Number of matches to skip (default 0); pass next_offset from the previous page"),
+  } },
+  ({ budgetId, query, amount, accountId, sinceDate, untilDate, limit = 50, offset = 0 }) =>
+    run(async () => {
+      if (!normalizeSearchText(query ?? "") && (amount === undefined || amount === null)) {
+        throw new Error("Provide a query, an amount, or both.");
+      }
+      const data = await fetchTransactions({ budgetId, sinceDate, untilDate, accountId });
+      const formatted = data.transactions.map(formatTransaction);
+      const page = searchTransactionsPage(formatted, { query, amount, limit, offset });
+      return ok({
+        query: query ?? null,
+        amount: amount ?? null,
+        scanned: formatted.length,
+        ...page,
+      });
+    })
+);
+
 registerTool(
   "get_transaction",
-  { description: "Get a single transaction by ID. Automatically handles composite scheduled-transaction IDs (e.g. uuid_YYYY-MM-DD): the date suffix is stripped before the lookup. If a composite ID's underlying matched transaction has been deleted, falls back to returning the active scheduled-transaction template wrapped in a marker shape { resource_type: 'scheduled_transaction', reason: 'composite_id_with_no_matched_transaction', scheduled_transaction, requested_id } so callers can distinguish the two return shapes. Non-composite IDs preserve strict behavior: a 404 still surfaces as resource_not_found.", inputSchema: {
+  { description: "Get a single transaction by ID. The argument is 'transactionId' (not 'id'). Automatically handles composite scheduled-transaction IDs (e.g. uuid_YYYY-MM-DD): the date suffix is stripped before the lookup. If a composite ID's underlying matched transaction has been deleted, falls back to returning the active scheduled-transaction template wrapped in a marker shape { resource_type: 'scheduled_transaction', reason: 'composite_id_with_no_matched_transaction', scheduled_transaction, requested_id } so callers can distinguish the two return shapes. Non-composite IDs preserve strict behavior: a 404 still surfaces as resource_not_found.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     transactionId: z.string().describe("Transaction ID"),
   } },
@@ -2242,13 +2390,15 @@ registerTool(
 
 registerTool(
   "create_transaction",
-  { description: "Create a new transaction. Amounts are in dollars (positive for inflows, negative for outflows). Note: future-dated transactions cannot be created here - use create_scheduled_transaction instead. For transfers between accounts, pass the destination account's transfer_payee_id (from list_accounts) as payeeId — do not pass a 'Transfer : ...' payee name. For manual entry of spend the bank will later import (checks, P2P), use cleared:'uncleared' and NO importId so the import matches instead of duplicating. Creation is journaled and reversible via undo_operation.", inputSchema: {
+  { description: "Create a new transaction. Amounts are in dollars (positive for inflows, negative for outflows). Note: future-dated transactions cannot be created here - use create_scheduled_transaction instead. For transfers between accounts (including credit card payments), pass transferToAccountId or transferToAccountName for the destination account and leave payeeId/payeeName unset; the server resolves the account's internal transfer payee. Passing a 'Transfer : ...' payee name is rejected by YNAB. For manual entry of spend the bank will later import (checks, P2P), use cleared:'uncleared' and NO importId so the import matches instead of duplicating. Creation is journaled and reversible via undo_operation.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     accountId: z.string().describe("Account ID"),
     date: z.string().describe("Transaction date (YYYY-MM-DD)"),
     amount: z.number().describe("Amount in dollars (negative for outflows, positive for inflows)"),
     payeeId: z.string().optional().describe("Payee ID"),
-    payeeName: z.string().max(200).optional().describe("Payee name (creates new payee if no payeeId)"),
+    payeeName: z.string().max(200).optional().describe("Payee name (creates new payee if no payeeId). Must not be a 'Transfer : ...' name; use transferToAccountId/transferToAccountName for transfers."),
+    transferToAccountId: z.string().optional().describe("Transfer convenience: ID of the destination account (from list_accounts). The server sets the payee to that account's transfer payee. Mutually exclusive with payeeId/payeeName."),
+    transferToAccountName: z.string().optional().describe("Transfer convenience: destination account name (case-insensitive; exact match preferred, unique partial match accepted). Mutually exclusive with payeeId/payeeName."),
     categoryId: z.string().optional().describe("Category ID"),
     memo: z.string().max(500).optional().describe("Transaction memo"),
     cleared: z.enum(["cleared", "uncleared", "reconciled"]).optional().describe("Cleared status"),
@@ -2260,8 +2410,9 @@ registerTool(
   ({ budgetId, ...txnFields }) =>
     run(async () => {
       const bid = resolveBudgetId(budgetId);
+      const [resolved] = await resolveTransferPayees(bid, [txnFields]);
       const { data } = await api.transactions.createTransaction(bid, {
-        transaction: mapTransactionInput(txnFields),
+        transaction: mapTransactionInput(resolved),
       });
       const created = formatTransaction(data.transaction);
       await appendUndoEntry({
@@ -2277,14 +2428,16 @@ registerTool(
 
 registerTool(
   "create_transactions",
-  { description: "Create multiple transactions at once. Amounts are in dollars. Returns created transactions and any duplicate import IDs. Future-dated transactions are not supported - use create_scheduled_transaction instead.", inputSchema: {
+  { description: "Create multiple transactions at once. Amounts are in dollars. Returns created transactions and any duplicate import IDs. Future-dated transactions are not supported - use create_scheduled_transaction instead. For transfers, set transferToAccountId or transferToAccountName on the entry instead of a payee; the server resolves the destination account's internal transfer payee.", inputSchema: {
     budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
     transactions: z.array(z.object({
       accountId: z.string().describe("Account ID"),
       date: z.string().describe("Transaction date (YYYY-MM-DD)"),
       amount: z.number().describe("Amount in dollars (negative for outflows, positive for inflows)"),
       payeeId: z.string().optional().describe("Payee ID"),
-      payeeName: z.string().max(200).optional().describe("Payee name (creates new payee if no payeeId)"),
+      payeeName: z.string().max(200).optional().describe("Payee name (creates new payee if no payeeId). Must not be a 'Transfer : ...' name; use transferToAccountId/transferToAccountName for transfers."),
+      transferToAccountId: z.string().optional().describe("Transfer convenience: ID of the destination account. Mutually exclusive with payeeId/payeeName."),
+      transferToAccountName: z.string().optional().describe("Transfer convenience: destination account name (case-insensitive). Mutually exclusive with payeeId/payeeName."),
       categoryId: z.string().optional().describe("Category ID"),
       memo: z.string().max(500).optional().describe("Transaction memo"),
       cleared: z.enum(["cleared", "uncleared", "reconciled"]).optional().describe("Cleared status"),
@@ -2297,8 +2450,9 @@ registerTool(
   ({ budgetId, transactions: txns }) =>
     run(async () => {
       const bid = resolveBudgetId(budgetId);
+      const resolved = await resolveTransferPayees(bid, txns);
       const { data } = await api.transactions.createTransactions(bid, {
-        transactions: txns.map(mapTransactionInput),
+        transactions: resolved.map(mapTransactionInput),
       });
       const created = data.transactions?.map(formatTransaction) ?? [];
       if (created.length > 0) {
@@ -3972,7 +4126,7 @@ const YNAB_WRITE_SAFETY_TEXT = `# Write Safety Rules for this server
 - After combined category+approval writes, check the returned verification block; require verification.failed to be empty. Do not use the approval-queue count as the only success check — approval can succeed while the category write did not persist.
 - Report newly_approved_count, not approved_count, when telling a user what you approved. approved_count includes rows that were already approved before the call; the two differ whenever a batch mixes approved and unapproved rows.
 - Recategorizing a transaction does not move budgeted dollars. To true-up the month, also call update_month_category (it sets an absolute value: compute old budgeted − amount and new budgeted + amount).
-- Transfers: use the destination account's transfer_payee_id as payeeId; do not invent a "Transfer : ..." payee name.
+- Transfers: pass transferToAccountId or transferToAccountName on create_transaction(s), or use the destination account's transfer_payee_id as payeeId; do not invent a "Transfer : ..." payee name.
 - Every transaction write is journaled locally; list_undo_history shows the journal and undo_operation reverses a journaled write.`;
 
 const YNAB_AUDIT_PATTERNS_TEXT = `# Common Audit Patterns
@@ -4076,6 +4230,10 @@ return {
     normalizeTransactionId,
     mapTransactionInput,
     mapTransactionUpdate,
+    findTransferAccount,
+    transferInputMismatch,
+    transactionMatchesSearch,
+    searchTransactionsPage,
     transactionUpdateMismatches,
     updateFieldMatches,
     parseSimpleTomlSections,
@@ -4145,6 +4303,10 @@ const {
   normalizeTransactionId,
   mapTransactionInput,
   mapTransactionUpdate,
+  findTransferAccount,
+  transferInputMismatch,
+  transactionMatchesSearch,
+  searchTransactionsPage,
   transactionUpdateMismatches,
   updateFieldMatches,
   buildYnabUrl,
@@ -4181,6 +4343,10 @@ export {
   normalizeTransactionId,
   mapTransactionInput,
   mapTransactionUpdate,
+  findTransferAccount,
+  transferInputMismatch,
+  transactionMatchesSearch,
+  searchTransactionsPage,
   transactionUpdateMismatches,
   updateFieldMatches,
   parseSimpleTomlSections,
