@@ -39,9 +39,19 @@ and the search page shape). `npm run test:safety` passes with
 63 tools with writes enabled (was 62). Worker tests 25/25, `wrangler deploy
 --dry-run` builds, `release:check` 26/26 after the README count moved to 59.
 
-**Left off at**: Committed and pushed to `main`. Not deployed to the Cloudflare
-Worker and not published to npm; both wait on an explicit release decision
-(`publish.sh minor`, then `wrangler deploy` from `worker/`).
+**Left off at**: Released as v5.3.0 the same day on Oliver's instruction.
+`./publish.sh minor` published `@oliverames/mcp-server-for-ynab@5.3.0`; its
+final `release:check:registry` step failed once only because npm had not yet
+propagated the new `latest` tag, and passed on a re-run a minute later. Commit
+`009b501` carries the bump, tag `v5.3.0` is unsigned annotated, and the Release
+workflow produced `mcp-server-for-ynab-5.3.0.mcpb`. The Worker deployed as
+version `d0dabe10` to `ynab.amesvt.com`; wrangler authenticated with the
+"Cloudflare Personal MCP Deploy" token from the 1Password Development vault
+(the service-account `op` needs `--vault Development`). Verified the bundled
+Worker and the published tarball both contain `search_transactions` and
+`version: "5.3.0"`; the live `/mcp` returns 401 unauthenticated as expected.
+Not verified through an OAuth-authenticated `tools/list` against the hosted
+connector, which needs a browser consent flow.
 
 **Open questions**: Still open from 2026-09-08 - the amesvt.com rate-limit rule
 name and the Dependabot alerts (partly addressed by #21).
