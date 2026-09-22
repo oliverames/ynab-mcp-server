@@ -4,7 +4,6 @@
 
 - Rename the amesvt.com Cloudflare rate-limit rule, still named "Rate limit YNAB MCP dynamic client registration" although it covers six hosts; the rename would not commit through the dashboard and needs doing by hand (since 2026-09-08) (unverified)
 - Per-connector rate-limit tuning needs a paid Cloudflare plan: the free plan caps period and mitigation at 10 seconds and allows one such rule per zone (since 2026-09-08)
-- Dependabot alert 27 (`sharp`, libheif advisories, `worker/package-lock.json`) was expected to close on the next scan after the 0.35.4 pin; it was still open on 2026-09-22 although the lock resolves `sharp@0.35.4`, the first patched version (since 2026-09-14; https://github.com/oliverames/ynab-mcp-server/security/dependabot/27)
 - Trim the repeated per-field input descriptions (for example `budgetId` on 60 tools); the tool list is still about 21K tokens (since 2026-09-14; https://github.com/oliverames/ynab-mcp-server/issues/23)
 - Add an OAuth-authenticated post-deploy smoke check; hosted deploys are verified only by rebuilding the bundle locally, and `tools/list` has not been checked through OAuth against the hosted connector (since 2026-09-14; https://github.com/oliverames/ynab-mcp-server/issues/24)
 - Run the decisive icon test (temporarily recolor `amesvt.com`'s favicon) to tell registrable-domain-only resolution from a domain-keyed Claude icon cache; Oliver chose to wait and re-check later (since 2026-07-30)
@@ -28,6 +27,12 @@
 - Create 1Password items for Meta Access Token, Threads Access Token, Sprout API Token/OAuth Client, and UniFi Controller credentials (other repos) (since 2026-04-06) (unverified)
 - Categorize the 20 uncategorized YNAB transactions identified in the 2026-04-06 review (since 2026-04-06) (unverified)
 - Monitor downstream effects of the `list_budgets` response shape change from array to object (since 2026-03-22) (unverified)
+
+## 2026-09-22 - Worklog compaction and stale Dependabot alert
+
+**What changed**: Compacted this worklog (`bdb3081`). Dismissed Dependabot alert 27 (`sharp`) as inaccurate: the lock has resolved `sharp` 0.35.4, the first patched version, since `f7ff75d`, but the dependency graph still reported 0.35.3 and GitHub offers no rescan API.
+
+---
 
 ## 2026-09-14 - Audited the connector against YNAB API 1.86 and the Claude tool surface
 
