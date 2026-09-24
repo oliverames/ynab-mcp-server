@@ -167,6 +167,13 @@ assert.ok(
   discoveryBytes < 70_000,
   `write-enabled tools/list must stay below 70,000 bytes; got ${discoveryBytes}`,
 );
+// Check the actual transport response in both modes, including write-only tools.
+for (const tool of [...readOnlyTools, ...writableTools]) {
+  for (const key of ["inputSchema", "outputSchema"]) {
+    assert.equal(tool[key]?.$schema, "https://json-schema.org/draft/2020-12/schema",
+      `${tool.name} ${key} must advertise the client-supported dialect`);
+  }
+}
 const writableNames = new Set(writableTools.map((tool) => tool.name));
 
 for (const name of writeTools) {

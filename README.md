@@ -643,6 +643,8 @@ If you store your YNAB token in [1Password CLI](https://developer.1password.com/
 }
 ```
 
+The server invokes `op read` once per process when it resolves `YNAB_OP_PATH`. MCP hosts can start a separate process for each session, so concurrent sessions can each prompt for 1Password authorization. The server does not share a token cache between processes.
+
 The fallback adds ~1-2s to startup. If `op` is unavailable or the item is not found, `ynab_auth_status` reports the lookup problem and returns setup guidance instead of letting a normal YNAB tool fail with a generic unauthorized error. If no token source is configured, the setup guide tells the calling agent to ask whether you have a token in 1Password or another password manager, request permission before editing agent config, and otherwise ask you to add `YNAB_API_TOKEN` to the appropriate Codex or Claude settings file.
 
 ---

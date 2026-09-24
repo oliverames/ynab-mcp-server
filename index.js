@@ -7,6 +7,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import * as ynab from "ynab";
 
@@ -517,6 +518,33 @@ function createFsJournal(filePath) {
 //     sources_checked, values, tokenLookupError, setupGuide } — auth-status
 //     reporting only; all fields optional.
 //   serverInfo: { name, version } override.
+
+// The installed MCP SDK (@modelcontextprotocol/sdk 1.29-1.30) converts every
+// tool's zod input/output schema to JSON Schema without passing a dialect
+// target, so `tools/list` always advertises
+// "$schema": "http://json-schema.org/draft-07/schema#" — even for zod v4,
+// where the SDK's own converter defaults to draft-7 whenever no target is
+// given. Our tool schemas are plain (type/properties/required/
+// additionalProperties), which is valid under 2020-12 as-is, but MCP clients
+// whose default validator only accepts the 2020-12 dialect reject every tool
+// call outright before any handler runs. Rewrite the advertised dialect
+// after the SDK builds its response instead of patching node_modules.
+const JSON_SCHEMA_2020_12 = "https://json-schema.org/draft/2020-12/schema";
+
+function fixListToolsSchemaDialect(server) {
+  const rawServer = server.server;
+  const originalHandler = rawServer._requestHandlers.get("tools/list");
+  if (!originalHandler) return;
+  rawServer.setRequestHandler(ListToolsRequestSchema, async (request, extra) => {
+    const result = await originalHandler(request, extra);
+    for (const tool of result.tools ?? []) {
+      if (tool.inputSchema?.$schema) tool.inputSchema.$schema = JSON_SCHEMA_2020_12;
+      if (tool.outputSchema?.$schema) tool.outputSchema.$schema = JSON_SCHEMA_2020_12;
+    }
+    return result;
+  });
+}
+
 export function createYnabServer(options = {}) {
 
 const {
@@ -1710,7 +1738,7 @@ registerTool(
 
 registerTool(
   "get_budget",
-  { description: "Get name, currency format and account/category/payee counts. lastKnowledgeOfServer instead returns all changed entities plus server_knowledge. Zero requests a full export, which may exceed YNAB_MAX_RESPONSE_BYTES (default 8 MB). Prefer incremental deltas or list tools.", inputSchema: {
+  { description: "Get name, currency format, account/category/payee counts. lastKnowledgeOfServer returns changed entities + server_knowledge; zero requests full export, possibly exceeding YNAB_MAX_RESPONSE_BYTES (default 8 MB). Prefer incremental deltas/list tools.", inputSchema: {
     budgetId: z.string().optional().describe("Omit for default budget"),
     lastKnowledgeOfServer: z.number().int().nonnegative().optional().describe("Delta cursor; returns changed entities + server_knowledge, not summary."),
   } },
@@ -2352,7 +2380,7 @@ function formatTransaction(t) {
 
 registerTool(
   "get_transactions",
-  { description: "List filtered transactions, including raw bank text in import_payee_name_original. Choose one of accountId/categoryId/payeeId. sinceDate defaults to one year ago. Non-delta results cap at 500 (limit max 2000), returning {transactions,total,returned,offset,has_more,next_offset} when capped; otherwise an array. Prefer search_transactions for specific rows.", inputSchema: {
+  { description: "List transactions with raw bank text in import_payee_name_original. Choose accountId, categoryId or payeeId. sinceDate defaults to one year ago. Non-delta cap: 500 (limit max 2000). Capped: {transactions,total,returned,offset,has_more,next_offset}; otherwise array. Prefer search_transactions for specific rows.", inputSchema: {
     budgetId: z.string().optional().describe("Omit for default budget"),
     sinceDate: z.string().optional().describe("From YYYY-MM-DD, inclusive; default one year ago."),
     untilDate: z.string().optional().describe("Through YYYY-MM-DD, inclusive"),
@@ -2422,7 +2450,7 @@ async function resolveTransferPayees(bid, txns) {
 
 registerTool(
   "search_transactions",
-  { description: "Search by query and/or amount (at least one required). Query matches case-insensitive substrings in payee, raw bank payee, memo, account, category and split payee/memo/category. Amount matches absolute dollars within half a cent. Filters run after fetching account/date-bounded history. Newest first; paginate with next_offset.", inputSchema: {
+  { description: "Search query and/or amount (one required). Case-insensitive substrings: payee, raw bank payee, memo, account, category, split payee/memo/category. Amount: absolute dollars within half a cent. Filters apply after fetching account/date-bounded history. Newest first; paginate with next_offset.", inputSchema: {
     budgetId: z.string().optional().describe("Omit for default budget"),
     query: z.string().optional().describe("Text to find in payee, raw import payee, memo, account, or category (case-insensitive substring)"),
     amount: z.number().optional().describe("Amount in dollars to match on absolute value (12.34 matches -12.34 and 12.34)"),
@@ -2451,7 +2479,7 @@ registerTool(
 
 registerTool(
   "get_transaction",
-  { description: "Get transactionId, accepting uuid_YYYY-MM-DD composite IDs. If its matched row was deleted, returns {resource_type:scheduled_transaction,reason:composite_id_with_no_matched_transaction,scheduled_transaction,requested_id}. Ordinary missing IDs return resource_not_found.", inputSchema: {
+  { description: "Get transactionId (accepts uuid_YYYY-MM-DD). Deleted matched row returns {resource_type:scheduled_transaction,reason:composite_id_with_no_matched_transaction,scheduled_transaction,requested_id}. Other missing IDs: resource_not_found.", inputSchema: {
     budgetId: z.string().optional().describe("Omit for default budget"),
     transactionId: z.string().describe("Transaction ID"),
   } },
@@ -3205,7 +3233,7 @@ function buildUnapprovedPayeeGroups(categorized, { summary = false, compact = fa
 
 registerTool(
   "review_unapproved",
-  { description: "Review all-history unapproved rows: ready_to_approve (categorized/split/transfer) grouped by payee, plus needs_category_first. Flags explained in ynab://guide/flags-reference. match_broken is editable; realized composite IDs are writable. Mixed groups have category_name:null, category_names/mixed_categories and inflow/outflow totals. summary gives aggregates; compact keeps IDs/essentials. Above maxTransactions (default 400), degrades to compact then summary and reports mode.", inputSchema: {
+  { description: "Review all-history unapproved rows by payee: ready_to_approve (categorized/split/transfer) or needs_category_first. Flags: ynab://guide/flags-reference. match_broken and realized composite IDs are writable. Mixed groups: category_name:null, category_names/mixed_categories, inflow/outflow totals. summary aggregates; compact keeps IDs/essentials. Above maxTransactions (default 400), degrades to compact then summary; reports mode.", inputSchema: {
     budgetId: z.string().optional().describe("Omit for default budget"),
     summary: z.boolean().optional().describe("Return counts/payee aggregates for both groups, no rows. Drill down with get_transactions."),
     compact: z.boolean().optional().describe("Unless summary: keep id/date/payee/amount/category/account/flags and matched_transaction_id for match_broken rows."),
@@ -3850,7 +3878,7 @@ registerTool(
 
 registerTool(
   "audit_credit_card_payments",
-  { description: "Compare open credit/line-of-credit balances with payment-category available dollars; reports difference/status. Shortfalls mean underfunded payments; use update_month_category to fund. Expected payment balance is the negated card balance for budgeted spending. Small/same-day pending differences may be timing, not errors.", inputSchema: {
+  { description: "Compare open credit/line-of-credit balances to payment-category available dollars; returns difference/status. Fund shortfalls via update_month_category. Expected payment balance: negated card balance for budgeted spending. Small/same-day pending differences may be timing.", inputSchema: {
     budgetId: z.string().optional().describe("Omit for default budget"),
   } },
   ({ budgetId }) =>
@@ -3901,7 +3929,7 @@ registerTool(
 
 registerTool(
   "audit_account_reconciliation",
-  { description: "Summarize open-account reconciliation dates and cleared/uncleared balances (one request). accountId adds uncleared/unapproved rows since reconciliation to compare with bank statements. Actual reconciliation requires YNAB UI. Old dates alone are not errors if cleared balance matches; inspect older uncleared rows.", inputSchema: {
+  { description: "Summarize open-account reconciliation dates and cleared/uncleared balances (one request). accountId adds uncleared/unapproved rows since reconciliation for bank comparison. Reconcile in YNAB UI. Old dates alone are not errors if cleared balance matches; inspect older uncleared rows.", inputSchema: {
     budgetId: z.string().optional().describe("Omit for default budget"),
     accountId: z.string().optional().describe("Account to inspect in detail (adds that account's uncleared/unapproved transaction list)"),
   } },
@@ -4052,7 +4080,7 @@ function detectRecurringFromTransactions(transactions, { minOccurrences = 3 } = 
 
 registerTool(
   "detect_recurring_charges",
-  { description: "Find recurring outflows by payee and exact amount at weekly/biweekly/monthly/quarterly/yearly intervals; estimates annual cost. Includes auto-imported charges absent from scheduled tools. Misses variable amounts. Payee variants split groups: check search_payees before concluding cancellation.", inputSchema: {
+  { description: "Find recurring outflows by payee/exact amount: weekly/biweekly/monthly/quarterly/yearly; estimates annual cost. Includes auto-imports absent from scheduled tools; misses variable amounts. Payee variants split groups: check search_payees before concluding cancellation.", inputSchema: {
     budgetId: z.string().optional().describe("Omit for default budget"),
     monthsBack: z.number().int().positive().max(24).optional().describe("History window in months (default 6; longer windows catch quarterly/yearly cadences)"),
     minOccurrences: z.number().int().min(2).optional().describe("Minimum occurrences to count as recurring (default 3)"),
@@ -4075,7 +4103,7 @@ registerTool(
 
 registerTool(
   "get_budget_health",
-  { description: "Budget snapshot: savings rate, age of money, Ready to Assign, overspends and card funding with green/yellow/red indicators. Uses month/accounts and trailing-3-month income/spending (~4 requests). General defaults, not YNAB rules: savings 20%+ green, underfunded card debt red, overspends yellow.", inputSchema: {
+  { description: "Budget snapshot: savings rate, age of money, Ready to Assign, overspends, card funding; green/yellow/red. Uses month/accounts and trailing-3-month income/spending (~4 requests). Defaults, not YNAB rules: savings 20%+ green, underfunded card debt red, overspends yellow.", inputSchema: {
     budgetId: z.string().optional().describe("Omit for default budget"),
   } },
   ({ budgetId }) =>
@@ -4338,6 +4366,8 @@ const YNAB_PROMPTS = [
 for (const [slug, description, text] of YNAB_PROMPTS) {
   server.registerPrompt(slug, { title: slug.replace(/-/g, " "), description }, promptText(text));
 }
+
+fixListToolsSchemaDialect(server);
 
 return {
   server,
