@@ -4,6 +4,7 @@ import { parseSmokeOptions, withSmokeClient } from "./lib/smoke-client.mjs";
 
 const requiredTools = [
   "review_unapproved",
+  "resolve_matched_transactions",
   "get_transactions",
   "search_transactions",
   "search_categories",

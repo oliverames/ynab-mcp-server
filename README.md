@@ -830,3 +830,7 @@ MIT
     &bull; <a href="https://bsky.app/profile/oliverames.bsky.social">Bluesky</a>
   </sub>
 </p>
+
+### Resolve broken match references
+
+Pass `matched_transaction_id` values from `review_unapproved` (including compact rows) to `resolve_matched_transactions` as `matchedTransactionIds`, with an optional `budgetId`. Each batch accepts 1–50 IDs and fetches each distinct ID once. It checks budget access first. Results contain the original matched ID and either `orphan` for a transaction 404 or `found` with the formatted transaction in dollars. Found rows require duplicate review before any separate write. Authentication, rate-limit, network, and other failures return an error, not orphan results. The tool performs only reads and never changes match links.

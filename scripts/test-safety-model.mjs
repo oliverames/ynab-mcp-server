@@ -40,6 +40,7 @@ const requiredReadTools = [
   "get_transactions",
   "search_transactions",
   "review_unapproved",
+  "resolve_matched_transactions",
   "search_categories",
   "search_payees",
 ];
@@ -317,4 +318,4 @@ for (const name of [
   assert.ok(payload.auth.setup.prompt_for_agent.includes("password manager"));
 }
 
-console.log("Safety model checks passed");
+console.log(`Safety model checks passed (${readOnlyTools.length} read-only tools, ${writableTools.length} write-enabled tools, ${discoveryBytes} discovery bytes)`);

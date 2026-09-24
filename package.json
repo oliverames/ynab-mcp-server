@@ -37,7 +37,7 @@
     "pretest": "npm run deps:ensure",
     "test": "node test.js",
     "pretest:unit": "npm run deps:ensure",
-    "test:unit": "node --test test/unit.test.mjs",
+    "test:unit": "node --test test/*.test.mjs",
     "presmoke:list-tools": "npm run deps:ensure",
     "smoke:list-tools": "node scripts/smoke-list-tools.mjs",
     "presmoke:review-unapproved": "npm run deps:ensure",
