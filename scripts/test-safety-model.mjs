@@ -162,6 +162,11 @@ assert.ok(
 
 
 const writableTools = await listTools({ YNAB_ALLOW_WRITES: "1" });
+const discoveryBytes = Buffer.byteLength(JSON.stringify({ tools: writableTools }), "utf8");
+assert.ok(
+  discoveryBytes < 70_000,
+  `write-enabled tools/list must stay below 70,000 bytes; got ${discoveryBytes}`,
+);
 const writableNames = new Set(writableTools.map((tool) => tool.name));
 
 for (const name of writeTools) {

@@ -1,10 +1,17 @@
 # Worklog
 
+## 2026-09-24 — smaller tool discovery payload (#23)
+
+Shortened repeated input descriptions and tool summaries while preserving units, formats, confirmation gates, matching/split limitations, and undo constraints. The current write-enabled tools/list response fell from 85,132 to 69,678 UTF-8 JSON bytes (15,454 fewer, 18.15%), retaining 63 tools. Both measurements used an SDK stdio client, dummy credentials, disabled agent-config fallback, and JSON.stringify of the complete response. No YNAB API requests were made. The older issue baseline was 85,078 bytes; the figures here are the fresh before/after pair.
+
+After removing only description keys, the complete before/after responses compare equal, including schemas, required fields, annotations, and names. Added a discovery-size regression below 70,000 bytes; it fails against the old descriptions and passes against the new ones. Validation: 76 unit tests passed without skips, safety checks passed, release consistency passed, and write-enabled local smoke:list-tools passed. README tool count is unchanged.
+
+This is source publication only. npm, installed connectors, and the hosted Worker were not updated. Hosted OAuth acceptance remains tracked in #24.
+
 ## Open items
 
 - Rename the amesvt.com Cloudflare rate-limit rule, still named "Rate limit YNAB MCP dynamic client registration" although it covers six hosts; the rename would not commit through the dashboard and needs doing by hand (since 2026-09-08) (unverified)
 - Per-connector rate-limit tuning needs a paid Cloudflare plan: the free plan caps period and mitigation at 10 seconds and allows one such rule per zone (since 2026-09-08)
-- Trim the repeated per-field input descriptions (for example `budgetId` on 60 tools); the tool list is still about 21K tokens (since 2026-09-14; https://github.com/oliverames/ynab-mcp-server/issues/23)
 - Add an OAuth-authenticated post-deploy smoke check; hosted deploys are verified only by rebuilding the bundle locally, and `tools/list` has not been checked through OAuth against the hosted connector (since 2026-09-14; https://github.com/oliverames/ynab-mcp-server/issues/24)
 - Run the decisive icon test (temporarily recolor `amesvt.com`'s favicon) to tell registrable-domain-only resolution from a domain-keyed Claude icon cache; Oliver chose to wait and re-check later (since 2026-07-30)
 - Write-then-undo acceptance through the hosted connector needs explicit approval for the exact YNAB operation; a memo write was proven on the Test budget on 2026-07-18, undo was not (since 2026-07-15) (unverified)

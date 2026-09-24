@@ -650,7 +650,7 @@ function normalizeSearchText(value) {
 }
 
 const subtransactionInputSchema = z.object({
-  amount: z.number().describe("Subtransaction amount in dollars"),
+  amount: z.number().describe("Split amount, dollars"),
   categoryId: z.string().optional().describe("Category ID"),
   payeeId: z.string().optional().describe("Payee ID"),
   payeeName: z.string().max(200).optional().describe("Payee name"),
@@ -1619,7 +1619,7 @@ function writeDisabledResult(name) {
 
 function withWriteGateDescription(description = "") {
   if (description.includes("YNAB_ALLOW_WRITES=1")) return description;
-  return `${description} Requires YNAB_ALLOW_WRITES=1; write tools are not registered by default.`;
+  return `${description} Requires YNAB_ALLOW_WRITES=1 (default: read-only).`;
 }
 
 const registerRawTool = server.registerTool.bind(server);
@@ -1664,7 +1664,7 @@ server.registerTool = (name, config, handler) => {
 
 registerTool(
   "get_user",
-  { description: "Get the authenticated YNAB user (their user ID). Read-only; takes no input. Mainly useful to verify the API token works — for credential/config diagnostics prefer ynab_auth_status, which needs no API request." },
+  { description: "Get authenticated user ID. For credential diagnostics without an API request, use ynab_auth_status." },
   () =>
   run(async () => {
     const { data } = await api.user.getUser();
@@ -1686,7 +1686,7 @@ function formatBudgetSummary(b) {
 
 registerTool(
   "list_budgets",
-  { description: "List all budgets. Use a budget ID from the results in other tools, or omit budgetId to use the last-used budget.", inputSchema: {
+  { description: "List budgets and IDs. Omit budgetId in other tools for the default budget.", inputSchema: {
     includeAccounts: z.boolean().optional().describe("If true, include each budget's account list in the response"),
   } },
   ({ includeAccounts } = {}) =>
@@ -1710,9 +1710,9 @@ registerTool(
 
 registerTool(
   "get_budget",
-  { description: "Get a budget summary including name, currency format, and account/category/payee counts. Pass lastKnowledgeOfServer to get a delta export instead: every entity (accounts, payees, categories, months, transactions, scheduled transactions, ...) that changed since that server knowledge, plus the new server_knowledge for the next delta request. A delta request with lastKnowledgeOfServer: 0 returns the full budget export, which can be very large — responses over the YNAB_MAX_RESPONSE_BYTES cap (default 8 MB) are rejected; on big budgets prefer incremental deltas or the dedicated list tools.", inputSchema: {
-    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
-    lastKnowledgeOfServer: z.number().int().nonnegative().optional().describe("Delta request server knowledge. When provided, returns changed entities and server_knowledge instead of the summary."),
+  { description: "Get name, currency format and account/category/payee counts. lastKnowledgeOfServer instead returns all changed entities plus server_knowledge. Zero requests a full export, which may exceed YNAB_MAX_RESPONSE_BYTES (default 8 MB). Prefer incremental deltas or list tools.", inputSchema: {
+    budgetId: z.string().optional().describe("Omit for default budget"),
+    lastKnowledgeOfServer: z.number().int().nonnegative().optional().describe("Delta cursor; returns changed entities + server_knowledge, not summary."),
   } },
   ({ budgetId, lastKnowledgeOfServer }) =>
     run(async () => {
@@ -1745,7 +1745,7 @@ registerTool(
 
 registerTool(
   "get_budget_settings",
-  { description: "Get a budget's settings: currency format (symbol, decimal digits, placement) and date format. Read-only. Use when formatting amounts or dates for display; not needed for tool inputs, which always use dollars and YYYY-MM-DD.", inputSchema: { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") } },
+  { description: "Get display currency/date formats. Tool inputs remain dollars and YYYY-MM-DD.", inputSchema: { budgetId: z.string().optional().describe("Omit for default budget") } },
   ({ budgetId }) =>
     run(async () => {
       const { data } = await api.plans.getPlanSettingsById(resolveBudgetId(budgetId));
@@ -1781,9 +1781,9 @@ function formatAccount(a) {
 
 registerTool(
   "list_accounts",
-  { description: "List all accounts in a budget with balances (dollars), type, closed/on-budget status, last-reconciled time, and debt metadata. Read-only. Use to find account IDs for transaction tools, check balances, or spot direct-import errors (direct_import_in_error). Includes closed accounts; filter on 'closed' if you only want active ones.", inputSchema: {
-    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
-    lastKnowledgeOfServer: z.number().int().nonnegative().optional().describe("Delta request server knowledge. When provided, returns { accounts, server_knowledge }."),
+  { description: "List account IDs, dollar balances, type, closed/on-budget status, reconciliation time, debt metadata and direct_import_in_error. Includes closed accounts.", inputSchema: {
+    budgetId: z.string().optional().describe("Omit for default budget"),
+    lastKnowledgeOfServer: z.number().int().nonnegative().optional().describe("Delta cursor; returns { accounts, server_knowledge }."),
   } },
   ({ budgetId, lastKnowledgeOfServer }) =>
     run(async () => {
@@ -1795,8 +1795,8 @@ registerTool(
 
 registerTool(
   "get_account",
-  { description: "Get one account's details: balances (dollars), type, reconciliation timestamp, and debt metadata. Read-only. Prefer list_accounts when comparing several accounts; use this when you already have the account ID and want fresh detail.", inputSchema: {
-    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+  { description: "Get account dollar balances, type, reconciliation time and debt metadata. For comparisons use list_accounts.", inputSchema: {
+    budgetId: z.string().optional().describe("Omit for default budget"),
     accountId: z.string().describe("Account ID"),
   } },
   ({ budgetId, accountId }) =>
@@ -1808,8 +1808,8 @@ registerTool(
 
 registerTool(
   "create_account",
-  { description: "Create a new unlinked (manual) account with a starting balance. Side effects: the starting balance posts as a 'Starting Balance' transaction dated today, and an on-budget account's balance adds to Ready to Assign. Cannot create bank-linked accounts (linking happens in the YNAB UI).", inputSchema: {
-    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+  { description: "Create an unlinked account. Starting balance posts today and adds to Ready to Assign for on-budget accounts. Bank linking requires the YNAB UI.", inputSchema: {
+    budgetId: z.string().optional().describe("Omit for default budget"),
     name: z.string().describe("Account name"),
     type: z.enum(["checking", "savings", "cash", "creditCard", "lineOfCredit", "otherAsset", "otherLiability", "mortgage", "autoLoan", "studentLoan", "personalLoan", "medicalDebt", "otherDebt"]).describe("Account type"),
     balance: z.number().describe("Starting balance in dollars"),
@@ -1882,9 +1882,9 @@ function formatCategory(c) {
 
 registerTool(
   "list_categories",
-  { description: "List all category groups and their categories with budgeted/activity/balance amounts (dollars) for the current month. Read-only. Use to find category IDs and survey the budget structure; for a specific month's numbers use get_month, and for name-based lookup use search_categories. Hidden, deleted, and YNAB-internal items (e.g. Credit Card Payments, Internal Master Category) are included with 'hidden' / 'deleted' / 'internal' flags — filter on them when presenting.", inputSchema: {
-    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
-    lastKnowledgeOfServer: z.number().int().nonnegative().optional().describe("Delta request server knowledge. When provided, returns { category_groups, server_knowledge }."),
+  { description: "List groups/categories with current-month dollar budgets, activity and balances. Includes hidden/deleted/internal flags. Use get_month for other months or search_categories for names.", inputSchema: {
+    budgetId: z.string().optional().describe("Omit for default budget"),
+    lastKnowledgeOfServer: z.number().int().nonnegative().optional().describe("Delta cursor; returns { category_groups, server_knowledge }."),
   } },
   ({ budgetId, lastKnowledgeOfServer }) =>
     run(async () => {
@@ -1920,8 +1920,8 @@ registerTool(
 
 registerTool(
   "get_category",
-  { description: "Get one category's full detail for the current month, including goal/target fields (type, target amount, funding progress). Read-only. Use for goal inspection; for a past or future month's numbers use get_month_category instead.", inputSchema: {
-    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+  { description: "Get current-month category detail and goal fields. For other months use get_month_category.", inputSchema: {
+    budgetId: z.string().optional().describe("Omit for default budget"),
     categoryId: z.string().describe("Category ID"),
   } },
   ({ budgetId, categoryId }) =>
@@ -1934,8 +1934,8 @@ registerTool(
 registerTool(
   "get_month_category",
   { description: "Get category budget for a specific month", inputSchema: {
-    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
-    month: z.string().describe("Month in YYYY-MM-DD format (first of month)"),
+    budgetId: z.string().optional().describe("Omit for default budget"),
+    month: z.string().describe("YYYY-MM-DD, first of month"),
     categoryId: z.string().describe("Category ID"),
   } },
   ({ budgetId, month, categoryId }) =>
@@ -1948,8 +1948,8 @@ registerTool(
 registerTool(
   "update_month_category",
   { description: "Set the budgeted amount for a category in a specific month", inputSchema: {
-    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
-    month: z.string().describe("Month in YYYY-MM-DD format (first of month)"),
+    budgetId: z.string().optional().describe("Omit for default budget"),
+    month: z.string().describe("YYYY-MM-DD, first of month"),
     categoryId: z.string().describe("Category ID"),
     budgeted: z.number().describe("Amount to budget in dollars"),
   } },
@@ -1965,7 +1965,7 @@ registerTool(
 registerTool(
   "update_category",
   { description: "Update a category's name, note, goal target, or move it to a different group", inputSchema: {
-    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+    budgetId: z.string().optional().describe("Omit for default budget"),
     categoryId: z.string().describe("Category ID"),
     name: z.string().optional().describe("New category name"),
     note: z.string().nullable().optional().describe("Category note (null to clear)"),
@@ -1973,7 +1973,7 @@ registerTool(
     goalTarget: z.number().nullable().optional().describe("Goal target amount in dollars (only if category already has a goal)"),
     goalTargetDate: z.string().nullable().optional().describe("Goal target date in ISO format (e.g. 2026-12-01, null to clear)"),
     goalNeedsWholeAmount: z.boolean().nullable().optional().describe("For NEED goals, true uses 'Set aside another' behavior and false uses 'Refill up to' behavior"),
-    goalFrequency: z.enum(["monthly", "weekly", "yearly"]).optional().describe("Recurring NEED target cadence (YNAB API 1.86). Requires goalTarget in the same call, cannot be combined with goalTargetDate, replaces any existing target, and is not supported on Credit Card Payment categories."),
+    goalFrequency: z.enum(["monthly", "weekly", "yearly"]).optional().describe("NEED cadence: requires goalTarget, excludes goalTargetDate, replaces existing target. Not for Credit Card Payment categories."),
   } },
   ({ budgetId, categoryId, name, note, categoryGroupId, goalTarget, goalTargetDate, goalNeedsWholeAmount, goalFrequency }) =>
     run(async () => {
@@ -2001,14 +2001,14 @@ registerTool(
 registerTool(
   "create_category",
   { description: "Create a new category in a category group", inputSchema: {
-    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+    budgetId: z.string().optional().describe("Omit for default budget"),
     categoryGroupId: z.string().describe("Category group ID to create the category in"),
     name: z.string().describe("Category name"),
     note: z.string().optional().describe("Category note"),
     goalTarget: z.number().optional().describe("Goal target amount in dollars (creates a 'Needed for Spending' goal)"),
     goalTargetDate: z.string().optional().describe("Goal target date in ISO format (e.g. 2026-12-01)"),
     goalNeedsWholeAmount: z.boolean().optional().describe("For NEED goals, true uses 'Set aside another' behavior and false uses 'Refill up to' behavior"),
-    goalFrequency: z.enum(["monthly", "weekly", "yearly"]).optional().describe("Recurring NEED target cadence (YNAB API 1.86). Requires goalTarget and cannot be combined with goalTargetDate."),
+    goalFrequency: z.enum(["monthly", "weekly", "yearly"]).optional().describe("NEED cadence: requires goalTarget; excludes goalTargetDate."),
   } },
   ({ budgetId, categoryGroupId, name, note, goalTarget, goalTargetDate, goalNeedsWholeAmount, goalFrequency }) =>
     run(async () => {
@@ -2034,7 +2034,7 @@ registerTool(
 registerTool(
   "create_category_group",
   { description: "Create a new category group", inputSchema: {
-    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+    budgetId: z.string().optional().describe("Omit for default budget"),
     name: z.string().max(50).describe("Category group name (max 50 characters)"),
   } },
   ({ budgetId, name }) =>
@@ -2050,7 +2050,7 @@ registerTool(
 registerTool(
   "update_category_group",
   { description: "Rename a category group", inputSchema: {
-    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+    budgetId: z.string().optional().describe("Omit for default budget"),
     categoryGroupId: z.string().describe("Category group ID"),
     name: z.string().max(50).describe("New category group name (max 50 characters)"),
   } },
@@ -2068,9 +2068,9 @@ registerTool(
 
 registerTool(
   "list_payees",
-  { description: "List all payees with IDs and transfer_account_id (non-null marks a transfer payee — use it as payeeId when creating transfers instead of inventing a 'Transfer : ...' name). Read-only. For name-based lookup prefer search_payees; payee lists on mature budgets can be long.", inputSchema: {
-    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
-    lastKnowledgeOfServer: z.number().int().nonnegative().optional().describe("Delta request server knowledge. When provided, returns { payees, server_knowledge }."),
+  { description: "List payee IDs and transfer_account_id. Use transfer payee IDs, never invented Transfer names. Prefer search_payees for name lookup.", inputSchema: {
+    budgetId: z.string().optional().describe("Omit for default budget"),
+    lastKnowledgeOfServer: z.number().int().nonnegative().optional().describe("Delta cursor; returns { payees, server_knowledge }."),
   } },
   ({ budgetId, lastKnowledgeOfServer }) =>
     run(async () => {
@@ -2082,8 +2082,8 @@ registerTool(
 
 registerTool(
   "get_payee",
-  { description: "Get one payee by ID (name, transfer_account_id, deleted flag). Read-only. Mostly useful to confirm a payee still exists or resolve its transfer account; for discovery use search_payees.", inputSchema: {
-    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+  { description: "Get payee name, transfer_account_id and deleted status by ID. Discover IDs with search_payees.", inputSchema: {
+    budgetId: z.string().optional().describe("Omit for default budget"),
     payeeId: z.string().describe("Payee ID"),
   } },
   ({ budgetId, payeeId }) =>
@@ -2095,8 +2095,8 @@ registerTool(
 
 registerTool(
   "update_payee",
-  { description: "Rename a payee. Side effects: the new name appears on every transaction using this payee, past and future. Renaming does not merge payees — to fold one payee's transactions into another use reassign_payee_transactions. Transfer payees cannot be renamed.", inputSchema: {
-    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+  { description: "Rename a payee across past/future transactions. Transfer payees cannot be renamed. For merging use reassign_payee_transactions.", inputSchema: {
+    budgetId: z.string().optional().describe("Omit for default budget"),
     payeeId: z.string().describe("Payee ID"),
     name: z.string().max(500).describe("New payee name (max 500 characters)"),
   } },
@@ -2111,8 +2111,8 @@ registerTool(
 
 registerTool(
   "create_payee",
-  { description: "Create a new payee by name. Rarely needed: create_transaction with payeeName creates the payee implicitly. Use this only when you want the payee to exist before any transaction does. Side effects: duplicate names are allowed by YNAB — search_payees first to avoid creating a duplicate.", inputSchema: {
-    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+  { description: "Create a payee. Search first: duplicate names are allowed. Usually create_transaction with payeeName creates it implicitly.", inputSchema: {
+    budgetId: z.string().optional().describe("Omit for default budget"),
     name: z.string().max(500).describe("Payee name (max 500 characters)"),
   } },
   ({ budgetId, name }) =>
@@ -2129,7 +2129,7 @@ registerTool(
 
 registerTool(
   "list_payee_locations",
-  { description: "List all payee locations (GPS coordinates YNAB's mobile app recorded at transaction time). Read-only. Only payees with mobile-recorded transactions appear; many budgets have none. Use get_payee_locations_by_payee to scope to one payee.", inputSchema: { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") } },
+  { description: "List GPS locations recorded by YNAB mobile transactions; may be empty. Scope with get_payee_locations_by_payee.", inputSchema: { budgetId: z.string().optional().describe("Omit for default budget") } },
   ({ budgetId }) =>
     run(async () => {
       const { data } = await api.payeeLocations.getPayeeLocations(resolveBudgetId(budgetId));
@@ -2139,8 +2139,8 @@ registerTool(
 
 registerTool(
   "get_payee_location",
-  { description: "Get one payee location record by its ID (payee, latitude, longitude). Read-only; requires a payee-location ID from list_payee_locations.", inputSchema: {
-    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+  { description: "Get payee/latitude/longitude using a location ID from list_payee_locations.", inputSchema: {
+    budgetId: z.string().optional().describe("Omit for default budget"),
     payeeLocationId: z.string().describe("Payee location ID"),
   } },
   ({ budgetId, payeeLocationId }) =>
@@ -2152,8 +2152,8 @@ registerTool(
 
 registerTool(
   "get_payee_locations_by_payee",
-  { description: "Get all recorded GPS locations for one payee. Read-only. Useful to confirm which physical merchant an ambiguous payee refers to; empty for payees never used in YNAB's mobile app.", inputSchema: {
-    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+  { description: "Get mobile-recorded GPS locations for one payee; may be empty.", inputSchema: {
+    budgetId: z.string().optional().describe("Omit for default budget"),
     payeeId: z.string().describe("Payee ID"),
   } },
   ({ budgetId, payeeId }) =>
@@ -2184,9 +2184,9 @@ function formatMonth(m) {
 
 registerTool(
   "list_months",
-  { description: "List all budget months with summary numbers per month (income, budgeted, activity, Ready to Assign, age of money — dollars). Read-only. Use to find which months exist and their headline totals; for per-category detail in one month use get_month.", inputSchema: {
-    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
-    lastKnowledgeOfServer: z.number().int().nonnegative().optional().describe("Delta request server knowledge. When provided, returns { months, server_knowledge }."),
+  { description: "List monthly income, budgeted, activity and Ready to Assign in dollars, plus age of money. For categories use get_month.", inputSchema: {
+    budgetId: z.string().optional().describe("Omit for default budget"),
+    lastKnowledgeOfServer: z.number().int().nonnegative().optional().describe("Delta cursor; returns { months, server_knowledge }."),
   } },
   ({ budgetId, lastKnowledgeOfServer }) =>
     run(async () => {
@@ -2198,9 +2198,9 @@ registerTool(
 
 registerTool(
   "get_month",
-  { description: "Get one budget month's detail: month totals plus every category's budgeted/activity/balance and goal fields for that month (dollars). Read-only. The workhorse for monthly reviews and budget-vs-actual questions; combine with get_overspent_categories for the negative balances only.", inputSchema: {
-    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
-    month: z.string().describe("Month in YYYY-MM-DD format (first of month)"),
+  { description: "Get month totals and category budgets, activity, balances and goals (dollars). For negative balances use get_overspent_categories.", inputSchema: {
+    budgetId: z.string().optional().describe("Omit for default budget"),
+    month: z.string().describe("YYYY-MM-DD, first of month"),
   } },
   ({ budgetId, month }) =>
     run(async () => {
@@ -2255,7 +2255,7 @@ function formatMoneyMovement(m) {
 
 registerTool(
   "list_money_movements",
-  { description: "List all money movements — the history of budget re-allocations between categories (who moved how much from where to where, when). Read-only. Use to answer 'why did this category's assigned amount change'; these are budget moves, not transactions. Can be long on old budgets; prefer get_money_movements_by_month for a specific month.", inputSchema: { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") } },
+  { description: "List category budget reallocation history: who, amount, source, destination and time. These are not transactions. For less output use get_money_movements_by_month.", inputSchema: { budgetId: z.string().optional().describe("Omit for default budget") } },
   ({ budgetId }) =>
     run(async () => {
       const { data } = await api.money_movements.getMoneyMovements(resolveBudgetId(budgetId));
@@ -2265,9 +2265,9 @@ registerTool(
 
 registerTool(
   "get_money_movements_by_month",
-  { description: "Get money movements (category-to-category budget re-allocations) for one month. Read-only. The month-scoped view of list_money_movements; use during month-end review to see how assignments were shuffled.", inputSchema: {
-    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
-    month: z.string().describe("Month in YYYY-MM-DD format (first of month), or 'current'"),
+  { description: "Get category budget reallocation history for one month.", inputSchema: {
+    budgetId: z.string().optional().describe("Omit for default budget"),
+    month: z.string().describe("YYYY-MM-DD, first of month, or 'current'"),
   } },
   ({ budgetId, month }) =>
     run(async () => {
@@ -2278,7 +2278,7 @@ registerTool(
 
 registerTool(
   "list_money_movement_groups",
-  { description: "List all money movement groups — batches of related money movements applied together (e.g. one multi-category re-allocation). Read-only. Join to list_money_movements rows via money_movement_group_id.", inputSchema: { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") } },
+  { description: "List related budget reallocation batches. Join movements via money_movement_group_id.", inputSchema: { budgetId: z.string().optional().describe("Omit for default budget") } },
   ({ budgetId }) =>
     run(async () => {
       const { data } = await api.money_movements.getMoneyMovementGroups(resolveBudgetId(budgetId));
@@ -2288,9 +2288,9 @@ registerTool(
 
 registerTool(
   "get_money_movement_groups_by_month",
-  { description: "Get money movement groups (batched budget re-allocations) for one month. Read-only. The month-scoped view of list_money_movement_groups.", inputSchema: {
-    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
-    month: z.string().describe("Month in YYYY-MM-DD format (first of month), or 'current'"),
+  { description: "Get budget reallocation batches for one month.", inputSchema: {
+    budgetId: z.string().optional().describe("Omit for default budget"),
+    month: z.string().describe("YYYY-MM-DD, first of month, or 'current'"),
   } },
   ({ budgetId, month }) =>
     run(async () => {
@@ -2352,16 +2352,16 @@ function formatTransaction(t) {
 
 registerTool(
   "get_transactions",
-  { description: "List transactions with filters: type ('unapproved' / 'uncategorized'), one of accountId / categoryId / payeeId, month, sinceDate, untilDate (YNAB defaults an omitted sinceDate to one year ago). Rows include import_payee_name_original, the raw bank string, for payee disambiguation. Without a delta request the result is capped at 500 rows (override with limit, up to 2000; page with offset); a capped result returns { transactions, total, returned, offset, has_more, next_offset } instead of a bare array. Prefer search_transactions to find specific rows.", inputSchema: {
-    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
-    sinceDate: z.string().optional().describe("Only return transactions on or after this date (YYYY-MM-DD). If omitted, YNAB defaults to one year ago."),
-    untilDate: z.string().optional().describe("Only return transactions on or before this date (YYYY-MM-DD)"),
+  { description: "List filtered transactions, including raw bank text in import_payee_name_original. Choose one of accountId/categoryId/payeeId. sinceDate defaults to one year ago. Non-delta results cap at 500 (limit max 2000), returning {transactions,total,returned,offset,has_more,next_offset} when capped; otherwise an array. Prefer search_transactions for specific rows.", inputSchema: {
+    budgetId: z.string().optional().describe("Omit for default budget"),
+    sinceDate: z.string().optional().describe("From YYYY-MM-DD, inclusive; default one year ago."),
+    untilDate: z.string().optional().describe("Through YYYY-MM-DD, inclusive"),
     type: z.enum(["unapproved", "uncategorized"]).optional().describe("Filter by approval/categorization status"),
     accountId: z.string().optional().describe("Filter by account ID"),
     categoryId: z.string().optional().describe("Filter by category ID"),
     payeeId: z.string().optional().describe("Filter by payee ID"),
     month: z.string().optional().describe("Filter by month (YYYY-MM-DD, first of month)"),
-    lastKnowledgeOfServer: z.number().int().nonnegative().optional().describe("Delta request server knowledge. When provided, returns { transactions, server_knowledge } uncapped."),
+    lastKnowledgeOfServer: z.number().int().nonnegative().optional().describe("Delta cursor; returns { transactions, server_knowledge } uncapped."),
     limit: z.number().int().min(1).max(TRANSACTION_LIST_MAX_LIMIT).optional().describe(`Row cap (default ${TRANSACTION_LIST_DEFAULT_LIMIT}, max ${TRANSACTION_LIST_MAX_LIMIT}). Ignored for delta requests.`),
     offset: z.number().int().nonnegative().optional().describe("Rows to skip, in YNAB's date-ascending order; pass next_offset from a capped result."),
   } },
@@ -2422,13 +2422,13 @@ async function resolveTransferPayees(bid, txns) {
 
 registerTool(
   "search_transactions",
-  { description: "Search transactions by text and/or amount, with pagination. The server fetches the (optionally account- and date-bounded) transaction list from YNAB and filters it before responding, so a busy budget returns a small page instead of a multi-megabyte dump that can exceed client tool timeouts. 'query' is a case-insensitive substring match over payee_name, import_payee_name_original (raw bank string), memo, account_name, category_name, and split rows' payee/memo/category. 'amount' matches on absolute value with half-cent tolerance, so 12.34 finds a -12.34 outflow. Results are newest-first; page with limit/offset using the returned next_offset. Provide at least one of query or amount.", inputSchema: {
-    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+  { description: "Search by query and/or amount (at least one required). Query matches case-insensitive substrings in payee, raw bank payee, memo, account, category and split payee/memo/category. Amount matches absolute dollars within half a cent. Filters run after fetching account/date-bounded history. Newest first; paginate with next_offset.", inputSchema: {
+    budgetId: z.string().optional().describe("Omit for default budget"),
     query: z.string().optional().describe("Text to find in payee, raw import payee, memo, account, or category (case-insensitive substring)"),
     amount: z.number().optional().describe("Amount in dollars to match on absolute value (12.34 matches -12.34 and 12.34)"),
     accountId: z.string().optional().describe("Restrict the search to one account"),
-    sinceDate: z.string().optional().describe("Only search transactions on or after this date (YYYY-MM-DD). If omitted, YNAB defaults to one year ago."),
-    untilDate: z.string().optional().describe("Only search transactions on or before this date (YYYY-MM-DD)"),
+    sinceDate: z.string().optional().describe("From YYYY-MM-DD, inclusive; default one year ago."),
+    untilDate: z.string().optional().describe("Through YYYY-MM-DD, inclusive"),
     limit: z.number().int().min(1).max(500).optional().describe("Page size (default 50, max 500)"),
     offset: z.number().int().nonnegative().optional().describe("Number of matches to skip (default 0); pass next_offset from the previous page"),
   } },
@@ -2451,8 +2451,8 @@ registerTool(
 
 registerTool(
   "get_transaction",
-  { description: "Get a single transaction by ID. The argument is 'transactionId' (not 'id'). Automatically handles composite scheduled-transaction IDs (e.g. uuid_YYYY-MM-DD): the date suffix is stripped before the lookup. If a composite ID's underlying matched transaction has been deleted, falls back to returning the active scheduled-transaction template wrapped in a marker shape { resource_type: 'scheduled_transaction', reason: 'composite_id_with_no_matched_transaction', scheduled_transaction, requested_id } so callers can distinguish the two return shapes. Non-composite IDs preserve strict behavior: a 404 still surfaces as resource_not_found.", inputSchema: {
-    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+  { description: "Get transactionId, accepting uuid_YYYY-MM-DD composite IDs. If its matched row was deleted, returns {resource_type:scheduled_transaction,reason:composite_id_with_no_matched_transaction,scheduled_transaction,requested_id}. Ordinary missing IDs return resource_not_found.", inputSchema: {
+    budgetId: z.string().optional().describe("Omit for default budget"),
     transactionId: z.string().describe("Transaction ID"),
   } },
   ({ budgetId, transactionId }) =>
@@ -2491,22 +2491,22 @@ registerTool(
 
 registerTool(
   "create_transaction",
-  { description: "Create a new transaction. Amounts are in dollars (positive for inflows, negative for outflows). Note: future-dated transactions cannot be created here - use create_scheduled_transaction instead. For transfers between accounts (including credit card payments), pass transferToAccountId or transferToAccountName for the destination account and leave payeeId/payeeName unset; the server resolves the account's internal transfer payee. Passing a 'Transfer : ...' payee name is rejected by YNAB. For manual entry of spend the bank will later import (checks, P2P), use cleared:'uncleared' and NO importId so the import matches instead of duplicating. Creation is journaled and reversible via undo_operation.", inputSchema: {
-    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+  { description: "Create a dollar transaction (negative outflow). Future dates require create_scheduled_transaction. Transfers: set transferToAccountId/Name, omit payeeId/Name; never use a Transfer payee name. For spending the bank will later import, use cleared:uncleared and no importId to allow matching. Journaled; reversible via undo_operation.", inputSchema: {
+    budgetId: z.string().optional().describe("Omit for default budget"),
     accountId: z.string().describe("Account ID"),
     date: z.string().describe("Transaction date (YYYY-MM-DD)"),
     amount: z.number().describe("Amount in dollars (negative for outflows, positive for inflows)"),
     payeeId: z.string().optional().describe("Payee ID"),
-    payeeName: z.string().max(200).optional().describe("Payee name (creates new payee if no payeeId). Must not be a 'Transfer : ...' name; use transferToAccountId/transferToAccountName for transfers."),
-    transferToAccountId: z.string().optional().describe("Transfer convenience: ID of the destination account (from list_accounts). The server sets the payee to that account's transfer payee. Mutually exclusive with payeeId/payeeName."),
-    transferToAccountName: z.string().optional().describe("Transfer convenience: destination account name (case-insensitive; exact match preferred, unique partial match accepted). Mutually exclusive with payeeId/payeeName."),
+    payeeName: z.string().max(200).optional().describe("Creates payee if no payeeId. Never use Transfer names; set transferToAccountId/Name."),
+    transferToAccountId: z.string().optional().describe("Destination ID from list_accounts; resolves transfer payee. Excludes payeeId/Name."),
+    transferToAccountName: z.string().optional().describe("Destination name, case-insensitive exact or unique partial match. Excludes payeeId/Name."),
     categoryId: z.string().optional().describe("Category ID"),
     memo: z.string().max(500).optional().describe("Transaction memo"),
     cleared: z.enum(["cleared", "uncleared", "reconciled"]).optional().describe("Cleared status"),
-    approved: z.boolean().optional().describe("Whether transaction is approved"),
+    approved: z.boolean().optional().describe("Approved status"),
     flagColor: z.enum(["red", "orange", "yellow", "green", "blue", "purple"]).optional().describe("Flag color"),
-    importId: z.string().optional().describe("Unique import ID for deduplication (max 36 chars). If omitted and the transaction is later imported, duplicates may be created."),
-    subtransactions: z.array(subtransactionInputSchema).optional().describe("Split transaction into subtransactions. The subtransaction amounts must sum to the total transaction amount."),
+    importId: z.string().optional().describe("Deduplication ID, max 36 chars. Omission can duplicate later imports."),
+    subtransactions: z.array(subtransactionInputSchema).optional().describe("Split lines; amounts must sum to transaction total."),
   } },
   ({ budgetId, ...txnFields }) =>
     run(async () => {
@@ -2529,20 +2529,20 @@ registerTool(
 
 registerTool(
   "create_transactions",
-  { description: "Create multiple transactions at once. Amounts are in dollars. Returns created transactions and any duplicate import IDs. Future-dated transactions are not supported - use create_scheduled_transaction instead. For transfers, set transferToAccountId or transferToAccountName on the entry instead of a payee; the server resolves the destination account's internal transfer payee.", inputSchema: {
-    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+  { description: "Batch-create dollar transactions; returns created rows and duplicate import IDs. Future dates require create_scheduled_transaction. Transfers: set transferToAccountId/Name instead of payee fields.", inputSchema: {
+    budgetId: z.string().optional().describe("Omit for default budget"),
     transactions: z.array(z.object({
       accountId: z.string().describe("Account ID"),
       date: z.string().describe("Transaction date (YYYY-MM-DD)"),
       amount: z.number().describe("Amount in dollars (negative for outflows, positive for inflows)"),
       payeeId: z.string().optional().describe("Payee ID"),
-      payeeName: z.string().max(200).optional().describe("Payee name (creates new payee if no payeeId). Must not be a 'Transfer : ...' name; use transferToAccountId/transferToAccountName for transfers."),
-      transferToAccountId: z.string().optional().describe("Transfer convenience: ID of the destination account. Mutually exclusive with payeeId/payeeName."),
-      transferToAccountName: z.string().optional().describe("Transfer convenience: destination account name (case-insensitive). Mutually exclusive with payeeId/payeeName."),
+      payeeName: z.string().max(200).optional().describe("Creates payee if no payeeId. Never use Transfer names; set transferToAccountId/Name."),
+      transferToAccountId: z.string().optional().describe("Destination account ID; excludes payeeId/Name."),
+      transferToAccountName: z.string().optional().describe("Destination account name (case-insensitive); excludes payeeId/Name."),
       categoryId: z.string().optional().describe("Category ID"),
       memo: z.string().max(500).optional().describe("Transaction memo"),
       cleared: z.enum(["cleared", "uncleared", "reconciled"]).optional().describe("Cleared status"),
-      approved: z.boolean().optional().describe("Whether transaction is approved"),
+      approved: z.boolean().optional().describe("Approved status"),
       flagColor: z.enum(["red", "orange", "yellow", "green", "blue", "purple"]).optional().describe("Flag color"),
       importId: z.string().optional().describe("Unique import ID for deduplication (max 36 chars)"),
       subtransactions: z.array(subtransactionInputSchema).optional().describe("Split transaction into subtransactions"),
@@ -2574,9 +2574,9 @@ registerTool(
 
 registerTool(
   "update_transaction",
-  { description: "Update a transaction; only provided fields change. Composite ids (uuid_YYYY-MM-DD) are writable as returned. Passing subtransactions converts a non-split transaction into a split, including imported and reconciled ones, preserving import_id. An existing split cannot be changed through the API: un-split it in the YNAB register first.", inputSchema: {
-    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
-    transactionId: z.string().describe("Transaction ID. Composite scheduled-transaction IDs (uuid_YYYY-MM-DD) are accepted verbatim and are writable."),
+  { description: "Change provided fields only; composite IDs remain writable. subtransactions converts non-split rows (including imported/reconciled) to splits, preserving import_id. Existing splits require unsplitting in YNAB first.", inputSchema: {
+    budgetId: z.string().optional().describe("Omit for default budget"),
+    transactionId: z.string().describe("Transaction ID; composite uuid_YYYY-MM-DD accepted verbatim for writes."),
     accountId: z.string().optional().describe("Account ID"),
     date: z.string().optional().describe("Transaction date (YYYY-MM-DD)"),
     amount: z.number().optional().describe("Amount in dollars"),
@@ -2585,9 +2585,9 @@ registerTool(
     categoryId: z.string().nullable().optional().describe("Category ID (null to uncategorize)"),
     memo: z.string().max(500).nullable().optional().describe("Transaction memo (null to clear)"),
     cleared: z.enum(["cleared", "uncleared", "reconciled"]).optional().describe("Cleared status"),
-    approved: z.boolean().optional().describe("Whether transaction is approved"),
+    approved: z.boolean().optional().describe("Approved status"),
     flagColor: z.enum(["red", "orange", "yellow", "green", "blue", "purple"]).nullable().optional().describe("Flag color (null to remove)"),
-    subtransactions: z.array(subtransactionInputSchema).optional().describe("Convert the transaction into a split. Amounts must sum to the transaction total. Works on bank-imported and reconciled transactions. Rejected if the transaction is ALREADY a split; un-split it in the YNAB register first."),
+    subtransactions: z.array(subtransactionInputSchema).optional().describe("Split amounts must sum to total. Imported/reconciled rows supported. Existing splits require unsplitting in YNAB first."),
   } },
   ({ budgetId, transactionId, accountId, date, amount, payeeId, payeeName, categoryId, memo, cleared, approved, flagColor, subtransactions }) =>
     run(async () => {
@@ -2617,9 +2617,9 @@ registerTool(
 registerTool(
   "delete_transaction",
   { description: "Delete a transaction. Requires confirmed:true after explicit user confirmation.", inputSchema: {
-    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+    budgetId: z.string().optional().describe("Omit for default budget"),
     transactionId: z.string().describe("Transaction ID"),
-    confirmed: z.literal(true).describe("Required. Pass true only after the user explicitly confirms this transaction deletion."),
+    confirmed: z.literal(true).describe("True only after user explicitly confirms transaction deletion."),
   } },
   ({ budgetId, transactionId }) =>
     run(async () => {
@@ -2639,13 +2639,13 @@ registerTool(
 
 registerTool(
   "update_transactions",
-  { description: "Batch update transactions. Each entry carries its id (or importId) plus the fields to change; combine categoryId and approved:true in one entry for categorize-and-approve. After the bulk write the batch is refetched in one request, requested fields are verified, and mismatches are retried once; check the verification block, not review_unapproved counts. approved_count is rows approved now (including ones already approved); newly_approved_count is what this call flipped. Use IDs from tool results only.", inputSchema: {
-    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+  { description: "Batch-update by id/importId. Combine categoryId and approved:true to categorize/approve. Refetches and verifies fields, retrying mismatches once. Check verification, not review queue counts. approved_count includes already-approved rows; report newly_approved_count. Use IDs from results only.", inputSchema: {
+    budgetId: z.string().optional().describe("Omit for default budget"),
     transactions: z
       .array(
         z.object({
           id: z.string().min(1).optional().describe("Transaction ID. Provide either id or importId (not both) to identify the transaction."),
-          importId: z.string().min(1).max(36).optional().describe("Import ID used to look up the transaction instead of id. Updating the import_id of an existing transaction is not allowed."),
+          importId: z.string().min(1).max(36).optional().describe("Lookup by import ID instead of id; cannot change existing import_id."),
           accountId: z.string().optional().describe("Account ID"),
           date: z.string().optional().describe("Transaction date (YYYY-MM-DD)"),
           amount: z.number().optional().describe("Amount in dollars"),
@@ -2654,13 +2654,13 @@ registerTool(
           categoryId: z.string().nullable().optional().describe("Category ID (null to uncategorize)"),
           memo: z.string().max(500).nullable().optional().describe("Transaction memo (null to clear)"),
           cleared: z.enum(["cleared", "uncleared", "reconciled"]).optional().describe("Cleared status"),
-          approved: z.boolean().optional().describe("Whether transaction is approved"),
+          approved: z.boolean().optional().describe("Approved status"),
           flagColor: z.enum(["red", "orange", "yellow", "green", "blue", "purple"]).nullable().optional().describe("Flag color (null to remove)"),
-          subtransactions: z.array(subtransactionInputSchema).optional().describe("Convert the transaction into a split. Not supported on transactions that are already splits."),
+          subtransactions: z.array(subtransactionInputSchema).optional().describe("Convert non-split transaction to split; existing splits unsupported."),
         })
       )
       .describe("Array of transaction updates"),
-    returnSummary: z.boolean().optional().describe("If true, return compact counts (updated_count, the approval counts, and verification counts) instead of the full updated-transaction objects. Use for large batches (~50+) whose full response would exceed the inline tool-result limit; the write is performed identically either way."),
+    returnSummary: z.boolean().optional().describe("Return updated/approval/verification counts instead of rows. Recommended for large batches (~50+); writes unchanged."),
   } },
   ({ budgetId, transactions: txns, returnSummary }) =>
     run(async () => {
@@ -2744,16 +2744,16 @@ registerTool(
 
 registerTool(
   "approve_transactions",
-  { description: "Approve unapproved transactions in bulk by filter (payeeId / categoryId / accountId) without listing IDs. Skips uncategorized rows unless includeUncategorized:true. Returns approval and verification counts only, so it is safe on large batches. Requires confirmed:true.", inputSchema: {
-    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
-    confirmed: z.literal(true).describe("Required. Pass true only after the user explicitly confirms this approval action."),
-    expectedMatchedCount: z.number().int().nonnegative().optional().describe("Optional safety check. If provided and the current match count differs, no transactions are approved."),
-    sinceDate: z.string().optional().describe("Only inspect unapproved transactions on or after this date (YYYY-MM-DD). Defaults to all history."),
+  { description: "Approve unapproved rows by payee/category/account filters. Skips uncategorized unless includeUncategorized:true. Returns approval/verification counts. Requires confirmed:true after explicit user confirmation.", inputSchema: {
+    budgetId: z.string().optional().describe("Omit for default budget"),
+    confirmed: z.literal(true).describe("True only after user explicitly confirms approval action."),
+    expectedMatchedCount: z.number().int().nonnegative().optional().describe("Abort approval if current match count differs."),
+    sinceDate: z.string().optional().describe("From YYYY-MM-DD, inclusive; default all history."),
     untilDate: z.string().optional().describe("Only inspect unapproved transactions on or before this date (YYYY-MM-DD)."),
     payeeId: z.string().optional().describe("Only approve unapproved transactions for this payee"),
     categoryId: z.string().optional().describe("Only approve unapproved transactions in this category"),
     accountId: z.string().optional().describe("Only approve unapproved transactions in this account"),
-    includeUncategorized: z.boolean().optional().describe("If true, also approve transactions with no category (default false — uncategorized are skipped for safety)"),
+    includeUncategorized: z.boolean().optional().describe("Include uncategorized rows (default false for safety)."),
   } },
   ({ budgetId, expectedMatchedCount, sinceDate, untilDate, payeeId, categoryId, accountId, includeUncategorized }) =>
     run(async () => {
@@ -2808,14 +2808,14 @@ registerTool(
 
 registerTool(
   "reassign_payee_transactions",
-  { description: "Move all transactions from one payee to another. The YNAB API has no payee-merge or payee-delete endpoint, so this is the merge workaround: refetch every transaction for fromPayeeId and set payee_id = toPayeeId. Use to consolidate a duplicate payee that a slightly different bank-import string created (e.g. fold 'Myles Court Barber' into the existing 'Myles Court Barbershop'). The emptied source payee still exists afterward and must be deleted manually in the YNAB UI (Settings → Manage Payees) if wanted. Returns a compact summary. Requires confirmed:true after explicit user confirmation.", inputSchema: {
-    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
-    confirmed: z.literal(true).describe("Required. Pass true only after the user explicitly confirms this payee reassignment."),
-    expectedMatchedCount: z.number().int().nonnegative().optional().describe("Optional safety check. If provided and the current match count differs, no transactions are reassigned."),
+  { description: "Move transactions from one payee to another; returns a compact summary. The source payee remains: delete manually in YNAB Manage Payees if wanted. Requires confirmed:true after explicit user confirmation.", inputSchema: {
+    budgetId: z.string().optional().describe("Omit for default budget"),
+    confirmed: z.literal(true).describe("True only after user explicitly confirms payee reassignment."),
+    expectedMatchedCount: z.number().int().nonnegative().optional().describe("Abort reassignment if current match count differs."),
     fromPayeeId: z.string().describe("Payee whose transactions will be moved"),
     toPayeeId: z.string().describe("Destination payee that transactions will be reassigned to"),
     sinceDate: z.string().optional().describe("Only move transactions on or after this date (YYYY-MM-DD); defaults to all history"),
-    untilDate: z.string().optional().describe("Only move transactions on or before this date (YYYY-MM-DD)"),
+    untilDate: z.string().optional().describe("Through YYYY-MM-DD, inclusive"),
   } },
   ({ budgetId, expectedMatchedCount, fromPayeeId, toPayeeId, sinceDate, untilDate }) =>
     run(async () => {
@@ -2863,7 +2863,7 @@ registerTool(
 
 registerTool(
   "import_transactions",
-  { description: "Ask YNAB to pull any pending transactions from bank-linked accounts now (same as clicking Import in the UI). Side effects: new imported transactions arrive unapproved; follow with review_unapproved. Returns the imported transaction IDs. No-op when nothing is pending; does not affect unlinked accounts.", inputSchema: { budgetId: z.string().optional().describe("Budget ID (uses default if not provided)") } },
+  { description: "Import pending bank-linked transactions; returns IDs. New rows are unapproved: follow with review_unapproved. No effect on unlinked accounts or when nothing is pending.", inputSchema: { budgetId: z.string().optional().describe("Omit for default budget") } },
   ({ budgetId }) =>
     run(async () => {
       const { data } = await api.transactions.importTransactions(resolveBudgetId(budgetId));
@@ -2917,9 +2917,9 @@ function formatScheduledTransaction(t) {
 
 registerTool(
   "list_scheduled_transactions",
-  { description: "List all scheduled (recurring) transactions. NOTE: only manually-created recurring entries appear here — auto-imported recurring charges (subscriptions, utilities, insurance) are NOT included. Use prior-month transaction history to identify recurring charge timing instead.", inputSchema: {
-    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
-    lastKnowledgeOfServer: z.number().int().nonnegative().optional().describe("Delta request server knowledge. When provided, returns { scheduled_transactions, server_knowledge }."),
+  { description: "List manually scheduled transactions only. For auto-imported recurring charges use transaction history or detect_recurring_charges.", inputSchema: {
+    budgetId: z.string().optional().describe("Omit for default budget"),
+    lastKnowledgeOfServer: z.number().int().nonnegative().optional().describe("Delta cursor; returns { scheduled_transactions, server_knowledge }."),
   } },
   ({ budgetId, lastKnowledgeOfServer }) =>
     run(async () => {
@@ -2931,8 +2931,8 @@ registerTool(
 
 registerTool(
   "get_scheduled_transaction",
-  { description: "Get one scheduled (recurring) transaction by ID: next date, frequency, amount (dollars), payee, category. Read-only. Composite realized-transaction IDs (uuid_YYYY-MM-DD) are not valid here — strip the date suffix or use get_transaction, which handles them.", inputSchema: {
-    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+  { description: "Get scheduled date, frequency, dollar amount, payee and category. Strip composite ID date suffixes or use get_transaction.", inputSchema: {
+    budgetId: z.string().optional().describe("Omit for default budget"),
     scheduledTransactionId: z.string().describe("Scheduled transaction ID"),
   } },
   ({ budgetId, scheduledTransactionId }) =>
@@ -2944,8 +2944,8 @@ registerTool(
 
 registerTool(
   "create_scheduled_transaction",
-  { description: "Create a new scheduled (recurring or future one-time) transaction. Side effects: YNAB will realize it into a real unapproved transaction on each occurrence date. Use frequency:'never' for a single future-dated transaction (create_transaction rejects future dates). For transfers, use the destination account's transfer_payee_id as payeeId.", inputSchema: {
-    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+  { description: "Create future/recurring transactions, realized as unapproved on occurrence dates. frequency:never is one-time. Transfers require destination transfer_payee_id as payeeId.", inputSchema: {
+    budgetId: z.string().optional().describe("Omit for default budget"),
     accountId: z.string().describe("Account ID"),
     dateFirst: z.string().describe("First occurrence date (YYYY-MM-DD)"),
     frequency: z.enum(["never", "daily", "weekly", "everyOtherWeek", "twiceAMonth", "every4Weeks", "monthly", "everyOtherMonth", "every3Months", "every4Months", "twiceAYear", "yearly", "everyOtherYear"]).describe("Recurrence frequency"),
@@ -2977,8 +2977,8 @@ registerTool(
 
 registerTool(
   "update_scheduled_transaction",
-  { description: "Update an existing scheduled transaction. Only provided fields are changed; amounts in dollars. Side effects: changes apply to all FUTURE occurrences (already-realized transactions are untouched — edit those with update_transaction). Implementation note: the YNAB API replaces the whole resource, so this tool fetches current values first and merges (costs one extra API request).", inputSchema: {
-    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+  { description: "Change provided fields for future occurrences only. Edit realized rows with update_transaction. Fetches current values before merging (one extra request). Amounts are dollars.", inputSchema: {
+    budgetId: z.string().optional().describe("Omit for default budget"),
     scheduledTransactionId: z.string().describe("Scheduled transaction ID"),
     accountId: z.string().optional().describe("Account ID"),
     date: z.string().optional().describe("Next occurrence date (YYYY-MM-DD)"),
@@ -3021,9 +3021,9 @@ registerTool(
 registerTool(
   "delete_scheduled_transaction",
   { description: "Delete a scheduled transaction. Requires confirmed:true after explicit user confirmation.", inputSchema: {
-    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+    budgetId: z.string().optional().describe("Omit for default budget"),
     scheduledTransactionId: z.string().describe("Scheduled transaction ID"),
-    confirmed: z.literal(true).describe("Required. Pass true only after the user explicitly confirms this scheduled transaction deletion."),
+    confirmed: z.literal(true).describe("True only after user explicitly confirms scheduled transaction deletion."),
   } },
   ({ budgetId, scheduledTransactionId }) =>
     run(async () => {
@@ -3077,9 +3077,9 @@ function matchCategoriesByQuery(categoryGroups, query, { includeHidden = false }
 
 registerTool(
   "search_categories",
-  { description: "Search categories by name and category-group name (case-insensitive; multi-word queries are tokenized and OR-matched, ranked with whole-phrase and name hits first). Results report matched_on and matched_terms. No synonym expansion; if a search is empty, fall back to list_categories.", inputSchema: {
-    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
-    query: z.string().describe("Category or group name to search for. Multi-word queries are OR-matched per word (e.g. 'work expenses' matches '💻 Work Expenses (Oliver LLC)' and anything in a 'Business Expenses' group)."),
+  { description: "Search category/group names with case-insensitive OR tokens, ranked by phrase/name hits. Returns matched_on/terms. No synonyms; fall back to list_categories.", inputSchema: {
+    budgetId: z.string().optional().describe("Omit for default budget"),
+    query: z.string().describe("Category/group name; multi-word queries OR-match each word."),
     includeHidden: z.boolean().optional().describe("If true, also search hidden categories and hidden category groups (default false)."),
   } },
   ({ budgetId, query, includeHidden }) =>
@@ -3111,8 +3111,8 @@ registerTool(
 
 registerTool(
   "search_payees",
-  { description: "Search payees by partial name match (case-insensitive). Matching ignores HTML entity escaping, so 'B&H' finds a payee YNAB stores as 'B&amp;H Photo Video'. Useful for finding payee IDs. Unlike search_categories this is a single substring match, not a tokenized OR — search one distinctive word at a time.", inputSchema: {
-    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+  { description: "Find payee IDs by case-insensitive substring, ignoring HTML escaping. Unlike search_categories, no OR tokens: try one distinctive word.", inputSchema: {
+    budgetId: z.string().optional().describe("Omit for default budget"),
     query: z.string().describe("Partial payee name to search for"),
   } },
   ({ budgetId, query }) =>
@@ -3205,11 +3205,11 @@ function buildUnapprovedPayeeGroups(categorized, { summary = false, compact = fa
 
 registerTool(
   "review_unapproved",
-  { description: "Unapproved transactions across all history, split into ready_to_approve (categorized, split, or transfer; grouped by payee) and needs_category_first. Each row carries flags: manually_entered, match_broken (cosmetic; the row is still editable), scheduled_transaction_realized (composite id, writable), new_payee, no_prior_amount_match, category_drift:was_X. Group headers report category_names and mixed_categories (category_name is null when mixed) and a net total with inflow_total/outflow_total when signs are mixed; see resource ynab://guide/flags-reference. Large queues: summary:true returns counts and per-payee aggregates; compact:true keeps ids and essentials only. Above maxTransactions rows (default 400) the response drops to compact, then summary, and reports mode.", inputSchema: {
-    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
-    summary: z.boolean().optional().describe("If true, omit per-transaction details from the response and return only counts + by-payee aggregates (for both ready_to_approve and needs_category_first). Use this when the full unapproved queue is large; drill into specifics with get_transactions afterwards."),
-    compact: z.boolean().optional().describe("If true (and summary is not set), keep per-transaction rows but only the fields needed to act (id, date, payee_name, amount, category_name, account_name, flags; matched_transaction_id for match_broken rows)."),
-    maxTransactions: z.number().int().min(1).max(TRANSACTION_LIST_MAX_LIMIT).optional().describe(`Above this many unapproved rows (default ${REVIEW_UNAPPROVED_DEFAULT_MAX}) a full response degrades to compact, and above twice it to summary; the response reports mode and a notice. Raise it to force detail.`),
+  { description: "Review all-history unapproved rows: ready_to_approve (categorized/split/transfer) grouped by payee, plus needs_category_first. Flags explained in ynab://guide/flags-reference. match_broken is editable; realized composite IDs are writable. Mixed groups have category_name:null, category_names/mixed_categories and inflow/outflow totals. summary gives aggregates; compact keeps IDs/essentials. Above maxTransactions (default 400), degrades to compact then summary and reports mode.", inputSchema: {
+    budgetId: z.string().optional().describe("Omit for default budget"),
+    summary: z.boolean().optional().describe("Return counts/payee aggregates for both groups, no rows. Drill down with get_transactions."),
+    compact: z.boolean().optional().describe("Unless summary: keep id/date/payee/amount/category/account/flags and matched_transaction_id for match_broken rows."),
+    maxTransactions: z.number().int().min(1).max(TRANSACTION_LIST_MAX_LIMIT).optional().describe(`Full rows threshold (default ${REVIEW_UNAPPROVED_DEFAULT_MAX}); above: compact, above twice: summary. Reports mode/notice. Raise for detail.`),
   } },
   ({ budgetId, summary, compact, maxTransactions }) =>
     run(async () => {
@@ -3334,9 +3334,9 @@ registerTool(
 
 registerTool(
   "get_overspent_categories",
-  { description: "Get all categories with a negative balance for a given month. Use this to find prior-month overspends that are silently reducing the current month's Ready to Assign.", inputSchema: {
-    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
-    month: z.string().describe("Month in YYYY-MM-DD format (first of month)"),
+  { description: "List negative-balance categories for a month, including prior overspends reducing current Ready to Assign.", inputSchema: {
+    budgetId: z.string().optional().describe("Omit for default budget"),
+    month: z.string().describe("YYYY-MM-DD, first of month"),
   } },
   ({ budgetId, month }) =>
     run(async () => {
@@ -3375,7 +3375,7 @@ registerTool(
   "ynab_tool_index",
   {
     title: "YNAB Tool Index",
-    description: "Discover the YNAB MCP server tools. Use this when you need YNAB budgets, accounts, categories, payees, transactions, scheduled transactions, unapproved transaction review, approval, or budget cleanup tools.",
+    description: "Discover tool names for budget, transaction, review, approval and cleanup operations.",
     inputSchema: {},
   },
   () => ok({
@@ -3394,10 +3394,10 @@ registerTool(
   "ynab_tool_execute",
   {
     title: "Execute YNAB Tool",
-    description: "Execute an existing read-only YNAB MCP tool by name. Use ynab_tool_index first to discover YNAB tool names, then pass the selected tool_name and its JSON input. Write-capable tools must be called directly or through ynab_write_tool_execute when YNAB_ALLOW_WRITES=1.",
+    description: "Execute a read-only tool by name and JSON input; discover with ynab_tool_index. Writes require direct tools or ynab_write_tool_execute.",
     inputSchema: {
-      tool_name: z.string().describe("Existing read-only YNAB tool name, such as review_unapproved, get_transactions, list_categories, search_categories, or search_payees."),
-      input: z.record(z.string(), z.any()).optional().describe("JSON input for the selected YNAB tool. Omit or pass an empty object for tools that take no input."),
+      tool_name: z.string().describe("Read-only tool name from ynab_tool_index."),
+      input: z.record(z.string(), z.any()).optional().describe("Tool JSON input; omit or {} for no-input tools."),
     },
   },
   async ({ tool_name: toolName, input = {} }) => {
@@ -3437,10 +3437,10 @@ registerTool(
   "ynab_write_tool_execute",
   {
     title: "Execute YNAB Write Tool",
-    description: "Execute an existing write-capable YNAB MCP tool by name. This tool is registered only when YNAB_ALLOW_WRITES=1 and requires confirmed:true after explicit user confirmation.",
+    description: "Execute a write tool by name. Requires YNAB_ALLOW_WRITES=1 and confirmed:true after explicit user confirmation.",
     inputSchema: {
-      confirmed: z.literal(true).describe("Required. Pass true only after the user explicitly confirms this write action."),
-      tool_name: z.string().describe("Existing write-capable YNAB tool name, such as update_transaction, update_transactions, approve_transactions, create_transaction, or delete_transaction."),
+      confirmed: z.literal(true).describe("True only after user explicitly confirms write action."),
+      tool_name: z.string().describe("Write tool name from ynab_tool_index."),
       input: z.record(z.string(), z.any()).optional().describe("JSON input for the selected YNAB write tool."),
     },
   },
@@ -3568,7 +3568,7 @@ async function journalTransactionUpdates(tool, budgetId, requestedUpdates, befor
 
 registerTool(
   "list_undo_history",
-  { description: "List the local undo journal: every write this MCP server performed (most recent first), with per-entry undo capability. Read-only; reads a local journal file, never the YNAB API. Use this to review what changed before calling undo_operation, or to audit a session's writes. Entries with undoable:false are recorded for audit only and cannot be reversed automatically.", inputSchema: {
+  { description: "Read local write journal, newest first, with undo capability. No API request. undoable:false entries are audit-only. Use entry IDs with undo_operation.", inputSchema: {
     limit: z.number().int().positive().max(UNDO_JOURNAL_MAX_ENTRIES).optional().describe("Maximum entries to return (default 20, newest first)"),
   } },
   async ({ limit }) => {
@@ -3593,9 +3593,9 @@ registerTool(
 
 registerTool(
   "undo_operation",
-  { description: "Reverse a previous write recorded in the undo journal (see list_undo_history for entry IDs). Supported reversals: field updates are restored to their captured before-values, created transactions are deleted, and deleted transactions are recreated (without their original bank-import linkage, which the YNAB API cannot restore). Side effects: performs real writes against the budget. An entry can only be undone once. Not supported for category/payee/scheduled writes (journaled as undoable:false). Requires confirmed:true after explicit user confirmation.", inputSchema: {
+  { description: "Reverse a journal entry once: restore fields, delete creations or recreate deletions WITHOUT original bank-import linkage. Makes real writes. Category/payee/scheduled writes are not undoable. Requires confirmed:true after explicit user confirmation.", inputSchema: {
     entryId: z.string().describe("Undo journal entry ID from list_undo_history"),
-    confirmed: z.literal(true).describe("Required. Pass true only after the user explicitly confirms this undo."),
+    confirmed: z.literal(true).describe("True only after user explicitly confirms undo."),
   } },
   ({ entryId }) =>
     run(async () => {
@@ -3734,12 +3734,12 @@ async function moveCategoryBudgets(bid, fromCategoryId, toCategoryId, monthsMode
 
 registerTool(
   "merge_category",
-  { description: "Merge one category into another: every transaction in fromCategoryId is recategorized to toCategoryId, and budgeted amounts are moved (per moveBudgetedMonths). Use to consolidate duplicate or obsolete categories. The YNAB API cannot delete categories, so the emptied source category remains and must be hidden or deleted by hand in the YNAB UI afterward. Split-transaction sub-rows in the source category are reported but not moved (the API cannot edit existing splits) — handle those in the UI. Side effects: bulk transaction updates plus per-month budget updates; with moveBudgetedMonths='all' this scans up to 24 months and can use many API requests. The transaction recategorization is journaled and reversible via undo_operation; budget moves are not. Requires confirmed:true after explicit user confirmation.", inputSchema: {
-    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+  { description: "Recategorize source transactions and move budgets per moveBudgetedMonths. Source remains: hide/delete manually in YNAB. Split sub-rows are reported, not moved; handle in UI. Bulk writes plus monthly updates; all scans up to 24 months. Only recategorization is undoable, not budget moves. Requires confirmed:true after explicit user confirmation.", inputSchema: {
+    budgetId: z.string().optional().describe("Omit for default budget"),
     fromCategoryId: z.string().describe("Source category to empty (its transactions and budgets move out)"),
     toCategoryId: z.string().describe("Destination category that absorbs the transactions and budgeted amounts"),
-    moveBudgetedMonths: z.enum(["none", "current", "all"]).optional().describe("Which months' budgeted amounts to move to the destination: 'current' (default) only the current month, 'all' every month with a nonzero source budget (newest 24 months), 'none' to move transactions only"),
-    confirmed: z.literal(true).describe("Required. Pass true only after the user explicitly confirms this category merge."),
+    moveBudgetedMonths: z.enum(["none", "current", "all"]).optional().describe("Budget moves: current (default), all nonzero source months (newest 24), or none (transactions only)."),
+    confirmed: z.literal(true).describe("True only after user explicitly confirms category merge."),
   } },
   ({ budgetId, fromCategoryId, toCategoryId, moveBudgetedMonths }) =>
     run(async () => {
@@ -3769,12 +3769,12 @@ registerTool(
 
 registerTool(
   "retire_category",
-  { description: "Prepare a category for deletion: recategorize its full transaction history to replacementCategoryId and zero its budgeted amounts (per zeroBudgetedMonths). The YNAB API has no category-delete endpoint, so the final hide/delete step happens by hand in the YNAB UI — this tool does everything the API can. Split-transaction sub-rows are reported but not moved. Side effects: bulk transaction updates plus per-month budget zeroing; zeroed budget dollars return to Ready to Assign for those months rather than moving to the replacement category (use merge_category if the dollars should follow). The recategorization is journaled and reversible via undo_operation. Requires confirmed:true after explicit user confirmation.", inputSchema: {
-    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+  { description: "Recategorize history to replacementCategoryId and zero budgets per zeroBudgetedMonths. Hide/delete source manually in YNAB. Split sub-rows are reported, not moved. Zeroed dollars return to Ready to Assign; use merge_category to move them. Only recategorization is undoable. Requires confirmed:true after explicit user confirmation.", inputSchema: {
+    budgetId: z.string().optional().describe("Omit for default budget"),
     categoryId: z.string().describe("Category to retire"),
     replacementCategoryId: z.string().describe("Category that absorbs the transaction history"),
-    zeroBudgetedMonths: z.enum(["none", "current", "all"]).optional().describe("Which months' budgeted amounts to zero: 'current' (default), 'all' (newest 24 months), or 'none'"),
-    confirmed: z.literal(true).describe("Required. Pass true only after the user explicitly confirms retiring this category."),
+    zeroBudgetedMonths: z.enum(["none", "current", "all"]).optional().describe("Zero budgets: current (default), all (newest 24 months), or none."),
+    confirmed: z.literal(true).describe("True only after explicit user confirmation of retiring this category."),
   } },
   ({ budgetId, categoryId, replacementCategoryId, zeroBudgetedMonths }) =>
     run(async () => {
@@ -3804,11 +3804,11 @@ registerTool(
 
 registerTool(
   "prepare_split_for_matching",
-  { description: "Fallback when update_transaction with subtransactions fails on an imported transaction (try that first). Creates a new unapproved, uncleared split mirroring the original's account, date, amount, and payee so YNAB offers a match in its UI; the user approves the match to merge the split onto the bank-linked row. Subtransactions must sum to the original amount. Creates one real transaction (journaled, reversible via undo_operation). Requires confirmed:true.", inputSchema: {
-    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
-    transactionId: z.string().describe("The existing imported transaction to mirror (its account, date, amount, and payee are copied)"),
+  { description: "Fallback after update_transaction subtransactions fails: create an uncleared/unapproved split copying the imported row account/date/amount/payee. Split amounts must sum to original. User approves the match in YNAB to preserve bank linkage. Creates a real, journaled, undoable transaction. Requires confirmed:true after explicit user confirmation.", inputSchema: {
+    budgetId: z.string().optional().describe("Omit for default budget"),
+    transactionId: z.string().describe("Imported row to copy: account/date/amount/payee."),
     subtransactions: z.array(subtransactionInputSchema).min(2).describe("The split lines. Amounts are in dollars and must sum to the original transaction's amount."),
-    confirmed: z.literal(true).describe("Required. Pass true only after the user explicitly confirms creating the mirror split transaction."),
+    confirmed: z.literal(true).describe("True only after explicit user confirmation of creating the mirror split transaction."),
   } },
   ({ budgetId, transactionId, subtransactions }) =>
     run(async () => {
@@ -3850,8 +3850,8 @@ registerTool(
 
 registerTool(
   "audit_credit_card_payments",
-  { description: "Read-only audit of credit card payment categories: for each open credit card / line of credit account, compares the card's balance with its Credit Card Payment category's available balance. In a healthy budget the payment category equals the card balance (sign-flipped) for spending that is budgeted; a shortfall means a future payment is not fully funded (common after overspending or direct debt increases). Reports each card's balance, payment-category balance, difference, and a status. Makes no changes — fix shortfalls by assigning to the payment category via update_month_category. Interpretation note: small transient differences appear while recent transactions are pending/uncleared; treat sub-dollar or same-day differences as timing, not error.", inputSchema: {
-    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+  { description: "Compare open credit/line-of-credit balances with payment-category available dollars; reports difference/status. Shortfalls mean underfunded payments; use update_month_category to fund. Expected payment balance is the negated card balance for budgeted spending. Small/same-day pending differences may be timing, not errors.", inputSchema: {
+    budgetId: z.string().optional().describe("Omit for default budget"),
   } },
   ({ budgetId }) =>
     run(async () => {
@@ -3901,8 +3901,8 @@ registerTool(
 
 registerTool(
   "audit_account_reconciliation",
-  { description: "Read-only reconciliation diagnosis. Without accountId: summarizes every open account's last-reconciled date and cleared/uncleared balances (one API request). With accountId: additionally lists that account's uncleared and unapproved transactions since the last reconciliation, which are exactly the rows to compare against the bank statement. Makes no changes — actual reconciliation (marking transactions reconciled and locking the balance) happens in the YNAB UI; use this to find what needs attention first. Interpretation note: an old last_reconciled_at is not itself a problem if cleared_balance matches the bank; uncleared transactions older than a few days are the usual culprits.", inputSchema: {
-    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+  { description: "Summarize open-account reconciliation dates and cleared/uncleared balances (one request). accountId adds uncleared/unapproved rows since reconciliation to compare with bank statements. Actual reconciliation requires YNAB UI. Old dates alone are not errors if cleared balance matches; inspect older uncleared rows.", inputSchema: {
+    budgetId: z.string().optional().describe("Omit for default budget"),
     accountId: z.string().optional().describe("Account to inspect in detail (adds that account's uncleared/unapproved transaction list)"),
   } },
   ({ budgetId, accountId }) =>
@@ -3983,8 +3983,8 @@ function summarizeIncomeExpenseByMonth(transactions) {
 
 registerTool(
   "get_income_expense_summary",
-  { description: "Read-only income vs. spending summary by month, computed from transaction history. Income counts non-transfer inflows to 'Inflow: Ready to Assign'; spending counts non-transfer outflows; transfers and deleted transactions are excluded, so credit card payments do not double-count. Includes per-month savings rate ((income - spending) / income). Use for savings-rate reports, month-end closes, and trend questions like 'am I saving enough'. Refunds appear as negative spending months' offsets, not income.", inputSchema: {
-    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+  { description: "Monthly income/spending and savings rate ((income-spending)/income). Income: non-transfer Ready to Assign inflows. Spending: non-transfer outflows, reduced by refunds. Excludes deleted rows/transfers, avoiding duplicate card payments.", inputSchema: {
+    budgetId: z.string().optional().describe("Omit for default budget"),
     sinceDate: z.string().optional().describe("Start of the window (YYYY-MM-DD). Defaults to 6 full months back."),
     untilDate: z.string().optional().describe("End of the window (YYYY-MM-DD). Defaults to today."),
   } },
@@ -4052,8 +4052,8 @@ function detectRecurringFromTransactions(transactions, { minOccurrences = 3 } = 
 
 registerTool(
   "detect_recurring_charges",
-  { description: "Read-only detection of recurring charges (subscriptions, utilities, insurance) from transaction history: groups outflows by payee + exact amount and reports groups whose spacing matches a weekly/biweekly/monthly/quarterly/yearly cadence, with estimated annual cost. Use for subscription audits and 'what am I paying for' questions. Catches auto-imported recurring charges that list_scheduled_transactions cannot see (that tool only lists manually-created recurrences). Limitations: variable-amount bills (utilities that fluctuate) are missed because grouping is by exact amount; the same vendor billed under multiple identities or payee spellings appears as separate rows — verify against payee variants with search_payees before concluding a subscription was cancelled.", inputSchema: {
-    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+  { description: "Find recurring outflows by payee and exact amount at weekly/biweekly/monthly/quarterly/yearly intervals; estimates annual cost. Includes auto-imported charges absent from scheduled tools. Misses variable amounts. Payee variants split groups: check search_payees before concluding cancellation.", inputSchema: {
+    budgetId: z.string().optional().describe("Omit for default budget"),
     monthsBack: z.number().int().positive().max(24).optional().describe("History window in months (default 6; longer windows catch quarterly/yearly cadences)"),
     minOccurrences: z.number().int().min(2).optional().describe("Minimum occurrences to count as recurring (default 3)"),
   } },
@@ -4075,8 +4075,8 @@ registerTool(
 
 registerTool(
   "get_budget_health",
-  { description: "Read-only budget health snapshot combining month data, account balances, and a trailing-3-month income/spending summary: savings rate, age of money, Ready to Assign, overspent categories, credit card payment funding, and a green/yellow/red indicator per metric. Threshold guidance (standard personal-finance defaults, not YNAB rules): savings rate 20%+ green; carried credit card debt red when payment categories are underfunded; overspent categories yellow. Use as the opening move of a monthly review or 'how am I doing' question, then drill into specific tools. Costs about 4 API requests.", inputSchema: {
-    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
+  { description: "Budget snapshot: savings rate, age of money, Ready to Assign, overspends and card funding with green/yellow/red indicators. Uses month/accounts and trailing-3-month income/spending (~4 requests). General defaults, not YNAB rules: savings 20%+ green, underfunded card debt red, overspends yellow.", inputSchema: {
+    budgetId: z.string().optional().describe("Omit for default budget"),
   } },
   ({ budgetId }) =>
     run(async () => {
@@ -4181,16 +4181,16 @@ function buildTransactionsCsv(transactions) {
 
 registerTool(
   "export_transactions",
-  { description: "Export transactions as CSV text (same filters as get_transactions, including type). Columns: date, amount (dollars, negative = outflow), payee, category, account, memo, cleared, approved, transfer, id. Free-text columns (payee, category, account, memo) get a leading apostrophe when the value starts with a formula character (= + - @ tab CR), so spreadsheet applications cannot execute a bank-imported merchant string as a formula. Use when the user wants data for a spreadsheet or offline analysis; for programmatic work prefer get_transactions (structured JSON). Read-only. Large date ranges produce large output — narrow with filters when possible.", inputSchema: {
-    budgetId: z.string().optional().describe("Budget ID (uses default if not provided)"),
-    sinceDate: z.string().optional().describe("Only export transactions on or after this date (YYYY-MM-DD). If omitted, YNAB defaults to one year ago."),
-    untilDate: z.string().optional().describe("Only export transactions on or before this date (YYYY-MM-DD)"),
-    type: z.enum(["unapproved", "uncategorized"]).optional().describe("Filter by approval/categorization status (e.g. export the unapproved queue for offline review)"),
+  { description: "Export filtered CSV: date, dollar amount (negative outflow), payee, category, account, memo, cleared, approved, transfer, id. Formula-leading free text gets an apostrophe for spreadsheet safety. Narrow date ranges to limit output; prefer get_transactions for JSON.", inputSchema: {
+    budgetId: z.string().optional().describe("Omit for default budget"),
+    sinceDate: z.string().optional().describe("From YYYY-MM-DD, inclusive; default one year ago."),
+    untilDate: z.string().optional().describe("Through YYYY-MM-DD, inclusive"),
+    type: z.enum(["unapproved", "uncategorized"]).optional().describe("Approval/categorization filter."),
     accountId: z.string().optional().describe("Filter by account ID"),
     categoryId: z.string().optional().describe("Filter by category ID"),
     payeeId: z.string().optional().describe("Filter by payee ID"),
     month: z.string().optional().describe("Filter by month (YYYY-MM-DD, first of month)"),
-    maxRows: z.number().int().min(1).max(TRANSACTION_LIST_MAX_LIMIT).optional().describe(`Row cap (default ${TRANSACTION_LIST_DEFAULT_LIMIT}, max ${TRANSACTION_LIST_MAX_LIMIT}). When exceeded, the newest rows are kept and a second text block reports the truncation.`),
+    maxRows: z.number().int().min(1).max(TRANSACTION_LIST_MAX_LIMIT).optional().describe(`Row cap (default ${TRANSACTION_LIST_DEFAULT_LIMIT}, max ${TRANSACTION_LIST_MAX_LIMIT}); keeps newest rows and reports truncation in second text block.`),
   } },
   ({ budgetId, sinceDate, untilDate, type, accountId, categoryId, payeeId, month, maxRows }) =>
     run(async () => {
