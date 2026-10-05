@@ -16,7 +16,7 @@
     "hono": "^4.13.5"
   },
   "devDependencies": {
-    "wrangler": "4.126.0"
+    "wrangler": "4.147.0"
   },
   "overrides": {
     "@hono/node-server": "2.0.11",
