@@ -57,3 +57,11 @@ jobs:
             --title "$RELEASE_TAG" \
             --generate-notes \
             dist/*.mcpb
+
+  linear-release:
+    needs: [release]
+    uses: ./.github/workflows/linear-release.yml
+    with:
+      source_sha: ${{ github.sha }}
+      dry_run: false
+    secrets: inherit

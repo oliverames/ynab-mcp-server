@@ -1,0 +1,6 @@
+{
+  "repository": "oliverames/ynab-mcp-server",
+  "scheduled": true,
+  "name": "YNAB MCP",
+  "mode": "github"
+}

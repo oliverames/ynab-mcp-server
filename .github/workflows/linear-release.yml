@@ -1,0 +1,124 @@
+name: Report verified release to Linear
+
+on:
+  workflow_call:
+    inputs:
+      source_sha:
+        type: string
+        required: true
+      dry_run:
+        type: boolean
+        default: false
+    secrets:
+      LINEAR_ACCESS_KEY:
+        required: true
+      CLOUDFLARE_API_TOKEN:
+        required: false
+      CLOUDFLARE_ACCOUNT_ID:
+        required: false
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact 40-character commit SHA already delivered
+        type: string
+        required: true
+      dry_run:
+        description: Verify and preview without changing Linear
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linear-release-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out trusted release tooling
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Test release verification safeguards
+        run: python3 -m unittest discover -s .github/scripts -p 'test_*.py'
+
+      - name: Preserve reporting tools for earlier delivered commits
+        run: |
+          mkdir -p "$RUNNER_TEMP/release-tools"
+          cp .github/scripts/linear_release.py "$RUNNER_TEMP/release-tools/"
+          cp .github/linear-release.json "$RUNNER_TEMP/release-tools/config.json"
+
+      - name: Check out delivered source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify receiving delivery and exact source revision
+        id: delivery
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LINEAR_ACCESS_KEY: ${{ secrets.LINEAR_ACCESS_KEY }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: python3 "$RUNNER_TEMP/release-tools/linear_release.py" --root "$GITHUB_WORKSPACE" --config "$RUNNER_TEMP/release-tools/config.json" --sha "$SOURCE_SHA"
+
+      - name: Record verified release
+        id: sync
+        if: steps.delivery.outputs.skip != 'true'
+        uses: linear/linear-release-action@30f9ae77461ec29f07fffe0c52edd1909bfbb6f5 # official immutable pin
+        with:
+          access_key: ${{ secrets.LINEAR_ACCESS_KEY }}
+          cli_version: v0.18.0
+          version: ${{ steps.delivery.outputs.version }}
+          name: ${{ steps.delivery.outputs.name }}
+          links: ${{ steps.delivery.outputs.links }}
+          release_notes: ${{ steps.delivery.outputs.notes }}
+          no_branch_ref_detection: true
+          include_paths: ''
+          dry_run: ${{ inputs.dry_run }}
+
+      - name: Establish first delivered baseline when no matching commits exist
+        id: baseline
+        if: steps.delivery.outputs.baseline == 'true' && steps.delivery.outputs.skip != 'true' && !inputs.dry_run && steps.sync.outputs.release-id == ''
+        uses: linear/linear-release-action@30f9ae77461ec29f07fffe0c52edd1909bfbb6f5
+        with:
+          access_key: ${{ secrets.LINEAR_ACCESS_KEY }}
+          cli_version: v0.18.0
+          version: ${{ steps.delivery.outputs.version }}
+          name: ${{ steps.delivery.outputs.name }}
+          links: ${{ steps.delivery.outputs.links }}
+          release_notes: ${{ steps.delivery.outputs.notes }}
+          include_paths: ''
+          base_ref: ${{ inputs.source_sha }}
+          no_branch_ref_detection: true
+
+      - name: Complete delivered scheduled release
+        if: steps.delivery.outputs.skip != 'true' && steps.delivery.outputs.scheduled == 'true' && (inputs.dry_run || steps.sync.outputs.release-id != '' || steps.baseline.outputs.release-id != '')
+        uses: linear/linear-release-action@30f9ae77461ec29f07fffe0c52edd1909bfbb6f5 # official immutable pin
+        with:
+          access_key: ${{ secrets.LINEAR_ACCESS_KEY }}
+          cli_version: v0.18.0
+          command: complete
+          version: ${{ steps.delivery.outputs.version }}
+          dry_run: ${{ inputs.dry_run }}
+
+      - name: Confirm unchanged release
+        if: steps.delivery.outputs.skip == 'true'
+        env:
+          SKIP_REASON: ${{ steps.delivery.outputs.reason }}
+        run: printf 'Linear unchanged; %s.\n' "$SKIP_REASON"
+
+      - name: Verify completed release in Linear
+        if: ${{ !inputs.dry_run && (steps.delivery.outputs.reason == 'already completed' || steps.sync.outputs.release-id != '' || steps.baseline.outputs.release-id != '') }}
+        env:
+          LINEAR_ACCESS_KEY: ${{ secrets.LINEAR_ACCESS_KEY }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: python3 "$RUNNER_TEMP/release-tools/linear_release.py" --root "$GITHUB_WORKSPACE" --config "$RUNNER_TEMP/release-tools/config.json" --sha "$SOURCE_SHA" --expect-reported
