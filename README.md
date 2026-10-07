@@ -786,6 +786,8 @@ npm pack --dry-run
 
 After publishing, run `npm run release:check:registry` to verify the npm `latest` dist-tag and repo metadata agree on the same version. `npm run build:mcpb` remains available for an explicit local bundle, but the normal install path is direct MCP registration through npm.
 
+Linear records the verified GitHub release and MCPB bundle in this repository's Ames Consulting (AME) release pipeline. npm publication and the hosted OAuth Worker require separate receiving checks. See [release reporting](.github/RELEASES.md) for issue references, credentials and reporting-only recovery.
+
 Pushing a `v*` tag triggers the release workflow (`.github/workflows/release.yml`), which verifies the tag against `package.json`, re-runs the offline tests and consistency checks, builds the MCPB bundle, and publishes a GitHub release with the bundle attached.
 
 ---
