@@ -1,5 +1,17 @@
 # Worklog
 
+## 2026-10-08 - Patch sharp and prepare hosted Worker deployment
+
+**What changed**: Updated the Worker development-tooling override from `sharp` 0.35.4 to 0.35.5 for GHSA-wq5f-xc86-pv6w / CVE-2026-96889. Only sharp and its required native/libvips lockfile entries changed; Wrangler and runtime dependencies retain their existing versions and security floors. The npm release stays at 5.5.0.
+
+**Verification**: The full Worker dependency audit, including development dependencies, reports zero vulnerabilities. Installed sharp reports 0.35.5 with patched librsvg 2.63.2 and successfully renders a benign SVG to PNG. All 25 offline Worker tests and the Wrangler bundle dry run passed.
+
+**Decisions made**: Oliver authorized deployment to the existing `ynab-mcp-connector` Worker on `ynab.amesvt.com`. Use Wrangler version upload/deploy with the existing account and credential, preserve variables, and annotate the exact source commit. This path leaves domain triggers unchanged and refuses pending migrations. No financial operations, new access, DNS changes, migrations, or new npm release are in scope.
+
+**Left off at**: Dependency fix is prepared for CI and production deployment. Verify the active deployment/source and GitHub alert state separately after delivery.
+
+---
+
 ## 2026-10-08 - Released 5.5.0 to npm and GitHub/MCPB
 
 **What changed**: Prepared a minor release from merged PR #20 (`ab0b76f`). Changes since 5.4.0 include the read-only matched-transaction resolver, smaller and compatible discovery schemas, patched dependency overrides, and portable Windows/Linux offline checks. The matched-link resolver previously listed as open is implemented in `91e488b`.
