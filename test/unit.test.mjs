@@ -6,6 +6,8 @@ import assert from "node:assert/strict";
 process.env.YNAB_MCP_NO_AUTOSTART = "1";
 process.env.YNAB_DISABLE_AGENT_CONFIG_FALLBACK = "1";
 process.env.YNAB_API_TOKEN = "unit-test-token";
+// Mocked HTTP calls must not wait on the wall-clock API rate limiter.
+process.env.YNAB_RATE_LIMIT_PER_HOUR = "0";
 delete process.env.YNAB_BUDGET_ID;
 
 const {
@@ -248,8 +250,9 @@ test("inline tables keep quoted commas intact and reject nested values", () => {
 test("createFsJournal persists entries atomically and reads them back", async (t) => {
   const { mkdtempSync } = await import("node:fs");
   const { join } = await import("node:path");
+  const { tmpdir } = await import("node:os");
   const { rmSync, existsSync } = await import("node:fs");
-  const dir = mkdtempSync(join("/tmp", "ynab-journal-test-"));
+  const dir = mkdtempSync(join(tmpdir(), "ynab-journal-test-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
 
   const journalPath = join(dir, "undo.json");
