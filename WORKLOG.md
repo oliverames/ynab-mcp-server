@@ -4,11 +4,11 @@
 
 **What changed**: Updated the Worker development-tooling override from `sharp` 0.35.4 to 0.35.5 for GHSA-wq5f-xc86-pv6w / CVE-2026-96889. Only sharp and its required native/libvips lockfile entries changed; Wrangler and runtime dependencies retain their existing versions and security floors. The npm release stays at 5.5.0.
 
-**Verification**: The full Worker dependency audit, including development dependencies, reports zero vulnerabilities. Installed sharp reports 0.35.5 with patched librsvg 2.63.2 and successfully renders a benign SVG to PNG. All 25 offline Worker tests and the Wrangler bundle dry run passed.
+**Verification**: The full Worker dependency audit, including development dependencies, reports zero vulnerabilities. Installed sharp reports 0.35.5 with patched librsvg 2.63.2 and successfully renders a benign SVG to PNG. All 25 offline Worker tests and the Wrangler bundle dry run passed. Commit `017cfc25be0ad81e7efa03bd57dc9c3895dc049d` passed [all nine CI jobs](https://github.com/oliverames/ynab-mcp-server/actions/runs/37790227052), including Linux and Windows on Node 20/22/24. GitHub independently reports [alert #48](https://github.com/oliverames/ynab-mcp-server/security/dependabot/48) fixed as of 2026-10-08 14:10:01 UTC.
 
 **Decisions made**: Oliver authorized deployment to the existing `ynab-mcp-connector` Worker on `ynab.amesvt.com`. Use Wrangler version upload/deploy with the existing account and credential, preserve variables, and annotate the exact source commit. This path leaves domain triggers unchanged and refuses pending migrations. No financial operations, new access, DNS changes, migrations, or new npm release are in scope.
 
-**Left off at**: Dependency fix is prepared for CI and production deployment. Verify the active deployment/source and GitHub alert state separately after delivery.
+**Left off at**: The dependency fix is committed and pushed. Production upload was rejected by automatic approval review because the original delegation prohibited deployments and the later authorization was relayed, rather than given directly in the execution chat. No version was uploaded or activated; direct authorization in that chat is required to proceed. The existing production deployment is `3cfce6dc-1e99-4543-b3e9-ed584642001c`, serving version `99713eb3-e020-4458-abbb-3d5356cc5af7` at 100%. Read-only preflight confirmed migration tag `v2`, matching bindings and the existing custom domain. The homepage, brand asset and OAuth metadata returned 200; unauthenticated `/mcp` correctly returned 401. After authorization, deploy source `017cfc25be0ad81e7efa03bd57dc9c3895dc049d` and verify the active version, source annotation, unchanged configuration and safe health checks.
 
 ---
 
