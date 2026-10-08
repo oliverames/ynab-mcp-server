@@ -1,14 +1,16 @@
 # Worklog
 
-## 2026-10-08 - Prepare 5.5.0 npm and MCPB release
+## 2026-10-08 - Released 5.5.0 to npm and GitHub/MCPB
 
 **What changed**: Prepared a minor release from merged PR #20 (`ab0b76f`). Changes since 5.4.0 include the read-only matched-transaction resolver, smaller and compatible discovery schemas, patched dependency overrides, and portable Windows/Linux offline checks. The matched-link resolver previously listed as open is implemented in `91e488b`.
 
 **Decisions made**: Publish the existing npm package and GitHub/MCPB distribution. Keep hosted Worker production deployment separate. Used the preparation section of `publish.sh minor` to synchronize every version carrier and validate/build before committing; publication follows from the clean commit so the receiving artifacts can be matched to exact source. Existing npm authentication resolves to `oliverames`.
 
-**Verification**: PR #20 and its merge commit passed all nine CI jobs, including Linux/Windows on Node 20/22/24. Release preparation passed offline unit, safety, discovery and Worker tests, the Wrangler dry run, release consistency, MCPB build and npm pack review. No live YNAB operation was run.
+**Verification**: PR #20, its merge commit, and release commit `d10634a29e32b089a1feed46dc59d64a2e285bc7` passed all nine CI jobs, including Linux/Windows on Node 20/22/24. Release preparation passed 92 unit tests, 25 Worker tests, safety and discovery checks, the Wrangler dry run, release consistency, MCPB build and npm pack review. After npm processing completed, `release:check:registry` confirmed `latest` is 5.5.0 and npm `gitHead` matched the release commit. Downloaded the published npm tarball and MCPB, verified their registry/GitHub integrity metadata and source contents, and launched each without credentials: both reported 5.5.0 and exposed 40 read-only tools, including `resolve_matched_transactions`. The installed npm runtime dependency audit found zero vulnerabilities. No live YNAB operation was run.
 
-**Left off at**: Version 5.5.0 is prepared; npm publication, GitHub release delivery and receiving verification follow this commit. Hosted Worker production remains unchanged.
+**Left off at**: Published [`@oliverames/mcp-server-for-ynab@5.5.0`](https://www.npmjs.com/package/@oliverames/mcp-server-for-ynab/v/5.5.0) and [GitHub release v5.5.0](https://github.com/oliverames/ynab-mcp-server/releases/tag/v5.5.0) with `mcp-server-for-ynab-5.5.0.mcpb` (6,595,484 bytes). The annotated tag resolves to `d10634a29e32b089a1feed46dc59d64a2e285bc7`. [Release workflow 37787408405](https://github.com/oliverames/ynab-mcp-server/actions/runs/37787408405) passed, including readback of the completed Linear release. Hosted Worker production remains unchanged.
+
+**Open questions**: Existing [Dependabot alert #48](https://github.com/oliverames/ynab-mcp-server/security/dependabot/48) affects `sharp` 0.35.4 in Worker development tooling (Wrangler/Miniflare), not the npm or MCPB runtime dependency trees. It remains open for separate maintenance; this release does not claim to resolve it.
 
 ---
 
