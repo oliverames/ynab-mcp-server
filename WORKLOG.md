@@ -1,5 +1,17 @@
 # Worklog
 
+## 2026-10-08 - Prepare 5.5.0 npm and MCPB release
+
+**What changed**: Prepared a minor release from merged PR #20 (`ab0b76f`). Changes since 5.4.0 include the read-only matched-transaction resolver, smaller and compatible discovery schemas, patched dependency overrides, and portable Windows/Linux offline checks. The matched-link resolver previously listed as open is implemented in `91e488b`.
+
+**Decisions made**: Publish the existing npm package and GitHub/MCPB distribution. Keep hosted Worker production deployment separate. Used the preparation section of `publish.sh minor` to synchronize every version carrier and validate/build before committing; publication follows from the clean commit so the receiving artifacts can be matched to exact source. Existing npm authentication resolves to `oliverames`.
+
+**Verification**: PR #20 and its merge commit passed all nine CI jobs, including Linux/Windows on Node 20/22/24. Release preparation passed offline unit, safety, discovery and Worker tests, the Wrangler dry run, release consistency, MCPB build and npm pack review. No live YNAB operation was run.
+
+**Left off at**: Version 5.5.0 is prepared; npm publication, GitHub release delivery and receiving verification follow this commit. Hosted Worker production remains unchanged.
+
+---
+
 ## 2026-10-07 - GitHub Issue Review Closeout
 
 **What changed**: Reviewed all 6 open issues against source at `e1a5c77c514b` and their complete issue history. No issue qualified for closure.
@@ -60,7 +72,6 @@ This is source publication only. npm, installed connectors, and the hosted Worke
 - Diagnose the ~$94K Inflow balance `get_month` reports beside a $4K `to_be_budgeted` (since 2026-05-29; https://github.com/oliverames/ynab-mcp-server/issues/18)
 - Owner to review and send the Gmail draft to Dela (YNAB Works-with-YNAB review): app-name choice ("Local MCP Server for YNAB" proposed) and ToS #6 acknowledgment; the name intersects the deferred repo rename (since 2026-07-05) (unverified)
 - Rename the repository to `mcp-server-for-ynab`, deferred over Glama slug migration risk and orphaned plugin installs (since 2026-07-14; https://github.com/oliverames/ynab-mcp-server/issues/5)
-- Build a dead-link resolver for `match_broken` (resolve `matched_transaction_id`; flag orphan vs live duplicate) (since 2026-06-01; https://github.com/oliverames/ynab-mcp-server/issues/17)
 - Consider a granular npm automation token in 1Password and a pre-release `npm whoami` check in the release flow; `publish.sh` has no `whoami` check (since 2026-05-28) (unverified)
 - If a YNAB call errors in Codex, confirm `[shell_environment_policy]` env propagates to MCP subprocesses on the current Codex build (since 2026-06-22) (unverified)
 - Decide whether `get_transaction` should try `matched_transaction_id` as a third lookup, and whether the scheduled-fallback `reason` should point callers at `get_scheduled_transaction` (since 2026-05-15) (unverified)
