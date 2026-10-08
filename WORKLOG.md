@@ -1,6 +1,6 @@
 # Worklog
 
-## 2026-10-08 - Patch sharp and prepare hosted Worker deployment
+## 2026-10-08 - Patch sharp and deploy the hosted Worker
 
 **What changed**: Updated the Worker development-tooling override from `sharp` 0.35.4 to 0.35.5 for GHSA-wq5f-xc86-pv6w / CVE-2026-96889. Only sharp and its required native/libvips lockfile entries changed; Wrangler and runtime dependencies retain their existing versions and security floors. The npm release stays at 5.5.0.
 
@@ -8,7 +8,7 @@
 
 **Decisions made**: Oliver authorized deployment to the existing `ynab-mcp-connector` Worker on `ynab.amesvt.com`. Use Wrangler version upload/deploy with the existing account and credential, preserve variables, and annotate the exact source commit. This path leaves domain triggers unchanged and refuses pending migrations. No financial operations, new access, DNS changes, migrations, or new npm release are in scope.
 
-**Left off at**: The dependency fix is committed and pushed. Production upload was rejected by automatic approval review because the original delegation prohibited deployments and the later authorization was relayed, rather than given directly in the execution chat. No version was uploaded or activated; direct authorization in that chat is required to proceed. The existing production deployment is `3cfce6dc-1e99-4543-b3e9-ed584642001c`, serving version `99713eb3-e020-4458-abbb-3d5356cc5af7` at 100%. Read-only preflight confirmed migration tag `v2`, matching bindings and the existing custom domain. The homepage, brand asset and OAuth metadata returned 200; unauthenticated `/mcp` correctly returned 401. After authorization, deploy source `017cfc25be0ad81e7efa03bd57dc9c3895dc049d` and verify the active version, source annotation, unchanged configuration and safe health checks.
+**Left off at**: Deployed source `017cfc25be0ad81e7efa03bd57dc9c3895dc049d` to [ynab.amesvt.com](https://ynab.amesvt.com) at 10:26 AM EDT after Oliver directly authorized that exact production deployment. Cloudflare readback confirms deployment `602db004-102b-4451-a58c-4a7c967bb414`, version `8d244112-06b1-4613-a949-6d8d1c91699b`, 100% traffic, and the full source SHA annotation on both records. Compared pre/post snapshots: account, Worker, production environment, all 11 bindings, migration tag `v2`, compatibility settings and custom-domain mapping are unchanged; preview access remains disabled. The homepage, brand asset and OAuth metadata returned 200, and unauthenticated `/mcp` correctly returned 401. These checks do not exercise authenticated MCP operations; that existing acceptance item remains tracked in #24. No financial operation or new npm release ran.
 
 ---
 
