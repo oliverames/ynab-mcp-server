@@ -26,7 +26,8 @@ found. No repository AGENTS.md or .agents/skills instructions were present.
 
 Implementation verification uses synthetic values and fake tokens. Live YNAB
 financial writes and new grants remain out of scope. Oliver subsequently approved
-the 6.0.0 release and hosted rollout; see [rollout notes](release-6.0.0.md).
+the 6.0 release and hosted rollout; see [6.0.0 notes](release-6.0.0.md) and the
+[6.0.1 startup correction](release-6.0.1.md).
 
 ## Reference and license review
 
@@ -45,7 +46,7 @@ Implemented with the following local checks (synthetic data only):
 
 | Check | Result |
 | --- | --- |
-| `npm run test:unit` | 238 passing, zero skipped/failures; includes real MCP → loopback fake HTTP/file journal and explicit live-script approval adapter; bounded to two test files at once |
+| `npm run test:unit` | 240 passing, zero skipped/failures; includes real MCP → loopback fake HTTP/file journal, explicit live-script approval adapter and Worker-global bootstrap regressions; bounded to two test files at once |
 | `npm run test:eval` | 7 scripted agent fixtures passing, no provider calls |
 | `npm run test:safety` | 45 read-only / 71 write-enabled operations; every direct write requires preview and explicit confirmation |
 | `npm run release:check` | Versions, manifests, actual modular tool count and documentation consistent |
@@ -56,9 +57,10 @@ Implemented with the following local checks (synthetic data only):
 | Local MCPB build + unpacked runtime | Builds; unpacked runtime imports all modules and advertises 71 tools |
 | `npm pack --dry-run`, syntax, `git diff --check` | Runtime modules included and checks pass |
 
-All nine CI jobs passed at implementation head `d0ff361`. The 6.0.0 version commit
-must pass CI before publication. Passing local tests does not prove production
-behavior. Receiving artifact and deployment checks are recorded separately.
+All nine CI jobs passed at implementation head `d0ff361` and release source
+`268c05b` (6.0.0). The 6.0.1 correction must pass CI before publication. Passing
+local tests does not prove production behavior. Receiving artifact and deployment
+checks are recorded separately.
 
 Material behavior changes and honest limits:
 

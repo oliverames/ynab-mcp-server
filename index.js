@@ -587,7 +587,7 @@ const {
   previewTtlMs = 300000,
   now = Date.now,
   runtime = {},
-  serverInfo = { name: "YNAB Local", version: "6.0.0" },
+  serverInfo = { name: "YNAB Local", version: "6.0.1" },
 } = options;
 
 // This state belongs to this factory invocation only. Hosted callers supply
@@ -4717,8 +4717,11 @@ return {
 // Identical behavior to the pre-factory single-instance server: credentials,
 // budget, and write gating come from the Node config resolution above, and
 // the undo journal is the local ~/.ynab-mcp-undo.json file.
+// Workers import only the factory and build authenticated instances inside
+// McpAgent.init(). Do not construct the unused stdio instance at global scope:
+// its random session identity requires an active Worker request context.
 
-const defaultInstance = createYnabServer({
+const defaultInstance = IS_CLOUDFLARE_WORKERS ? null : createYnabServer({
   getAccessToken: async () => API_TOKEN || null,
   tenantId: createHash("sha256").update(API_TOKEN || "discovery-only").digest("hex"),
   hasCredentials: !!API_TOKEN,
@@ -4735,7 +4738,7 @@ const defaultInstance = createYnabServer({
   },
 });
 
-const server = defaultInstance.server;
+const server = defaultInstance?.server;
 
 // --- Exports (unit tests) ---
 // Re-export the default instance's internals under the pre-factory names so
@@ -4781,7 +4784,7 @@ const {
   buildTransactionsCsv,
   ynabRequestsRemaining,
   currentBudgetMonth,
-} = defaultInstance.internals;
+} = defaultInstance?.internals ?? {};
 
 export {
   envNumber,

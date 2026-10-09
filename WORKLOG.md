@@ -1,5 +1,39 @@
 # Worklog
 
+## 2026-10-09 - Correct Worker bootstrap for 6.0.1
+
+**What changed**: Skip the unused default stdio server instance when Cloudflare
+imports the shared module. Authenticated hosted instances are still created in
+McpAgent.init; Node stdio instances retain random session identities. Added two
+bootstrap regressions blocking global randomness, timers and fetch during Worker
+imports, then checking request-time instances and independent Node identities.
+See [6.0.1 rollout notes](docs/release-6.0.1.md).
+
+**Verification**: 240 root tests, 37 Worker tests, safety, discovery, release
+consistency, Wrangler dry run, MCPB build and package review passed. The actual
+local workerd runtime started with synthetic vars and isolated local state;
+homepage/privacy/OAuth metadata returned 200 and unauthenticated MCP returned
+401. The owned test process was stopped. Version-commit CI and receiving checks
+must pass before the patch rollout.
+
+**Decisions made**: The authorized 6.0.0 npm and GitHub/MCPB release completed
+from `268c05b`, with all nine CI jobs and release/Linear readback passing. Both
+downloaded artifacts passed integrity, exact source-byte and credential-free
+runtime verification. npm omitted gitHead in the worktree publication; that
+limitation is recorded without rewriting the immutable release. Publish 6.0.1
+from the clean original Git directory after a normal fast-forward so npm can
+record gitHead; preserve all ignored original files.
+
+**Left off at**: Cloudflare rejected the 6.0.0 upload with error 10021 for
+request-only randomUUID during global initialization, before activation.
+Independent readback confirms the old v2 deployment, version, bindings, domain
+and settings remain unchanged. This patch fixes that rollout failure within the
+approved workflow; it introduces no new grant, secret, migration beyond v3,
+pricing change or financial call. Forward repair constraints and the reconnect
+requirement remain. #24 and #34 remain open acceptance/review items.
+
+---
+
 ## 2026-10-09 - Prepare approved 6.0.0 release and hosted rollout
 
 **What changed**: Synchronize all version carriers to 6.0.0 after merging
