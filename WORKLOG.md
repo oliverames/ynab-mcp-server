@@ -1,5 +1,35 @@
 # Worklog
 
+## 2026-10-09 - Approved isolation, write safety, recovery and read improvements
+
+**What changed**: Implemented the eight approved areas from remote main
+`605cf4f`: consent-bound hosted credentials/journals/session routing (#32),
+refund and localized income accounting, exact expiring write previews with
+separate approval, conflict-aware undo, durable category workflows, synthetic
+MCP/HTTP/journal tests and scripted agent fixtures, explained category suggestions,
+isolated complete-history delta caching/projections, trends and schedule forecasts.
+See [the coverage checklist](docs/improvement-coverage.md) for implementation,
+reference-license review and limitations.
+
+**Verification**: Offline root and Worker suites, seven agent fixtures, safety,
+stdio discovery, release consistency, root/Worker production audits, Wrangler
+dry run and unpublished MCPB/package content checks. CI is checked on the draft
+PR's pushed head. All financial values and credentials used in tests are synthetic.
+
+**Decisions made**: Work in an isolated feature worktree and preserve the original
+checkout. Every write now requires the preview/approval protocol. Pending bank
+imports cannot be exactly previewed, so initiate those in YNAB. Legacy hosted
+grants require reconnection after deployment. Recovery across sessions requires
+the same consent; a new consent does not adopt a prior unresolved operation.
+External YNAB races remain possible, and uncertain writes are never blindly
+replayed. Unresolved recreation undo requires manual inspection.
+
+**Left off at**: Tested changes committed and pushed for draft review. Version
+remains 5.5.0. No deployment, package publication, merge, live YNAB financial
+mutation, new access grant or paid provider call is part of this work.
+
+---
+
 ## 2026-10-08 - Patch sharp and deploy the hosted Worker
 
 **What changed**: Updated the Worker development-tooling override from `sharp` 0.35.4 to 0.35.5 for GHSA-wq5f-xc86-pv6w / CVE-2026-96889. Only sharp and its required native/libvips lockfile entries changed; Wrangler and runtime dependencies retain their existing versions and security floors. The npm release stays at 5.5.0.

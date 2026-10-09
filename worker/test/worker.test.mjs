@@ -26,7 +26,11 @@ import {
   YnabHandler,
   persistTokensAndAuthorize,
   revokeAllUserGrants,
+  deleteUserCredentials,
 } from "../src/ynab-handler.js";
+import { CredentialStoreCore } from "../src/credential-store-core.js";
+import { hostedServerOptions } from "../src/hosted-options.js";
+import { withCredentialMcpNamespace } from "../src/mcp-session-isolation.js";
 import { allowedMcpOrigins, rejectUntrustedMcpOrigin } from "../src/mcp-origin.js";
 import { consentPage, errorPage, finalConsentPage, privacyPage } from "../src/pages.js";
 import { applyTransportSecurityHeaders } from "../src/response-security.js";
@@ -40,6 +44,8 @@ import {
   saveTokenRecord,
   tokenRecordKey,
   undoJournalKey,
+  credentialStoreRequest,
+  credentialGeneration,
 } from "../src/ynab-oauth.js";
 
 const DATA_KEY = "test-only-data-encryption-key-with-enough-entropy";
@@ -59,8 +65,59 @@ class MemoryKV {
   }
 
   async delete(key) {
-    this.values.delete(key);
+    for (const item of Array.isArray(key) ? key : [key]) this.values.delete(item);
   }
+
+  async deleteAll() {
+    this.values.clear();
+  }
+
+  async list() {
+    return new Map(this.values);
+  }
+
+  async transaction(callback) {
+    const txn = new MemoryKV();
+    txn.values = new Map(this.values);
+    const result = await callback(txn);
+    this.values = txn.values;
+    return result;
+  }
+}
+
+function testBinding({ user = "user-1", client = "client-1", writes = false, id = "A".repeat(32) } = {}) {
+  return { credentialVersion: 2, credentialId: id, ynabUserId: user, clientId: client, writesEnabled: writes };
+}
+
+class MemoryCredentialNamespace {
+  constructor(env = {}) {
+    this.env = { DATA_ENCRYPTION_KEY: DATA_KEY, YNAB_CLIENT_ID: "fake-client", YNAB_CLIENT_SECRET: "fake-secret", ...env };
+    this.objects = new Map();
+  }
+
+  getByName(name) {
+    if (!this.objects.has(name)) {
+      const storage = new MemoryKV();
+      this.objects.set(name, { storage, core: new CredentialStoreCore(storage, this.env) });
+    }
+    const { core } = this.objects.get(name);
+    return { fetch: (input, init) => core.fetch(new Request(input, init)) };
+  }
+
+  storage(user = "user-1") {
+    this.getByName(`ynab-user:${encodeURIComponent(user)}`);
+    return this.objects.get(`ynab-user:${encodeURIComponent(user)}`).storage;
+  }
+}
+
+function credentialEnv(extra = {}) {
+  return { OAUTH_KV: new MemoryKV(), DATA_ENCRYPTION_KEY: DATA_KEY, YNAB_CREDENTIALS: new MemoryCredentialNamespace(), ...extra };
+}
+
+async function storeCredential(env, binding, tokens = { accessToken: "fake-access", refreshToken: "fake-refresh", expiresAt: Date.now() + 7200000 }) {
+  const generation = await credentialGeneration(env, binding.ynabUserId);
+  const response = await credentialStoreRequest(env, binding.ynabUserId, "/create", { binding, tokens, generation });
+  assert.equal(response.status, 204);
 }
 
 class MemoryTransientNamespace {
@@ -283,7 +340,7 @@ test("HTTPS responses carry hostname-scoped HSTS", async () => {
 test("privacy policy states current retention, hosting, and client delivery", () => {
   const html = privacyPage();
 
-  assert.match(html, /Last updated:<\/strong> July 15, 2026/);
+  assert.match(html, /Last updated:<\/strong> October 9, 2026/);
   assert.match(html, /Cloudflare hosts the Worker/);
   assert.match(html, /retained until you use/);
   assert.match(html, /expires automatically within 10 minutes/);
@@ -356,57 +413,63 @@ test("authorize URL uses YNAB PKCE S256 and minimum read-only scope", () => {
   assert.equal(url.searchParams.get("scope"), "read-only");
 });
 
-test("token records and undo journals are application-encrypted in KV", async () => {
-  const kv = new MemoryKV();
+test("consent token records and undo journals are application-encrypted in durable storage", async () => {
+  const env = credentialEnv();
+  const binding = testBinding();
+  const storage = env.YNAB_CREDENTIALS.storage();
   const record = {
     accessToken: "access-token-should-not-be-plaintext",
     refreshToken: "refresh-token-should-not-be-plaintext",
     expiresAt: 123456,
   };
 
-  await saveTokenRecord(kv, "user-1", record, DATA_KEY);
-  const rawToken = await kv.get(tokenRecordKey("user-1"));
+  await storeCredential(env, binding, record);
+  const rawToken = await storage.get(tokenRecordKey(binding));
   assert.doesNotMatch(rawToken, /access-token|refresh-token/);
-  assert.deepEqual(await readTokenRecord(kv, "user-1", DATA_KEY), record);
+  assert.deepEqual(await readTokenRecord(storage, binding, DATA_KEY), record);
 
-  const journal = createKvJournal({ OAUTH_KV: kv, DATA_ENCRYPTION_KEY: DATA_KEY }, "user-1");
+  const journal = createKvJournal(env, binding);
   const entries = [{ id: "transaction-secret-id", amount: -12.34 }];
   await journal.persist(entries);
-  const rawJournal = await kv.get(undoJournalKey("user-1"));
+  const rawJournal = await storage.get(undoJournalKey(binding));
   assert.doesNotMatch(rawJournal, /transaction-secret-id|-12\.34/);
   assert.deepEqual(await journal.read(), entries);
 });
 
-test("legacy plaintext token records migrate to encrypted storage on read", async () => {
+test("legacy shared credentials require reauthorization instead of ambiguous migration", async () => {
   const kv = new MemoryKV();
   const record = { accessToken: "legacy-token", refreshToken: "legacy-refresh", expiresAt: 999 };
   await kv.put(tokenRecordKey("legacy-user"), JSON.stringify(record));
 
-  assert.deepEqual(await readTokenRecord(kv, "legacy-user", DATA_KEY), record);
-  assert.doesNotMatch(await kv.get(tokenRecordKey("legacy-user")), /legacy-token|legacy-refresh/);
+  assert.equal(await readTokenRecord(kv, "legacy-user", DATA_KEY), null);
+  const options = hostedServerOptions(credentialEnv({ OAUTH_KV: kv }), { ynabUserId: "legacy-user", writesEnabled: true }, "session");
+  assert.equal(options.hasCredentials, false);
+  assert.equal(options.writesEnabled, false);
+  assert.equal(await options.getAccessToken(), null);
+  assert.match(options.runtime.tokenLookupError, /Reconnect/);
+  assert.match(options.runtime.setupGuide.prompt_for_agent, /Do not request or share a personal access token/);
 });
 
-test("refresh failure preserves and uses a token refreshed concurrently", async (t) => {
-  const kv = new MemoryKV();
+test("concurrent sessions serialize a rotating refresh and preserve its binding", async (t) => {
+  const env = credentialEnv();
+  const binding = testBinding({ writes: true });
+  const storage = env.YNAB_CREDENTIALS.storage();
   const oldRecord = { accessToken: "expired", refreshToken: "old-refresh", expiresAt: 1 };
-  const newRecord = { accessToken: "fresh-from-peer", refreshToken: "new-refresh", expiresAt: Date.now() + 3600000 };
-  await saveTokenRecord(kv, "user-1", oldRecord, DATA_KEY);
+  await storeCredential(env, binding, oldRecord);
 
   const originalFetch = globalThis.fetch;
   t.after(() => { globalThis.fetch = originalFetch; });
-  globalThis.fetch = async () => {
-    await saveTokenRecord(kv, "user-1", newRecord, DATA_KEY);
-    return new Response("{}", { status: 400 });
+  let refreshCount = 0;
+  globalThis.fetch = async (_url, init) => {
+    refreshCount += 1;
+    assert.equal(new URLSearchParams(init.body).get("refresh_token"), "old-refresh");
+    return Response.json({ access_token: "fresh-once", refresh_token: "new-refresh", expires_in: 7200 });
   };
-
-  const token = await getFreshAccessToken({
-    OAUTH_KV: kv,
-    DATA_ENCRYPTION_KEY: DATA_KEY,
-    YNAB_CLIENT_ID: "client",
-    YNAB_CLIENT_SECRET: "secret",
-  }, "user-1");
-  assert.equal(token, "fresh-from-peer");
-  assert.deepEqual(await readTokenRecord(kv, "user-1", DATA_KEY), newRecord);
+  const results = await Promise.all(Array.from({ length: 8 }, () => getFreshAccessToken(env, binding)));
+  assert.deepEqual(results, Array(8).fill("fresh-once"));
+  assert.equal(refreshCount, 1);
+  assert.equal((await readTokenRecord(storage, binding, DATA_KEY)).refreshToken, "new-refresh");
+  assert.equal(await readTokenRecord(storage, { ...binding, writesEnabled: false }, DATA_KEY), null);
 });
 
 test("YNAB user lookup rejects a successful response without a user id", async (t) => {
@@ -477,48 +540,53 @@ test("all connector grants are revoked across pagination", async () => {
   ]);
 });
 
-test("failed connector authorization restores the prior encrypted token record", async () => {
-  const kv = new MemoryKV();
+test("failed connector authorization removes only its new credential", async () => {
+  const env = credentialEnv();
+  const binding = testBinding({ writes: true });
   const previous = { accessToken: "previous", refreshToken: "previous-refresh", expiresAt: 123 };
-  await saveTokenRecord(kv, "user-1", previous, DATA_KEY);
-  const previousRaw = await kv.get(tokenRecordKey("user-1"));
+  await storeCredential(env, binding, previous);
+  const storage = env.YNAB_CREDENTIALS.storage();
+  const previousRaw = await storage.get(tokenRecordKey(binding));
 
   await assert.rejects(persistTokensAndAuthorize({
-    OAUTH_KV: kv,
-    DATA_ENCRYPTION_KEY: DATA_KEY,
+    ...env,
     OAUTH_PROVIDER: {
       async completeAuthorization() { throw new Error("provider failed"); },
     },
   }, {
-    record: { oauthReqInfo: { clientId: "client" }, writesEnabled: false },
+    record: { oauthReqInfo: { clientId: "client" }, writesEnabled: false, credentialGeneration: 0 },
     tokens: { accessToken: "new", refreshToken: "new-refresh", expiresAt: 456 },
     ynabUserId: "user-1",
   }), /provider failed/);
 
-  assert.equal(await kv.get(tokenRecordKey("user-1")), previousRaw);
-  assert.deepEqual(await readTokenRecord(kv, "user-1", DATA_KEY), previous);
+  assert.equal(await storage.get(tokenRecordKey(binding)), previousRaw);
+  assert.deepEqual(await readTokenRecord(storage, binding, DATA_KEY), previous);
+  assert.equal([...storage.values.keys()].filter((key) => key.startsWith("ynab_token:v2:")).length, 1);
 });
 
-test("failed connector authorization does not overwrite a concurrent token update", async () => {
-  const kv = new MemoryKV();
+test("failed connector authorization cannot overwrite a concurrent successful consent", async () => {
+  const env = credentialEnv();
   const concurrent = { accessToken: "concurrent", refreshToken: "concurrent-refresh", expiresAt: 999 };
+  let concurrentBinding;
 
   await assert.rejects(persistTokensAndAuthorize({
-    OAUTH_KV: kv,
-    DATA_ENCRYPTION_KEY: DATA_KEY,
+    ...env,
     OAUTH_PROVIDER: {
       async completeAuthorization() {
-        await saveTokenRecord(kv, "user-1", concurrent, DATA_KEY);
+        await persistTokensAndAuthorize({ ...env, OAUTH_PROVIDER: {
+          async completeAuthorization(args) { concurrentBinding = args.props; return { redirectTo: "https://fake.example/callback" }; },
+        } }, { record: { oauthReqInfo: { clientId: "peer-client" }, writesEnabled: false, credentialGeneration: 0 }, tokens: concurrent, ynabUserId: "user-1" });
         throw new Error("provider failed after concurrent update");
       },
     },
   }, {
-    record: { oauthReqInfo: { clientId: "client" }, writesEnabled: true },
+    record: { oauthReqInfo: { clientId: "client" }, writesEnabled: true, credentialGeneration: 0 },
     tokens: { accessToken: "new", refreshToken: "new-refresh", expiresAt: 456 },
     ynabUserId: "user-1",
   }), /provider failed after concurrent update/);
 
-  assert.deepEqual(await readTokenRecord(kv, "user-1", DATA_KEY), concurrent);
+  assert.deepEqual(await readTokenRecord(env.YNAB_CREDENTIALS.storage(), concurrentBinding, DATA_KEY), concurrent);
+  assert.equal([...env.YNAB_CREDENTIALS.storage().values.keys()].filter((key) => key.startsWith("ynab_token:v2:")).length, 1);
 });
 
 test("consent request is opaque, single-use, and redirects to YNAB", async () => {
@@ -809,6 +877,7 @@ test("YNAB callback completes through a native client scheme after final confirm
   const kv = new MemoryKV();
   const transient = new MemoryTransientNamespace();
   let completed = 0;
+  let completedBinding;
   const env = {
     COOKIE_ENCRYPTION_KEY: COOKIE_KEY,
     DATA_ENCRYPTION_KEY: DATA_KEY,
@@ -817,6 +886,7 @@ test("YNAB callback completes through a native client scheme after final confirm
     YNAB_CLIENT_SECRET: "ynab-client-secret",
     OAUTH_KV: kv,
     OAUTH_STATE: transient,
+    YNAB_CREDENTIALS: new MemoryCredentialNamespace(),
     OAUTH_PROVIDER: {
       async parseAuthRequest() {
         return {
@@ -831,8 +901,9 @@ test("YNAB callback completes through a native client scheme after final confirm
         };
       },
       async lookupClient() { return { clientName: "Attacker Controlled Client" }; },
-      async completeAuthorization() {
+      async completeAuthorization(args) {
         completed += 1;
+        completedBinding = args.props;
         return { redirectTo: "com.oliverames.amesutilities:/mcp-oauth?code=connector-code" };
       },
     },
@@ -951,7 +1022,8 @@ test("YNAB callback completes through a native client scheme after final confirm
   assert.equal(finish.status, 302);
   assert.equal(finish.headers.get("location"), "com.oliverames.amesutilities:/mcp-oauth?code=connector-code");
   assert.equal(completed, 1);
-  assert.ok(await kv.get(tokenRecordKey("ynab-user-1")));
+  assert.equal(await kv.get(tokenRecordKey("ynab-user-1")), null);
+  assert.ok(await env.YNAB_CREDENTIALS.storage("ynab-user-1").get(tokenRecordKey(completedBinding)));
 
   const replay = await YnabHandler.request(`${origin}/callback`, {
     method: "POST",
@@ -1046,4 +1118,359 @@ test("overlapping YNAB approvals validate cookie-free state and reject replay", 
   );
   assert.equal(secondCallback.status, 400);
   assert.match(await secondCallback.text(), /YNAB did not authorize the connector/);
+});
+
+async function approveFakeConsent(env, { user = "user-1", client = "client-1", writes = false, access = "fake-access" } = {}) {
+  let binding;
+  await persistTokensAndAuthorize({ ...env, OAUTH_PROVIDER: {
+    async completeAuthorization(args) {
+      binding = args.props;
+      assert.deepEqual(args.scope, writes ? ["read", "write"] : ["read"]);
+      return { redirectTo: "https://fake-client.example/callback" };
+    },
+  } }, {
+    record: { oauthReqInfo: { clientId: client }, writesEnabled: writes, credentialGeneration: await credentialGeneration(env, user) },
+    tokens: { accessToken: access, refreshToken: `refresh-${access}`, expiresAt: Date.now() + 7200000 },
+    ynabUserId: user,
+  });
+  return binding;
+}
+
+test("separate clients keep compatible credentials after both scope orders and reconnects", async () => {
+  for (const order of [[true, false], [false, true]]) {
+    const env = credentialEnv();
+    const first = await approveFakeConsent(env, { client: "client-a", writes: order[0], access: "access-a" });
+    const second = await approveFakeConsent(env, { client: "client-b", writes: order[1], access: "access-b" });
+    const reconnect = await approveFakeConsent(env, { client: "client-a", writes: !order[0], access: "access-a-reconnected" });
+    assert.notEqual(first.credentialId, second.credentialId);
+    assert.notEqual(first.credentialId, reconnect.credentialId);
+    for (const [binding, token] of [[first, "access-a"], [second, "access-b"], [reconnect, "access-a-reconnected"]]) {
+      const options = hostedServerOptions(env, binding, "fake-session");
+      assert.equal(options.writesEnabled, binding.writesEnabled);
+      assert.equal(await options.getAccessToken(), token);
+    }
+    const firstJournal = createKvJournal(env, first);
+    const secondJournal = createKvJournal(env, second);
+    await firstJournal.persist([{ id: "fake-operation-a" }]);
+    assert.deepEqual(await secondJournal.read(), []);
+  }
+});
+
+test("credential lookup rejects cross-user, cross-client, and cross-scope bindings", async () => {
+  const env = credentialEnv();
+  const binding = await approveFakeConsent(env, { writes: true });
+  for (const changed of [
+    { ...binding, ynabUserId: "user-2" },
+    { ...binding, clientId: "client-2" },
+    { ...binding, writesEnabled: false },
+  ]) {
+    await assert.rejects(getFreshAccessToken(env, changed), /Reconnect/);
+    await assert.rejects(createKvJournal(env, changed).read(), /Could not read/);
+  }
+  assert.equal(await getFreshAccessToken(env, binding), "fake-access");
+});
+
+test("refresh failure retains the consent record and gives explicit reauthorization", async (t) => {
+  const env = credentialEnv();
+  const binding = testBinding();
+  const tokens = { accessToken: "fake-expired", refreshToken: "fake-rotating", expiresAt: 1 };
+  await storeCredential(env, binding, tokens);
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  globalThis.fetch = async () => new Response("must-not-surface-upstream-credentials", { status: 400 });
+  await assert.rejects(getFreshAccessToken(env, binding), /Reconnect/);
+  assert.deepEqual(await readTokenRecord(env.YNAB_CREDENTIALS.storage(), binding, DATA_KEY), tokens);
+});
+
+test("ownership-verified deletion clears every scoped record and legacy data for only that user", async () => {
+  const env = credentialEnv();
+  const a = await approveFakeConsent(env, { access: "fake-a", writes: true });
+  const b = await approveFakeConsent(env, { client: "client-b", access: "fake-b" });
+  const peer = await approveFakeConsent(env, { user: "user-2", access: "fake-peer" });
+  await createKvJournal(env, a).persist([{ id: "fake-operation-a" }]);
+  await createKvJournal(env, b).persist([{ id: "fake-operation-b" }]);
+  await env.OAUTH_KV.put(tokenRecordKey("user-1"), "legacy-token-ciphertext");
+  await env.OAUTH_KV.put(undoJournalKey("user-1"), "legacy-journal-ciphertext");
+  await env.OAUTH_KV.put(tokenRecordKey("user-2"), "peer-legacy-token-ciphertext");
+  await deleteUserCredentials(env, "user-1");
+  assert.deepEqual([...env.YNAB_CREDENTIALS.storage().values.keys()], ["deletion_generation"]);
+  assert.equal(await env.OAUTH_KV.get(tokenRecordKey("user-1")), null);
+  assert.equal(await env.OAUTH_KV.get(undoJournalKey("user-1")), null);
+  assert.equal(await env.OAUTH_KV.get(tokenRecordKey("user-2")), "peer-legacy-token-ciphertext");
+  await assert.rejects(getFreshAccessToken(env, a), /Reconnect/);
+  await assert.rejects(getFreshAccessToken(env, b), /Reconnect/);
+  assert.equal(await getFreshAccessToken(env, peer), "fake-peer");
+});
+
+test("durable journal CAS rejects stale persistence and safely merges concurrent state transforms", async () => {
+  const env = credentialEnv();
+  const binding = await approveFakeConsent(env);
+  const a = createKvJournal(env, binding);
+  const b = createKvJournal(env, binding);
+  assert.deepEqual(await a.read(), []);
+  assert.deepEqual(await b.read(), []);
+  await a.persist([{ id: "fake-first" }]);
+  await assert.rejects(b.persist([{ id: "fake-lost-update" }]), /changed concurrently/);
+  const results = await Promise.all([
+    a.mutate((entries) => { entries.push({ id: "fake-a" }); return "a-result"; }),
+    b.mutate((entries) => { entries.push({ id: "fake-b" }); return "b-result"; }),
+  ]);
+  assert.deepEqual(results, ["a-result", "b-result"]);
+  assert.deepEqual((await a.read()).map((entry) => entry.id).sort(), ["fake-a", "fake-b", "fake-first"]);
+});
+
+test("deletion invalidates previously displayed final consents and concurrent provider completion", async () => {
+  const env = credentialEnv();
+  const staleGeneration = await credentialGeneration(env, "user-1");
+  await deleteUserCredentials(env, "user-1");
+  let completed = 0;
+  await assert.rejects(persistTokensAndAuthorize({ ...env, OAUTH_PROVIDER: {
+    async completeAuthorization() { completed += 1; },
+  } }, {
+    record: { oauthReqInfo: { clientId: "fake-client" }, writesEnabled: true, credentialGeneration: staleGeneration },
+    tokens: { accessToken: "fake-pending", expiresAt: Date.now() + 7200000 },
+    ynabUserId: "user-1",
+  }), /Could not store/);
+  assert.equal(completed, 0);
+  let binding;
+  const revoked = [];
+  await assert.rejects(persistTokensAndAuthorize({ ...env, OAUTH_PROVIDER: {
+    async completeAuthorization(args) {
+      binding = args.props;
+      await deleteUserCredentials(env, "user-1");
+      return { redirectTo: "https://fake.example/callback" };
+    },
+    async listUserGrants() { return { items: [
+      { id: "fake-new-grant", metadata: { credentialId: binding.credentialId } },
+      { id: "fake-unrelated-grant", metadata: { credentialId: "unrelated" } },
+    ] }; },
+    async revokeGrant(id, user) { revoked.push([id, user]); },
+  } }, {
+    record: { oauthReqInfo: { clientId: "fake-client" }, writesEnabled: true, credentialGeneration: await credentialGeneration(env, "user-1") },
+    tokens: { accessToken: "fake-in-flight", expiresAt: Date.now() + 7200000 },
+    ynabUserId: "user-1",
+  }), /changed concurrently/);
+  assert.deepEqual(revoked, [["fake-new-grant", "user-1"]]);
+  await assert.rejects(getFreshAccessToken(env, binding), /Reconnect/);
+});
+
+test("failed durable deletion leaves credentials and deletion generation consistent", async () => {
+  const env = credentialEnv();
+  const binding = await approveFakeConsent(env);
+  const storage = env.YNAB_CREDENTIALS.storage();
+  const originalTransaction = storage.transaction.bind(storage);
+  storage.transaction = async (callback) => originalTransaction(async (txn) => {
+    const put = txn.put.bind(txn);
+    txn.put = async (key, value) => {
+      if (key === "deletion_generation") throw new Error("fake durable commit failure");
+      return put(key, value);
+    };
+    return callback(txn);
+  });
+  await assert.rejects(deleteUserCredentials(env, "user-1"), /Could not delete/);
+  assert.equal(await credentialGeneration(env, "user-1"), 0);
+  assert.equal(await getFreshAccessToken(env, binding), "fake-access");
+});
+
+test("durable deletion clears large consent inventories in bounded storage batches", async () => {
+  const env = credentialEnv();
+  const storage = env.YNAB_CREDENTIALS.storage();
+  for (let index = 0; index < 300; index += 1) await storage.put(`fake-encrypted-record:${index}`, "fake-ciphertext");
+  const originalTransaction = storage.transaction.bind(storage);
+  const batches = [];
+  storage.transaction = (callback) => originalTransaction(async (txn) => {
+    const remove = txn.delete.bind(txn);
+    txn.delete = (keys) => {
+      assert.ok(keys.length <= 128);
+      batches.push(keys.length);
+      return remove(keys);
+    };
+    return callback(txn);
+  });
+  await deleteUserCredentials(env, "user-1");
+  assert.deepEqual(batches, [128, 128, 44]);
+  assert.deepEqual([...storage.values.keys()], ["deletion_generation"]);
+});
+
+test("large encrypted journals commit bounded chunks atomically and remove superseded chunks", async () => {
+  const env = credentialEnv();
+  const binding = await approveFakeConsent(env);
+  const storage = env.YNAB_CREDENTIALS.storage();
+  const journal = createKvJournal(env, binding);
+  const fakeMemo = "synthetic-financial-placeholder ".repeat(80000);
+  const entry = { id: "fake-large-operation", memo: fakeMemo };
+  await journal.persist([entry]);
+  assert.deepEqual(await journal.read(), [entry]);
+  const chunkKeys = [...storage.values.keys()].filter((key) => key.includes(":chunk:"));
+  assert.ok(chunkKeys.length > 4, "fixture must exceed SQLite's single-value limit");
+  for (const key of chunkKeys) {
+    const value = await storage.get(key);
+    assert.ok(value.length <= 512 * 1024);
+    assert.doesNotMatch(value, /synthetic-financial-placeholder/);
+  }
+  const originalTransaction = storage.transaction.bind(storage);
+  storage.transaction = (callback) => originalTransaction(async (txn) => {
+    const put = txn.put.bind(txn);
+    txn.put = async (key, value) => {
+      if (key === undoJournalKey(binding)) throw new Error("fake manifest commit failure");
+      return put(key, value);
+    };
+    return callback(txn);
+  });
+  await assert.rejects(journal.persist([{ id: "fake-replacement" }]), /Could not persist/);
+  assert.deepEqual(await journal.read(), [entry]);
+  storage.transaction = originalTransaction;
+  await journal.persist([]);
+  assert.equal([...storage.values.keys()].filter((key) => key.includes(":chunk:")).length, 1);
+  await deleteUserCredentials(env, "user-1");
+  assert.deepEqual([...storage.values.keys()], ["deletion_generation"]);
+});
+
+test("encrypted hosted journal supports recovery across MCP sessions without duplicate writes", async () => {
+  const { createDurableOperationRunner } = await import("../../lib/write-recovery.mjs");
+  const env = credentialEnv();
+  const binding = await approveFakeConsent(env, { writes: true });
+  const options = hostedServerOptions(env, binding, "fake-session-a");
+  const amounts = new Map([["fake-source", 1000], ["fake-destination", 500]]);
+  const writes = [];
+  let destinationFailed = false;
+  const readStep = async (step) => ({ budgeted: amounts.get(step.target.categoryId) });
+  const writeStep = async (step) => {
+    writes.push(step.target.categoryId);
+    if (step.target.categoryId === "fake-destination" && !destinationFailed) {
+      destinationFailed = true;
+      throw new Error("fake failure before write");
+    }
+    amounts.set(step.target.categoryId, step.after.budgeted);
+    if (step.target.categoryId === "fake-source") throw new Error("fake applied-write timeout");
+  };
+  const scope = { tenantId: options.tenantId, sessionId: options.sessionId, budgetId: "fake-budget", operationId: "fake-move" };
+  const runner = createDurableOperationRunner({ journal: options.journal, readStep, writeStep });
+  const result = await runner.run({ ...scope, tool: "fake-move-tool", steps: [
+    { id: "fake-source-step", kind: "category_month", target: { categoryId: "fake-source" }, before: { budgeted: 1000 }, after: { budgeted: 0 } },
+    { id: "fake-destination-step", kind: "category_month", target: { categoryId: "fake-destination" }, before: { budgeted: 500 }, after: { budgeted: 1500 } },
+  ] });
+  assert.equal(result.status, "partial");
+  const reconnected = hostedServerOptions(env, binding, "fake-session-b");
+  const recovery = createDurableOperationRunner({ journal: reconnected.journal, readStep, writeStep });
+  const resumed = await recovery.resume({ ...scope, sessionId: reconnected.sessionId, allowSessionRebind: true });
+  assert.equal(resumed.status, "completed");
+  assert.deepEqual(writes, ["fake-source", "fake-destination", "fake-destination"]);
+  assert.equal(amounts.get("fake-source"), 0);
+  assert.equal(amounts.get("fake-destination"), 1500);
+  const raw = await env.YNAB_CREDENTIALS.storage().get(undoJournalKey(binding));
+  assert.doesNotMatch(raw, /fake-source|fake-move|budgeted/);
+});
+
+test("full MCP sessions keep client scope and HTTP credentials isolated", async (t) => {
+  process.env.YNAB_MCP_NO_AUTOSTART = "1";
+  process.env.YNAB_DISABLE_AGENT_CONFIG_FALLBACK = "1";
+  const [{ createYnabServer }, { Client }, { InMemoryTransport }] = await Promise.all([
+    import("../../index.js"),
+    import("@modelcontextprotocol/sdk/client/index.js"),
+    import("@modelcontextprotocol/sdk/inMemory.js"),
+  ]);
+  const env = credentialEnv();
+  const writeBinding = await approveFakeConsent(env, { client: "write-client", writes: true, access: "fake-write-token" });
+  const readBinding = await approveFakeConsent(env, { client: "read-client", access: "fake-read-token" });
+  const authorizations = [];
+  const sessions = [];
+  t.after(async () => {
+    await Promise.all(sessions.map(async ({ client, server }) => { await client.close(); await server.close(); }));
+  });
+  for (const binding of [writeBinding, readBinding]) {
+    const { server } = createYnabServer({ ...hostedServerOptions(env, binding, `session-${binding.clientId}`), fetchImpl: async (_url, init) => {
+      authorizations.push(new Headers(init.headers).get("authorization"));
+      return Response.json({ data: { plans: [{ id: "fake-budget", name: "Synthetic budget" }] } });
+    } });
+    const client = new Client({ name: `fake-${binding.clientId}`, version: "1.0.0" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    sessions.push({ client, server, binding });
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    const listed = await client.listTools();
+    assert.equal(listed.tools.some((tool) => tool.name === "ynab_write_tool_execute"), binding.writesEnabled);
+    const result = await client.callTool({ name: "ynab_tool_execute", arguments: { tool_name: "list_budgets", input: {} } });
+    assert.notEqual(result.isError, true, JSON.stringify(result));
+  }
+  assert.deepEqual(authorizations, ["Bearer fake-write-token", "Bearer fake-read-token"]);
+});
+
+test("credential-bound sessions satisfy installed SDK naming checks and reject cross-grant attachment on every route", async () => {
+  // Run the actual pinned framework's addressing, native name check, and MCP
+  // parsers without loading its Cloudflare-only module into Node. A permissive
+  // fake idFromName alone misses PartyServer's ctx.id.name/setName contract.
+  const [partySource, mcpSource] = await Promise.all([
+    readFile(new URL("../node_modules/partyserver/dist/index.js", import.meta.url), "utf8"),
+    readFile(new URL("../node_modules/agents/dist/mcp/index.js", import.meta.url), "utf8"),
+  ]);
+  const between = (source, first, last) => {
+    const start = source.indexOf(first);
+    const end = source.indexOf(last, start);
+    assert.ok(start >= 0 && end > start, `Pinned SDK method missing: ${first}`);
+    return source.slice(start, end);
+  };
+  const getServerSource = between(partySource, "async function getServerByName(", "\nfunction camelCaseToKebabCase");
+  const getServer = new Function("durableObjectGetOptions", "retryDurableObjectOperation", `${getServerSource}; return getServerByName;`)(() => undefined, (operation) => operation());
+  const setNameSource = between(partySource, "\tasync setName(name, props)", "\n\t/**\n\t* @internal");
+  const getTransportSource = between(mcpSource, "\tgetTransportType()", "\n\t/** Read the sessionId");
+  const getSessionSource = between(mcpSource, "\tgetSessionId()", "\n\t/** Get the unique");
+  const ProbeAgent = new Function(`return class ProbeAgent {
+    #_name; #_props;
+    constructor(id) { this.ctx = { id }; }
+    async #ensureInitialized() { this.name = this.ctx.id.name; }
+    get props() { return this.#_props; }
+    ${setNameSource}
+    ${getTransportSource}
+    ${getSessionSource}
+  };`)();
+  const env = credentialEnv();
+  const writer = await approveFakeConsent(env, { writes: true });
+  const reader = await approveFakeConsent(env, { client: "fake-reader" });
+  const peer = await approveFakeConsent(env, { user: "user-2" });
+  const objects = new Map();
+  let generated = 0;
+  const namespace = {
+    idFromName(name) { return { name }; },
+    newUniqueId() { const value = `fake-session-${++generated}`; return { toString: () => value }; },
+    get(id) {
+      if (!objects.has(id.name)) objects.set(id.name, new ProbeAgent(id));
+      return objects.get(id.name);
+    },
+  };
+  const handler = withCredentialMcpNamespace({ async fetch(request, scopedEnv, ctx) {
+    const url = new URL(request.url);
+    const protocol = url.pathname.startsWith("/sse") ? "sse" : "streamable-http";
+    let sessionId = request.headers.get("mcp-session-id") ?? url.searchParams.get("sessionId");
+    if (!sessionId) {
+      const id = scopedEnv.MCP_OBJECT.newUniqueId();
+      sessionId = id.toString();
+      assert.equal(id.toString(), sessionId, "generated IDs must have stable string representations");
+    }
+    const agent = await getServer(scopedEnv.MCP_OBJECT, `${protocol}:${sessionId}`, { props: ctx.props });
+    assert.equal(agent.ctx.id.name, agent.name);
+    assert.equal(agent.getTransportType(), protocol);
+    assert.equal(agent.getSessionId(), sessionId, "SDK session parser must match public header/query ID");
+    return Response.json({ sessionId, client: agent.props.clientId, writes: agent.props.writesEnabled });
+  } });
+  const boundEnv = { ...env, MCP_OBJECT: namespace };
+  for (const path of ["/mcp", "/sse"]) {
+    const initial = await handler.fetch(new Request(`https://fake.example${path}`), boundEnv, { props: writer });
+    assert.equal(initial.status, 200);
+    const { sessionId } = await initial.json();
+    assert.match(sessionId, /^[A-Za-z0-9_-]{43}\.[A-Za-z0-9_-]+$/);
+    assert.doesNotMatch(sessionId, /:/);
+    const routes = path === "/mcp" ? [["POST", "/mcp"], ["GET", "/mcp"], ["DELETE", "/mcp"]]
+      : [["GET", "/sse"], ["POST", "/sse/message"]];
+    for (const [method, route] of routes) {
+      const request = () => new Request(`https://fake.example${route}${path === "/sse" ? `?sessionId=${encodeURIComponent(sessionId)}` : ""}`, {
+        method, headers: path === "/mcp" ? { "mcp-session-id": sessionId } : {},
+      });
+      assert.deepEqual(await (await handler.fetch(request(), boundEnv, { props: writer })).json(), { sessionId, client: writer.clientId, writes: true });
+      assert.equal((await handler.fetch(request(), boundEnv, { props: reader })).status, 403);
+      assert.equal((await handler.fetch(request(), boundEnv, { props: peer })).status, 403);
+      assert.equal((await handler.fetch(request(), boundEnv, { props: {} })).status, 401);
+    }
+  }
+  assert.equal(objects.size, 2, "rejected grants must not reach or allocate a session object");
 });

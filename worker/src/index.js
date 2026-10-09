@@ -9,14 +9,16 @@ import { rejectUntrustedMcpOrigin } from "./mcp-origin.js";
 import { applyTransportSecurityHeaders } from "./response-security.js";
 import { YnabMCP } from "./ynab-mcp.js";
 import { OAuthTransientState } from "./oauth-transient-state.js";
+import { OAuthCredentials } from "./oauth-credentials.js";
+import { withCredentialMcpNamespace } from "./mcp-session-isolation.js";
 import { YnabHandler } from "./ynab-handler.js";
 
-export { YnabMCP, OAuthTransientState };
+export { YnabMCP, OAuthTransientState, OAuthCredentials };
 
 const oauthProvider = new OAuthProvider({
   apiHandlers: {
-    "/mcp": YnabMCP.serve("/mcp"),
-    "/sse": YnabMCP.serveSSE("/sse"),
+    "/mcp": withCredentialMcpNamespace(YnabMCP.serve("/mcp")),
+    "/sse": withCredentialMcpNamespace(YnabMCP.serveSSE("/sse")),
   },
   defaultHandler: YnabHandler,
   authorizeEndpoint: "/authorize",

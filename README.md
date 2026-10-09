@@ -10,10 +10,10 @@
 </p>
 
 <p align="center">
-  <code>60 tools + 4 discovery helpers</code> &bull;
+  <code>67 tools + 4 discovery helpers</code> &bull;
   <code>6 guided prompts</code> &bull;
   <code>undo journal</code> &bull;
-  <code>40 read-only operations by default</code> &bull;
+  <code>45 read-only operations by default</code> &bull;
   <code>read-only by default</code>
 </p>
 
@@ -203,7 +203,7 @@ codex mcp add ynab \
   -- npx -y @oliverames/mcp-server-for-ynab@latest
 ```
 
-Destructive direct tools, bulk-filter write tools such as `approve_transactions` and `reassign_payee_transactions`, and the generic `ynab_write_tool_execute` helper also require `confirmed: true` in the tool input after explicit user confirmation. For extra protection, pass `expectedMatchedCount` when using bulk-filter writes.
+Every write requires an exact preview from `preview_write_tool`, its session-bound single-use `previewToken`, and `confirmed: true` after explicit human approval of the plan. A token is not human consent. Execution rereads fresh state and rejects changed IDs, budget or values; `expectedMatchedCount` is an additional check, never a replacement. Pending bank imports cannot be previewed exactly; initiate them in YNAB and review the imported rows here.
 
 ### Manual JSON Config
 
@@ -322,7 +322,7 @@ YNAB_API_TOKEN=your-token-here npm run smoke:review-unapproved -- --published
 
 ## Features
 
-The source defines 60 tools for the YNAB v1 REST API and four discovery helpers, for 64 registered MCP operations. Read-only mode exposes 37 YNAB operations and three helpers. Enabling writes adds 23 YNAB operations and the write-execution helper. The server also defines MCP prompts and resources:
+The source defines 67 tools for the YNAB v1 REST API and four discovery helpers, for 71 registered MCP operations. Read-only mode exposes 42 YNAB operations and three helpers. Enabling writes adds 25 YNAB operations and the write-execution helper. The server also defines MCP prompts and resources:
 
 | Resource | Tools | Capabilities |
 |----------|-------|-------------|
@@ -348,7 +348,7 @@ Beyond tools, the server ships **6 MCP prompts** (guided workflows: monthly revi
 
 - **Read-only by default** - write tools are not registered unless `YNAB_ALLOW_WRITES=1` is set. Read tools are annotated with `readOnlyHint: true`; write tools are annotated with `readOnlyHint: false`, idempotency hints, and destructive hints for delete operations.
 - **Server instructions and structured contracts** - the server sends a compact `instructions` block at initialize (dollar amounts, `search_transactions` before unfiltered pulls, `transactionId`, the transfer convenience, write-safety rules), so clients that never open a prompt or resource still get the rules that matter. Every tool exposes a human-readable title, an input schema even when it takes no arguments, a minimal output schema, and matching `structuredContent`. Impact hints describe YNAB as a private, bounded system so app clients can distinguish reads, writes, and destructive operations accurately.
-- **Explicit destructive confirmation** - delete tools require `confirmed: true` in their input after user confirmation. Bulk-filter writes also require `confirmed: true`, and support `expectedMatchedCount` when the current match count needs to be locked before mutation.
+- **Exact write previews and confirmation** - every write requires a session-bound single-use preview token and `confirmed: true` after explicit user approval. Bulk-filter writes also support `expectedMatchedCount` as an additional guard.
 - **Dollar amounts everywhere** - inputs and outputs are in dollars (`-12.34`), never milliunits (`-12340`). Conversion is automatic and transparent.
 - **Smart budget resolution** - set `YNAB_BUDGET_ID` for a default, or omit it to auto-resolve to your last-used budget. Every tool accepts an optional `budgetId` override.
 - **Pinned YNAB host** - all HTTP requests are restricted to `https://api.ynab.com`, redirects are not followed, and API tokens are redacted from surfaced errors.
@@ -356,7 +356,7 @@ Beyond tools, the server ships **6 MCP prompts** (guided workflows: monthly revi
 - **Split transactions** - first-class support for subtransactions in create, read, and format operations. Updates can also convert a non-split transaction into a split (the YNAB API does not support editing the subtransactions of an existing split).
 - **Current transaction filters** - transaction list tools support `sinceDate`, `untilDate`, type filters, resource filters, and delta requests. YNAB defaults omitted `sinceDate` to one year ago, so pass an explicit older date when you need older history.
 - **Bulk operations** - `create_transactions` and `update_transactions` handle arrays in a single API call. Bulk updates can look transactions up by `id` or by `importId`.
-- **Verified batch updates** - `update_transactions` refetches the whole batch in a single list request after the bulk API call (instead of one request per transaction, which used to consume the shared rate budget on large batches), retries mismatched fields once through single-transaction updates, and returns a `verification` block so approval counts cannot hide failed category writes.
+- **Verified batch updates** - `update_transactions` refetches the whole batch in a single list request after the bulk API call, reports mismatched fields without retrying financial writes, and returns a `verification` block so approval counts cannot hide failed category writes. Journal entries reuse the verified after-state.
 - **Fetch-then-merge updates** - scheduled transaction updates (which use PUT semantics) automatically fetch the current state and merge your changes, so you only specify what changed.
 - **Transfer convenience** - `create_transaction` and `create_transactions` accept `transferToAccountId` or `transferToAccountName` and resolve the destination account's `transfer_payee_id` themselves, so a credit card payment is one call with no payee lookup. YNAB's own error for a `Transfer -- …` payee name now carries the same pointer.
 - **Fuzzy search** - `search_categories` and `search_payees` do case-insensitive partial matching across all entries, and `search_transactions` does the same over transactions (payee, raw import string, memo, account, category, split rows) with an optional absolute-amount match and `limit` / `offset` paging. Category search covers both the category name and its group name, tokenizes multi-word queries and OR-matches them (so `gym fitness membership` still lands), ranks whole-phrase and name hits above single-token and group-only hits, and reports `matched_on` / `matched_terms` per result. It does no synonym expansion, an empty result says so and points at `list_categories`.
@@ -476,6 +476,8 @@ Read tools are available by default. Tools that create, update, import, or delet
 
 | Tool | Description |
 |------|-------------|
+| `preview_write_tool` | Read fresh before-state and exact proposed write intent; returns a five-minute single-use session-bound token. Separate user approval is required. |
+| `suggest_transaction_categories` | Read-only payee-history/recency/schedule suggestions with confidence/evidence and uncertainty/split abstention; never auto-applies. |
 | `review_unapproved` | Get unapproved transactions grouped by readiness: "ready to approve" (categorized, split, or transfer) vs. "needs category first" (uncategorized). Each transaction includes a `flags` array highlighting anomalies (manually_entered, match_broken, no_prior_amount_match, category_drift, new_payee, scheduled_transaction_realized) computed against 60 days of payee history. Group headers report `category_names` / `mixed_categories` and, when the rows run both directions, `inflow_total` / `outflow_total` beside the net `total`. Includes a warning against blind approval. Pass `summary: true` for counts + by-payee aggregates only, or `compact: true` to keep per-transaction rows (with IDs) while dropping bulky fields so the response fits inline, `match_broken` rows keep `matched_transaction_id` in compact mode, since triaging that flag means looking the matched id up. Above `maxTransactions` unapproved rows (default 400) a full response degrades to `compact`, and above twice that to `summary`; the response reports `mode` and a `notice`. |
 | `get_overspent_categories` | Get categories with negative balances for a month, useful for finding prior-month overspending that reduces the current month's Ready to Assign. |
 
@@ -485,6 +487,9 @@ The YNAB API has no category merge/delete endpoint and cannot split an already-i
 
 | Tool | Description |
 |------|-------------|
+| `move_category_budget` **(write)** | Durable exact-value category allocation move for one month, with fresh readback and explicit recovery. |
+| `list_operations` | Tenant-isolated durable partial/unknown/completed workflow state; filter by budget or inspect all authorized journal budgets. |
+| `resume_operation` **(write)** | Recover verified pending steps after a new preview and explicit approval; conflicts stop safely. |
 | `merge_category` **(write)** | Recategorize every transaction from one category into another and move budgeted amounts (`moveBudgetedMonths: none/current/all`, capped at 24 months). The emptied source category is then hidden/deleted by hand in the YNAB UI. Requires `confirmed: true`. |
 | `retire_category` **(write)** | Prepare a category for deletion: move its transaction history to a replacement category and zero its budgets (dollars return to Ready to Assign). Requires `confirmed: true`. |
 | `prepare_split_for_matching` **(write)** | Create a mirror unapproved split transaction that YNAB will offer to match with an imported original, the only way to get splits onto a bank-imported transaction. Requires `confirmed: true`. |
@@ -496,13 +501,15 @@ The YNAB API has no category merge/delete endpoint and cannot split an already-i
 | `audit_credit_card_payments` | Compare each credit card's balance against its Credit Card Payment category and report underfunded cards. |
 | `audit_account_reconciliation` | Per-account reconciliation status; with `accountId`, lists the exact uncleared/unapproved items to check against the bank statement. |
 | `get_budget_health` | Snapshot with green/yellow/red indicators: savings rate, age of money, Ready to Assign, overspending, credit card debt. |
-| `get_income_expense_summary` | Income vs. spending by month with savings rate, transfers excluded. |
+| `get_income_expense_summary` | Net income/spending and savings, with refunds/reversals, localized category identities and split/transfer accounting. Ambiguous metadata requires explicit income category IDs. |
+| `get_spending_trends` | Net category/payee monthly trends and carefully labeled unusual-spending observations with threshold evidence. |
+| `forecast_scheduled_balances` | Future scheduled-payment account ledger scenarios, including transfer effects and explicit omissions. |
 | `detect_recurring_charges` | Find subscriptions/recurring charges from history by payee + amount + cadence, with estimated annual cost. |
 | `export_transactions` | Export filtered transactions as CSV text. Capped at `maxRows` (default 500, max 2000); when exceeded the newest rows are kept and a second text block reports the truncation. |
 
 ### Undo Journal (v4.0)
 
-Every transaction write (create, update, bulk update, approve, reassign, delete, and the category workflows) is journaled to a local file (`~/.ynab-mcp-undo.json`, last 100 entries) with before-state.
+Transaction writes retain relevant before/verified-after state in `~/.ynab-mcp-undo.json` when storage is available. Up to 100 recent completed/audit entries are retained; unfinished durable category operations are preserved. The file contains sensitive plaintext financial fields, uses mode-600 permissions and atomic locked replacement, and survives restarts. Hosted journals are encrypted per OAuth consent. Undo history is tenant-isolated; legacy unverified entries cannot be restored automatically.
 
 | Tool | Description |
 |------|-------------|
@@ -523,23 +530,46 @@ The server starts in read-only mode. Write tools are not merely discouraged; the
 
 If a client already has the process running, changing the environment is not enough. Restart the MCP server after setting or clearing `YNAB_ALLOW_WRITES`.
 
-High-impact writes require confirmation in the tool input, not only in surrounding chat. This applies to direct delete tools, `approve_transactions`, `reassign_payee_transactions`, and `ynab_write_tool_execute`:
+Call the read-only `preview_write_tool` with a concrete write tool and its input:
 
 ```json
 {
-  "confirmed": true,
-  "expectedMatchedCount": 3,
-  "payeeId": "payee-id-to-approve"
+  "tool_name": "update_transactions",
+  "input": {
+    "budgetId": "budget-id",
+    "transactions": [{ "id": "transaction-id", "categoryId": "category-id" }]
+  }
 }
 ```
 
-If `expectedMatchedCount` is provided and the current match count differs, the tool returns an error before mutating any transactions.
+Present the returned before-values and proposed changes to the user. After
+explicit approval, call that tool with the same input plus `previewToken` from
+`preview_token` and `confirmed: true`. Tokens expire after five minutes and
+are consumed on an attempted execution, including stale-state rejection.
+They cannot move between sessions, budgets, transaction IDs or requested values.
+Bank memos and merchant strings are untrusted data and cannot authorize edits.
+
+The server reads fresh state again and restricts outbound mutations to the
+approved exact intent. A changed match count or changed values at the same
+count require a new preview and approval. YNAB has no conditional writes:
+an external change can still race the final read and write.
+
+`move_category_budget`, `merge_category` and `retire_category` persist their
+exact steps before writing and read back every step. Use `list_operations` and
+a newly approved `resume_operation` after a partial or unknown result; never
+blindly repeat a financial operation. Unverified or conflicting undo is refused,
+and an uncertain non-idempotent recreation undo is blocked from replay until
+manual reconciliation. See [recovery limits](docs/write-recovery.md).
+
+### Read freshness and projections
+
+Transaction, account, category, payee and schedule lists accept `projection: "lean" | "full"`, `freshness: "fresh" | "cached"` and `includeFreshness`. Fresh is the default. Explicit caching uses tenant/session/budget-isolated merged entities and a 30-second TTL. Transaction metadata reports the exact `history_since` boundary; an older requested date expands the baseline, and `complete` applies to the reported coverage. Caller deltas never seed the merged baseline. Writes invalidate the cache even after response loss. See [read-cache details](docs/read-cache.md).
 
 ### Batch Updates
 
 When a batch operation categorizes and approves transactions at the same time, do not use `review_unapproved` counts as the only success check. Approved transactions leave the review queue even if a category write failed, so queue counts can hide approved-but-still-uncategorized transactions.
 
-`update_transactions` protects this path by refetching the batch after the bulk API call (one list request for the whole batch, not one request per transaction) and comparing the persisted fields with the requested fields. If anything differs, it retries that transaction once through a single-transaction update. The response includes:
+`update_transactions` protects this path by refetching the batch after the bulk API call (one list request for the whole batch, not one request per transaction) and comparing the persisted fields with the requested fields. If anything differs, it reports the conflict or unapplied fields without replaying financial writes. Split verification checks every active line, including requested amount/category/payee/memo; generated line IDs and response order do not affect equality. The response includes:
 
 ```json
 {
@@ -665,7 +695,7 @@ All amounts in tool inputs and outputs are in **dollars** (e.g., `-12.34` for a 
 
 ## Rate Limiting
 
-The YNAB API allows **200 requests per hour** per access token, enforced on a rolling window. This server applies a client-side limiter at 190 requests per hour with a burst of 10 by default. Each tool call typically uses one API request, except tools that deliberately verify or merge writes (`update_transactions`, `approve_transactions`, `reassign_payee_transactions`, `update_scheduled_transaction`) which perform a small, constant number of additional reads. Batch verification uses one list request for the whole batch regardless of batch size.
+The YNAB API allows **200 requests per hour** per access token, enforced on a rolling window. This server applies a client-side limiter at 190 requests per hour with a burst of 10 by default. Read tools typically use one request. Write previews, fresh-state checks and verification add reads. Batch update verification uses one bounded list request, with individual lookups for older rows outside that window. Creation verification and durable workflows can read each affected entity or step. Large workflows may require later explicit recovery after interruption or rate limiting.
 
 If a request still hits YNAB's limit (HTTP 429), the server waits for the `Retry-After` interval and retries automatically (up to `YNAB_HTTP_RETRIES` times). Transient 502/503/504 responses and network failures are retried for read requests only, since a failed write may have partially applied on the server.
 
@@ -719,7 +749,9 @@ npm run test:safety
 cd worker && npm test
 ```
 
-The root suites run in CI (`.github/workflows/ci.yml`) on Node 20, 22, and 24 for every push and pull request, along with `release:check` and a credential-free MCP smoke test. The Worker suite covers consent-page escaping, OAuth state and PKCE, encrypted KV records, token refresh races, and paginated grant deletion.
+The root suites run in CI (`.github/workflows/ci.yml`) on Node 20, 22, and 24 for pushes to main and every pull request, along with `release:check` and a credential-free MCP smoke test. The Worker suite covers consent-page escaping, OAuth state/PKCE, encrypted consent-scoped Durable Object credentials and CAS journals, multi-client/multi-user boundaries, refresh rotation, failed authorization rollback, and ownership-verified deletion. Legacy shared grants require deliberate reconnection after deployment.
+
+`npm run test:eval` runs scripted synthetic agent trajectories through real MCP and loopback fake HTTP. It makes no model-provider calls and does not claim to benchmark model reasoning. The stateful fake suite covers imports/splits, historical delta cache, applied-write timeouts, partial failures, stale previews, undo conflicts and malicious memo instructions. See [harness details](docs/testing-harness.md) and the [approved coverage checklist](docs/improvement-coverage.md).
 
 ### Live Integration Tests
 
@@ -730,6 +762,8 @@ YNAB_API_TOKEN=your-token YNAB_BUDGET_ID=your-budget-id npm test
 ```
 
 Use `YNAB_TEST_BUDGET_ID` to target a dedicated test budget without changing your server default. To include category and category group creation coverage, run with `YNAB_RUN_NONREVERSIBLE_TESTS=1`.
+
+Every live write in `npm test` and `smoke:batch-verify`, including cleanup or restoration, displays a fresh exact preview and requires you to type `yes` in an interactive terminal. Environment flags only expose tools; they do not approve writes. Without a terminal, write calls fail before execution while read calls remain available. If cleanup is declined or a preview becomes stale, inspect the reported test transaction in YNAB. Pending bank imports cannot be previewed exactly and must be performed in YNAB.
 
 Tests cover all tool categories: reads, reversible writes, bulk operations, search, split transactions, scheduled transaction CRUD with fetch-then-merge verification, money movements, and payee locations.
 

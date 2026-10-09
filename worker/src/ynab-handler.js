@@ -9,7 +9,8 @@ import {
   buildYnabAuthorizeUrl,
   exchangeCodeForTokens,
   fetchYnabUserId,
-  saveTokenRecord,
+  credentialStoreRequest,
+  credentialGeneration,
   tokenRecordKey,
   undoJournalKey,
   randomToken,
@@ -417,6 +418,14 @@ app.get("/callback", async (c) => {
     return html(c, errorPage(`Authorized with YNAB but could not read the user profile (${e.message}).`), 502);
   }
 
+  if (record.purpose === "authorize") {
+    try {
+      record.credentialGeneration = await credentialGeneration(c.env, ynabUserId);
+    } catch {
+      return html(c, errorPage("Could not verify the connector authorization state. Start again from your MCP client."), 502);
+    }
+  }
+
   const finalId = randomToken(24);
   const csrfToken = randomToken(24);
   const csrfHash = await hmacSign(
@@ -488,11 +497,10 @@ app.post("/callback", async (c) => {
   if (record.purpose === "delete") {
     try {
       await revokeAllUserGrants(c.env.OAUTH_PROVIDER, ynabUserId);
+      await deleteUserCredentials(c.env, ynabUserId);
     } catch {
-      return html(c, errorPage("Could not revoke every connector grant. No success confirmation was issued; please retry deletion."), 502);
+      return html(c, errorPage("Could not remove all connector data and grants. No success confirmation was issued; please retry deletion."), 502);
     }
-    await c.env.OAUTH_KV.delete(tokenRecordKey(ynabUserId));
-    await c.env.OAUTH_KV.delete(undoJournalKey(ynabUserId));
     return html(c, deletedPage());
   }
 
@@ -509,36 +517,66 @@ app.post("/callback", async (c) => {
 });
 
 export async function persistTokensAndAuthorize(env, { record, tokens, ynabUserId }) {
-  const key = tokenRecordKey(ynabUserId);
-  const previousRecord = await env.OAUTH_KV.get(key);
-  const writtenRecord = await saveTokenRecord(
-    env.OAUTH_KV,
+  if (!record?.oauthReqInfo?.clientId || typeof record.writesEnabled !== "boolean" || !Number.isInteger(record.credentialGeneration)) {
+    throw new Error("Authorization client and access scope are required");
+  }
+  // Each final consent owns its credential. Another client, a reconnect, or
+  // a failed callback can never replace an existing grant's upstream token.
+  const binding = {
+    credentialVersion: 2,
+    credentialId: randomToken(24),
     ynabUserId,
-    tokens,
-    env.DATA_ENCRYPTION_KEY
-  );
+    clientId: record.oauthReqInfo.clientId,
+    writesEnabled: record.writesEnabled,
+  };
+  const stored = await credentialStoreRequest(env, ynabUserId, "/create", { binding, tokens, generation: record.credentialGeneration });
+  if (!stored.ok) throw new Error("Could not store the isolated YNAB credential");
 
   try {
-    return await env.OAUTH_PROVIDER.completeAuthorization({
+    const result = await env.OAUTH_PROVIDER.completeAuthorization({
       request: record.oauthReqInfo,
       userId: ynabUserId,
-      metadata: { authorizedAt: new Date().toISOString() },
+      metadata: { authorizedAt: new Date().toISOString(), credentialId: binding.credentialId },
       scope: record.writesEnabled ? ["read", "write"] : ["read"],
       // Props are encrypted into the grant and surface as this.props in the
-      // MCP agent. Tokens themselves live in the KV record (they rotate);
-      // props carry only identity and the write choice.
-      props: { ynabUserId, writesEnabled: !!record.writesEnabled },
+      // MCP agent. Tokens rotate in the private credential Durable Object;
+      // props bind identity, client, consent credential, and write choice.
+      props: binding,
     });
+    // Deletion may have happened while the OAuth provider awaited KV. Never
+    // redirect a client to a grant whose credential was concurrently removed.
+    const exists = await credentialStoreRequest(env, ynabUserId, "/exists", { binding });
+    if (!exists.ok) throw new Error("Authorization changed concurrently; start again");
+    return result;
   } catch (error) {
-    // Roll back only if this callback still owns the current value. A second
-    // callback may have completed for the same user while this one was in
-    // flight, and KV does not provide compare-and-swap.
-    if (await env.OAUTH_KV.get(key) === writtenRecord) {
-      if (previousRecord === null) await env.OAUTH_KV.delete(key);
-      else await env.OAUTH_KV.put(key, previousRecord);
-    }
+    // Rollback touches only this callback's unique credential. No prior
+    // consent record is restored, overwritten, or deleted.
+    await credentialStoreRequest(env, ynabUserId, "/remove", { binding });
+    // Best effort provider cleanup is scoped to this exact consent. KV listing
+    // is eventually consistent; missing credentials still block API access.
+    try {
+      if (typeof env.OAUTH_PROVIDER.listUserGrants === "function") {
+        let cursor;
+        do {
+          const page = await env.OAUTH_PROVIDER.listUserGrants(ynabUserId, { cursor, limit: 100 });
+          for (const grant of page?.items ?? []) {
+            if (grant.metadata?.credentialId === binding.credentialId) await env.OAUTH_PROVIDER.revokeGrant(grant.id, ynabUserId);
+          }
+          cursor = page?.cursor;
+        } while (cursor);
+      }
+    } catch { /* No credential is restored after provider cleanup failure. */ }
     throw error;
   }
+}
+
+export async function deleteUserCredentials(env, ynabUserId) {
+  const removed = await credentialStoreRequest(env, ynabUserId, "/delete-all", {});
+  if (!removed.ok) throw new Error("Could not delete isolated credentials");
+  // Existing pre-v2 records cannot safely be assigned to a grant. Keep them
+  // inaccessible until this ownership-verified deletion removes them too.
+  await env.OAUTH_KV.delete(tokenRecordKey(ynabUserId));
+  await env.OAUTH_KV.delete(undoJournalKey(ynabUserId));
 }
 
 export async function revokeAllUserGrants(oauthProvider, userId) {

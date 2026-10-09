@@ -29,6 +29,12 @@ const writeTools = [
   "create_scheduled_transaction",
   "update_scheduled_transaction",
   "delete_scheduled_transaction",
+  "move_category_budget",
+  "resume_operation",
+  "merge_category",
+  "retire_category",
+  "prepare_split_for_matching",
+  "undo_operation",
   "ynab_write_tool_execute",
 ];
 
@@ -43,6 +49,7 @@ const requiredReadTools = [
   "resolve_matched_transactions",
   "search_categories",
   "search_payees",
+  "preview_write_tool",
 ];
 
 function buildEnv(overrides = {}) {
@@ -164,9 +171,10 @@ assert.ok(
 
 const writableTools = await listTools({ YNAB_ALLOW_WRITES: "1" });
 const discoveryBytes = Buffer.byteLength(JSON.stringify({ tools: writableTools }), "utf8");
+// New recovery/analysis tools and per-write preview fields have an explicit bounded discovery budget.
 assert.ok(
-  discoveryBytes < 70_000,
-  `write-enabled tools/list must stay below 70,000 bytes; got ${discoveryBytes}`,
+  discoveryBytes < 100_000,
+  `write-enabled tools/list must stay below 100,000 bytes; got ${discoveryBytes}`,
 );
 // Check the actual transport response in both modes, including write-only tools.
 for (const tool of [...readOnlyTools, ...writableTools]) {
@@ -235,16 +243,14 @@ function requiresConfirmedTrue(tool) {
     && (confirmed?.const === true || confirmed?.enum?.includes(true));
 }
 
-for (const name of [
-  "delete_transaction",
-  "delete_scheduled_transaction",
-  "approve_transactions",
-  "reassign_payee_transactions",
-  "ynab_write_tool_execute",
-]) {
+for (const name of writeTools) {
   assert.ok(
     requiresConfirmedTrue(destructiveTools.get(name)),
     `expected ${name} to require confirmed:true in its input schema`,
+  );
+  if (name !== "ynab_write_tool_execute") assert.ok(
+    destructiveTools.get(name)?.inputSchema?.required?.includes("previewToken"),
+    `expected ${name} to require a single-use exact preview token`,
   );
 }
 

@@ -46,8 +46,16 @@ assert(lock.packages?.[""]?.version === version, `package-lock package version m
 assert(indexJs.includes(`version: "${version}"`), `index.js McpServer version matches ${version}`);
 assert(workerBrandAssetsJs.includes(`version: "${version}"`), `Worker McpServer version matches ${version}`);
 
-const registeredToolNames = [...indexJs.matchAll(/^\s*registerTool\(\s*\n\s*"([^"]+)"/gm)]
-  .map((match) => match[1]);
+// Count the actual catalog, including independently registered modules and
+// compact registration syntax. Discovery uses only synthetic credentials and
+// never performs an API call or reads local agent configuration.
+process.env.YNAB_MCP_NO_AUTOSTART = "1";
+process.env.YNAB_DISABLE_AGENT_CONFIG_FALLBACK = "1";
+process.env.YNAB_API_TOKEN = "fake-release-discovery-token";
+const { createYnabServer } = await import("../index.js");
+const discovery = createYnabServer({ hasCredentials: false, writesEnabled: true, journal: null });
+const registeredToolNames = Object.keys(discovery.server._registeredTools);
+await discovery.server.close();
 const registeredToolCount = registeredToolNames
   .filter((name) => !name.startsWith("ynab_"))
   .length;

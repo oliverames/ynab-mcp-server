@@ -1,5 +1,6 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { createApprovedToolCall } from "./scripts/lib/approved-tool-call.mjs";
 
 const transport = new StdioClientTransport({
   command: "node",
@@ -13,6 +14,7 @@ const transport = new StdioClientTransport({
 
 const client = new Client({ name: "test", version: "1.0.0" });
 await client.connect(transport);
+const approvedToolCall = createApprovedToolCall(client);
 
 // This suite exercises the live YNAB API; without credentials every call
 // returns the discovery-mode auth payload and the assertions below would
@@ -39,7 +41,7 @@ let testMonthLabel = testMonth.slice(0, 7);
 const todayDate = now.toISOString().slice(0, 10);
 
 async function call(name, args = {}) {
-  const result = await client.callTool({ name, arguments: args });
+  const result = await approvedToolCall(name, args);
   const text = result.content[0].text;
   if (result.isError) throw new Error(text);
   return JSON.parse(text);
@@ -553,10 +555,7 @@ await test("create_transactions (bulk)", async () => {
   }
 });
 
-await test("import_transactions", async () => {
-  const result = await call("import_transactions", { budgetId: bid });
-  if (result === undefined) throw new Error("no result");
-});
+skip("import_transactions", "YNAB does not expose pending bank-import IDs and values for an exact preview. Import in YNAB, then review the imported rows; ordinary create_transactions is tested above.");
 
 // --- Convenience tools ---
 console.log("\n=== Convenience Tools ===");

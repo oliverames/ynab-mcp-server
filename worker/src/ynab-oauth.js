@@ -1,5 +1,5 @@
 // Upstream YNAB OAuth helpers: authorize-URL construction, code exchange,
-// refresh, and the KV-backed per-user token record. YNAB specifics
+// refresh, and encrypted per-consent token records. YNAB specifics
 // (api.ynab.com/#oauth-applications): access tokens live 2 hours, refresh
 // tokens are issued with the authorization-code grant and rotate on use,
 // the only scope is "read-only" (omitting scope grants full read/write).
@@ -21,12 +21,31 @@ function assertNoUpstreamRedirect(response, endpointName) {
   }
 }
 
-export function tokenRecordKey(ynabUserId) {
-  return `ynab_token:${ynabUserId}`;
+export function isCredentialBinding(binding) {
+  return binding?.credentialVersion === 2
+    && typeof binding.ynabUserId === "string" && !!binding.ynabUserId
+    && typeof binding.clientId === "string" && !!binding.clientId
+    && typeof binding.credentialId === "string" && /^[A-Za-z0-9_-]{32}$/.test(binding.credentialId)
+    && typeof binding.writesEnabled === "boolean";
 }
 
-export function undoJournalKey(ynabUserId) {
-  return `ynab_undo:${ynabUserId}`;
+export function credentialIdentity(binding) {
+  if (!isCredentialBinding(binding)) throw new Error("Reconnect the YNAB connector to authorize an isolated credential.");
+  return `${encodeURIComponent(binding.ynabUserId)}:${binding.credentialId}`;
+}
+
+export function tokenRecordKey(binding) {
+  // String keys exist only for deleting the ambiguous pre-v2 records.
+  return typeof binding === "string" ? `ynab_token:${binding}` : `ynab_token:v2:${credentialIdentity(binding)}`;
+}
+
+export function undoJournalKey(binding) {
+  return typeof binding === "string" ? `ynab_undo:${binding}` : `ynab_undo:v2:${credentialIdentity(binding)}`;
+}
+
+export function credentialBindingsMatch(a, b) {
+  return isCredentialBinding(a) && isCredentialBinding(b)
+    && ["credentialVersion", "ynabUserId", "clientId", "credentialId", "writesEnabled"].every((key) => a[key] === b[key]);
 }
 
 export function randomToken(bytes = 32) {
@@ -37,7 +56,9 @@ export function randomToken(bytes = 32) {
 
 export function base64url(bytes) {
   let binary = "";
-  for (const b of bytes) binary += String.fromCharCode(b);
+  for (let start = 0; start < bytes.length; start += 4096) {
+    binary += String.fromCharCode(...bytes.subarray(start, start + 4096));
+  }
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
@@ -45,7 +66,9 @@ function base64urlDecode(value) {
   const base64 = value.replace(/-/g, "+").replace(/_/g, "/");
   const padded = base64.padEnd(Math.ceil(base64.length / 4) * 4, "=");
   const binary = atob(padded);
-  return Uint8Array.from(binary, (char) => char.charCodeAt(0));
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return bytes;
 }
 
 export async function sha256base64url(text) {
@@ -196,28 +219,29 @@ export async function fetchYnabUserId(accessToken) {
   return userId;
 }
 
-export async function saveTokenRecord(kv, ynabUserId, record, encryptionSecret) {
-  const key = tokenRecordKey(ynabUserId);
-  const encryptedRecord = await encryptStoredJson(encryptionSecret, key, record);
-  await kv.put(key, encryptedRecord);
+export async function saveTokenRecord(storage, binding, record, encryptionSecret) {
+  const key = tokenRecordKey(binding);
+  const encryptedRecord = await encryptStoredJson(encryptionSecret, key, { binding, tokens: record });
+  await storage.put(key, encryptedRecord);
   return encryptedRecord;
 }
 
-export async function readTokenRecord(kv, ynabUserId, encryptionSecret) {
-  const key = tokenRecordKey(ynabUserId);
-  const raw = await kv.get(key);
+export async function readTokenRecord(storage, binding, encryptionSecret) {
+  // A legacy grant cannot prove which client or consent produced its token.
+  // Fail closed instead of importing an ambiguous shared user credential.
+  if (!isCredentialBinding(binding)) return null;
+  const key = tokenRecordKey(binding);
+  const raw = await storage.get(key);
   if (!raw) return null;
   const decoded = await decryptStoredJson(encryptionSecret, key, raw);
-  if (decoded.legacy) await saveTokenRecord(kv, ynabUserId, decoded.value, encryptionSecret);
-  return decoded.value;
+  if (decoded.legacy || !credentialBindingsMatch(decoded.value?.binding, binding)) return null;
+  return decoded.value.tokens ?? null;
 }
 
-// Return a currently-valid access token for the user, refreshing (and
-// persisting the rotated refresh token) when inside the safety window.
-// Returns null when no usable token exists — the shared tool layer then
-// answers with its structured missing-credentials result instead of crashing.
-export async function getFreshAccessToken(env, ynabUserId) {
-  const record = await readTokenRecord(env.OAUTH_KV, ynabUserId, env.DATA_ENCRYPTION_KEY);
+// Called only inside the credential Durable Object's serialized queue. A
+// rotating refresh is never sent concurrently for one consent credential.
+export async function refreshStoredCredential(env, storage, binding) {
+  const record = await readTokenRecord(storage, binding, env.DATA_ENCRYPTION_KEY);
   if (!record?.accessToken) return null;
   if (Date.now() < record.expiresAt - REFRESH_SAFETY_WINDOW_MS) {
     return record.accessToken;
@@ -225,43 +249,84 @@ export async function getFreshAccessToken(env, ynabUserId) {
   if (!record.refreshToken) return null;
   try {
     const refreshed = await refreshTokens(env, record.refreshToken);
-    await saveTokenRecord(env.OAUTH_KV, ynabUserId, refreshed, env.DATA_ENCRYPTION_KEY);
+    await saveTokenRecord(storage, binding, refreshed, env.DATA_ENCRYPTION_KEY);
     return refreshed.accessToken;
   } catch {
-    // Another MCP session may have refreshed the same rotating token first.
-    // Re-read before failing; never delete here because KV has no atomic
-    // compare-and-delete and doing so could erase the peer's fresh record.
-    const latest = await readTokenRecord(env.OAUTH_KV, ynabUserId, env.DATA_ENCRYPTION_KEY);
-    if (latest?.accessToken && (
-      latest.refreshToken !== record.refreshToken || latest.expiresAt > record.expiresAt
-    )) {
-      return latest.accessToken;
-    }
+    // Preserve the encrypted record on failure. An upstream success followed
+    // by a lost response/storage failure can still require reconnecting;
+    // serialization cannot make the upstream OAuth exchange transactional.
     return null;
   }
 }
 
-// KV-backed undo journal implementing the shared layer's async journal
-// interface ({ read, persist }); one record per YNAB user.
-export function createKvJournal(env, ynabUserId) {
-  const key = undoJournalKey(ynabUserId);
+const CREDENTIAL_ORIGIN = "https://ynab-credentials.internal";
+
+export async function credentialStoreRequest(env, ynabUserId, path, value) {
+  if (!env.YNAB_CREDENTIALS) throw new Error("YNAB_CREDENTIALS Durable Object binding is required; reconnect after updating the connector.");
+  const stub = env.YNAB_CREDENTIALS.getByName(`ynab-user:${encodeURIComponent(ynabUserId)}`);
+  return stub.fetch(`${CREDENTIAL_ORIGIN}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ynabUserId, ...value }),
+  });
+}
+
+export async function getFreshAccessToken(env, binding) {
+  if (!isCredentialBinding(binding)) return null;
+  const response = await credentialStoreRequest(env, binding.ynabUserId, "/token", { binding });
+  if (response.status === 401) throw new Error("YNAB authorization is unavailable or expired. Reconnect this connector in your MCP client; an older shared credential cannot be migrated safely.");
+  if (!response.ok) throw new Error("Could not read the isolated YNAB authorization. Reconnect this connector in your MCP client.");
+  return (await response.json()).accessToken;
+}
+
+export async function credentialGeneration(env, ynabUserId) {
+  const response = await credentialStoreRequest(env, ynabUserId, "/generation", {});
+  if (!response.ok) throw new Error("Could not verify the YNAB credential deletion state");
+  const { generation } = await response.json();
+  if (!Number.isInteger(generation) || generation < 0) throw new Error("Invalid YNAB credential deletion state");
+  return generation;
+}
+
+// Durable encrypted journal per consent credential. CAS prevents another MCP
+// session's read/modify/write from silently losing entries. mutate retries
+// only journal transformations, never an outbound financial operation.
+export function createKvJournal(env, binding) {
+  credentialIdentity(binding);
+  let revision;
+  async function readVersioned() {
+    const response = await credentialStoreRequest(env, binding.ynabUserId, "/journal/read", { binding });
+    if (!response.ok) throw new Error("Could not read the YNAB operation journal.");
+    return response.json();
+  }
+  async function persistVersioned(entries, expectedRevision) {
+    const response = await credentialStoreRequest(env, binding.ynabUserId, "/journal/persist", { binding, entries, expectedRevision });
+    if (response.status === 409) return null;
+    if (!response.ok) throw new Error("Could not persist the YNAB operation journal.");
+    return (await response.json()).revision;
+  }
   return {
     async read() {
-      const raw = await env.OAUTH_KV.get(key);
-      if (!raw) return [];
-      const decoded = await decryptStoredJson(env.DATA_ENCRYPTION_KEY, key, raw);
-      const entries = Array.isArray(decoded.value) ? decoded.value : [];
-      if (decoded.legacy) await env.OAUTH_KV.put(
-        key,
-        await encryptStoredJson(env.DATA_ENCRYPTION_KEY, key, entries)
-      );
-      return entries;
+      const current = await readVersioned();
+      revision = current.revision;
+      return current.entries;
     },
     async persist(entries) {
-      await env.OAUTH_KV.put(
-        key,
-        await encryptStoredJson(env.DATA_ENCRYPTION_KEY, key, entries)
-      );
+      if (revision === undefined) revision = (await readVersioned()).revision;
+      const next = await persistVersioned(entries, revision);
+      if (next === null) throw new Error("YNAB operation journal changed concurrently; reread its state before continuing.");
+      revision = next;
+    },
+    async mutate(transform) {
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        const current = await readVersioned();
+        const result = await transform(current.entries);
+        const next = await persistVersioned(current.entries, current.revision);
+        if (next !== null) {
+          revision = next;
+          return result;
+        }
+      }
+      throw new Error("YNAB operation journal changed concurrently; retry the journal state update.");
     },
   };
 }
