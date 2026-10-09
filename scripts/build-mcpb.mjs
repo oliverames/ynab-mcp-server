@@ -50,6 +50,8 @@ const bundlePackage = {
 writeJson("package.json", pkg);
 copyFile("package-lock.json");
 copyFile("index.js");
+fs.cpSync(path.join(projectRoot, "lib"), path.join(stagingDir, "lib"), { recursive: true });
+fs.cpSync(path.join(projectRoot, "modules"), path.join(stagingDir, "modules"), { recursive: true });
 copyFile("README.md");
 copyFile("LICENSE");
 copyFile("assets/icon.png");

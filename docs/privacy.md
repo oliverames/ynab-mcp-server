@@ -1,6 +1,6 @@
 # Privacy Policy for MCP Server for YNAB
 
-Last Updated: July 15, 2026
+Last Updated: October 9, 2026
 
 MCP Server for YNAB is a local stdio MCP server that runs on the user's machine or in a user-controlled MCP host. It connects the user's MCP client to the YNAB API.
 
@@ -10,11 +10,13 @@ This policy covers the local owner-run package published as `@oliverames/mcp-ser
 
 The server can access YNAB budget data that the configured YNAB access token is allowed to access, including budgets, accounts, categories, payees, transactions, scheduled transactions, months, and related metadata.
 
-Write tools are disabled by default. They are registered only when `YNAB_ALLOW_WRITES=1` is set before the MCP process starts. Destructive delete tools, bulk-filter write tools, and the generic write executor also require `confirmed: true` in the tool input after explicit user confirmation.
+Write tools are disabled by default. They are registered only when `YNAB_ALLOW_WRITES=1` is set before the MCP process starts. Every write requires an expiring, single-use preview token and `confirmed: true` after explicit user approval of the exact plan. The token does not prove consent. Pending bank imports cannot receive exact previews and must be initiated in YNAB.
 
 ## Data Storage
 
-This package does not create a database and does not store YNAB budget data outside the running MCP process. It returns YNAB API responses to the connected MCP client so the client can answer the user's request.
+Read results can be cached in the running process for 30 seconds when requested. Cache entries are isolated by authenticated tenant, session, budget and entity scope, limited in size, and cleared on writes or token changes. Preview tokens retain only a fingerprint and expiry in process memory for at most five minutes; selected before-values and proposed edits are returned to the MCP client for review.
+
+The local package persists an undo and operation journal in `~/.ynab-mcp-undo.json`, including transaction IDs, relevant before/verified-after field values and durable multi-step operation plans/outcomes. It contains financial data in plaintext, protected by mode-600 file permissions, and survives restarts. Up to 100 recent completed/audit entries are retained; unfinished operations remain until resolved. It does not store the API token in this journal. Journal reads fail closed on corruption. The connector returns API results and plan details to the connected MCP client.
 
 Authentication is configured by the user through one of these local mechanisms:
 
@@ -38,13 +40,13 @@ The server redacts bearer tokens and authorization headers from surfaced errors.
 
 ## Deleting Data
 
-Because this local package does not persist YNAB budget data, there is no server-side data store to delete. To stop future access:
+To erase locally persisted financial journal data, remove `~/.ynab-mcp-undo.json` after resolving any pending operations. Process exit clears its memory cache and previews. To stop future access:
 
 1. Remove the MCP server from the MCP host configuration.
 2. Delete any local token file or environment variable used for `YNAB_API_TOKEN`.
 3. Revoke the personal access token in YNAB Developer Settings.
 
-For the hosted OAuth connector, use `https://ynab.amesvt.com/delete` to revoke connector grants and remove its stored token and undo records.
+For the hosted OAuth connector, use `https://ynab.amesvt.com/delete` to revoke connector grants and remove its consent-scoped encrypted credential, undo and durable operation records and legacy KV records.
 
 ## Support and Data Requests
 

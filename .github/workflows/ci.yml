@@ -71,6 +71,8 @@ jobs:
         run: npm run test:unit
       - name: Safety model tests (offline)
         run: npm run test:safety
+      - name: Synthetic agent fixtures (no provider calls)
+        run: npm run test:eval
       - name: Release consistency check
         run: npm run release:check
       - name: MCP smoke - list tools (discovery mode, no credentials)

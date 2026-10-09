@@ -1,6 +1,6 @@
 # Hosted OAuth Connector Pattern
 
-This repository includes both the local stdio MCP server and a hosted connector at `https://ynab.amesvt.com/mcp`. The hosted connector does not ask users for a YNAB personal access token. It uses YNAB's authorization-code flow, stores encrypted per-user tokens server-side, and exposes MCP over HTTPS.
+This repository includes both the local stdio MCP server and a hosted connector at `https://ynab.amesvt.com/mcp`. The hosted connector does not ask users for a YNAB personal access token. It uses YNAB's authorization-code flow, stores encrypted credentials per consent server-side, and exposes MCP over HTTPS.
 
 ## Architecture
 
@@ -37,7 +37,9 @@ Required Worker values:
 | `COOKIE_ENCRYPTION_KEY` | HMAC key for one-time consent and callback state, plus the deletion-form CSRF cookie (Worker secret). |
 | `DATA_ENCRYPTION_KEY` | AES-GCM key material for YNAB tokens and undo journals (Worker secret). |
 | `CONNECTOR_BASE_URL` | Public connector origin used to build the exact callback URI. |
-| `OAUTH_KV` | KV binding for connector grants, OAuth state, encrypted YNAB tokens, and encrypted undo journals. |
+| `OAUTH_KV` | KV binding for connector grants/clients and inaccessible legacy encrypted YNAB tokens/journals. |
+| `OAUTH_STATE` | Durable Object binding for atomic one-time consent, callback, and final confirmation state. |
+| `YNAB_CREDENTIALS` | Durable Object binding for encrypted per-consent YNAB credentials and operation/undo journals. |
 
 ## Safety Model
 
@@ -64,21 +66,64 @@ flow therefore keeps consent and callback state server-side:
 5. Store the MCP authorization request, verifier, access choice, and keyed state hash under the opaque OAuth state. Use a 10-minute TTL.
 6. On `/callback`, fetch and delete the state record before validation, then verify its keyed hash before exchanging the YNAB code.
 
-The one-time records prevent sequential replay and keep concurrent client flows
-separate without depending on browser cookies. Cloudflare KV does not provide a
-compare-and-swap primitive, so the design also relies on unguessable 192-bit
-record identifiers and the short TTL rather than claiming transactional
-consumption.
+The one-time records keep concurrent client flows separate without depending on
+browser cookies. `OAuthTransientState` consumes each record in a Durable Object
+storage transaction, so concurrent replay has only one successful consumer.
+Final confirmation similarly consumes one encrypted pending authorization.
 
 ## Token Lifecycle
 
-The hosted connector should store tokens by connector user or YNAB user ID:
+The hosted connector stores an independent credential for each final consent:
 
 - On callback, exchange the code for YNAB access and refresh tokens.
-- Fetch the YNAB user profile immediately and persist the YNAB user ID with the token record.
-- Refresh tokens before expiry, with a small safety window such as 60 seconds.
-- If refresh fails, preserve the record and require reauthorization. Re-read first so a concurrent successful refresh is not discarded.
+- Fetch the YNAB user profile immediately and bind its ID, the MCP client ID,
+  random consent credential ID, and read/write choice to the encrypted record
+  and OAuth grant props. A lookup must match every binding field.
+- Use the per-user `OAuthCredentials` Durable Object to serialize refresh,
+  rollback, and deletion. Refresh before expiry with a 60-second safety window;
+  concurrent MCP sessions cannot send the same rotating refresh token together.
+- If refresh fails, preserve the record and require reauthorization. A lost
+  upstream refresh response or storage failure can still require reconnecting.
+- Rollback after failed connector authorization deletes only that consent's
+  unique credential. Different clients and concurrent reconnects cannot overwrite
+  another grant's upstream scope.
+- Store encrypted operation/undo journals per consent credential. Versioned CAS
+  rejects stale journal persistence; bounded journal transformations can retry
+  without retrying a financial write.
+- Commit encrypted journal chunks atomically (512 KiB per chunk, 16 MiB maximum
+  encrypted journal), so an accumulated history need not fit SQLite's
+  [2 MB key/value limit](https://developers.cloudflare.com/durable-objects/platform/limits/).
 - Never expose YNAB access or refresh tokens to the MCP host or model context.
+
+The `v3` Worker migration adds `YNAB_CREDENTIALS`. Older grants with only a YNAB
+user ID become discovery-only with explicit reconnect guidance. Legacy per-user
+encrypted KV records cannot identify their original client and effective scope,
+so they are never migrated into a new consent. Ownership-verified `/delete`
+revokes every paginated connector grant, clears all the user's scoped credential
+and journal records, and deletes the legacy token/journal records. It does not
+remove another user's data. The existing OAuth provider's same-client grant
+replacement policy remains in force.
+MCP object addresses include the authenticated consent identity, so a disclosed
+session ID cannot attach a different client or user to the original session.
+A new MCP session with the same grant can recover its existing journal with a
+fresh approved preview. A new consent has a new isolated journal and cannot
+adopt a previous consent's pending operation; if the old grant is unavailable,
+reconcile directly in YNAB before attempting another move or merge.
+
+A non-financial deletion generation marker rejects consent forms displayed
+before deletion. Provider authorization and Durable Object deletion are not a
+shared transaction: a concurrent provider completion is rejected and its exact
+grant is revoked when visible, but eventually consistent provider KV listing
+may temporarily retain an unusable grant. Deleted credentials cannot be used
+for API requests; retry deletion to remove residual provider records.
+
+Ordinary merged budget caches and write previews are held in session memory.
+Durable recovery/undo records contain the relevant operation identifiers and
+before/after values. All journal contents are encrypted; a preview token is not
+human consent and does not authorize a write without explicit user approval.
+The MCP agent disables durable response-event replay; interrupted reads may be
+requested again, while uncertain writes use the encrypted operation recovery
+flow and a newly approved preview.
 
 ## Deployment Checklist
 
@@ -94,7 +139,7 @@ The hosted connector should store tokens by connector user or YNAB user ID:
   See "Edge configuration (Cloudflare)" below.
 - Run read-only smoke tests through `/mcp`.
 - If writes are enabled, run the batch category+approval smoke against a dedicated test budget and assert post-write refetch verification.
-- Require `confirmed: true` for destructive direct tools, bulk-filter write tools, and any generic write executor.
+- Require an exact expiring session-bound preview token and separate `confirmed: true` human approval for every write. A preview is not consent. Validate stale state, conflicts, partial outcomes and credential/session boundaries with synthetic fixtures before any approved deployment.
 
 ## Edge configuration (Cloudflare)
 

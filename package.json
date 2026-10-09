@@ -26,10 +26,11 @@
   },
   "files": [
     "index.js",
+    "lib/",
+    "modules/",
     "scripts/",
     "assets/icon.png",
-    "docs/hosted-oauth-connector.md",
-    "docs/privacy.md"
+    "docs/"
   ],
   "scripts": {
     "start": "node index.js",
@@ -37,7 +38,7 @@
     "pretest": "npm run deps:ensure",
     "test": "node test.js",
     "pretest:unit": "npm run deps:ensure",
-    "test:unit": "cd test && node --test",
+    "test:unit": "cd test && node --test --test-concurrency=2",
     "presmoke:list-tools": "npm run deps:ensure",
     "smoke:list-tools": "node scripts/smoke-list-tools.mjs",
     "presmoke:review-unapproved": "npm run deps:ensure",
@@ -51,7 +52,8 @@
     "build:mcpb": "node scripts/build-mcpb.mjs",
     "build:worker-icons": "node scripts/generate-worker-icon-assets.mjs",
     "pretest:safety": "npm run deps:ensure",
-    "test:safety": "node scripts/test-safety-model.mjs"
+    "test:safety": "node scripts/test-safety-model.mjs",
+    "test:eval": "node scripts/eval-agent-fixtures.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",

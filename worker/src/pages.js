@@ -105,13 +105,15 @@ export function finalConsentPage({ clientName, redirectUri, writesEnabled, purpo
 export function privacyPage() {
   return layout("Privacy | MCP Server for YNAB", `
 <h1>Privacy policy</h1>
-<p class="muted"><strong>Last updated:</strong> July 15, 2026</p>
+<p class="muted"><strong>Last updated:</strong> October 9, 2026</p>
 <div class="card">
-<p><strong>Storage and Cloudflare:</strong> the connector stores your YNAB OAuth access and refresh tokens, YNAB user ID, read-only/write choice, and an undo journal of connector-performed writes (transaction IDs and the changed field values needed to reverse them). Cloudflare hosts the Worker and provides the Durable Objects and Workers KV storage used by the connector. Tokens and undo entries are encrypted with AES-GCM before they are written to Cloudflare KV.</p>
+<p><strong>Storage and Cloudflare:</strong> the connector stores your YNAB OAuth access and refresh tokens, YNAB user ID, MCP client ID, consent credential ID, read-only/write choice, and operation/undo journals of connector-performed writes (operation and transaction IDs, relevant before/after field values, and recovery status). Credentials and journals are separate for each consent. Cloudflare hosts the Worker and provides the Durable Objects and Workers KV storage used by the connector. Tokens and journals are encrypted with AES-GCM before they enter durable storage. Older shared encrypted records remain inaccessible in KV until deletion.</p>
 <p><strong>Retention:</strong> encrypted token records, authorization grants, and undo entries are retained until you use <a href="/delete">the deletion page</a>. Temporary OAuth consent and callback state expires automatically within 10 minutes.</p>
 <p><strong>Data delivery:</strong> when you make an MCP request, the connector exchanges OAuth and budget data with YNAB (including <code>app.ynab.com</code> for sign-in and <code>api.ynab.com</code> for API requests) and returns the result to the MCP client you connected. That client may receive budget data returned by the tool; its handling is governed by its own terms and privacy policy.</p>
-<p><strong>What it does not do:</strong> store your YNAB password, sell your data, use budget data for advertising, or persist ordinary budget results outside the encrypted token and undo records described above.</p>
+<p><strong>Session memory:</strong> ordinary budget results may be cached temporarily for read performance, and expiring write previews hold the proposed changes in the MCP session's memory. Writes re-read relevant state. These ordinary caches and previews are not written to durable storage.</p>
+<p><strong>What it does not do:</strong> store your YNAB password, sell your data, use budget data for advertising, or persist ordinary budget results outside the encrypted credential and operation/undo records described above.</p>
 <p><strong>Deletion:</strong> use <a href="/delete">the deletion page</a> to revoke this connector's grants and erase stored tokens and journal entries. You can also revoke the application from your YNAB account settings.</p>
+<p>A non-financial deletion marker remains to invalidate earlier pending consent forms. An authorization already in progress can briefly leave an unusable provider grant while revocation propagates; the removed credential cannot make API requests.</p>
 <p><strong>Contact:</strong> file an issue at <a href="https://github.com/oliverames/ynab-mcp-server/issues">github.com/oliverames/ynab-mcp-server</a>.</p>
 </div>`);
 }

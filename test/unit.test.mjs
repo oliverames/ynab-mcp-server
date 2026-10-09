@@ -55,6 +55,14 @@ const {
 } = await import("../index.js");
 const { createYnabServer, createFsJournal } = await import("../index.js");
 
+// Authorized synthetic test writes use the same preview/approval gate as MCP callers.
+async function invokeApprovedWrite(instance, name, input) {
+  const preview = await instance.internals.invokeRegisteredTool("preview_write_tool", { tool_name: name, input });
+  if (preview.isError) return preview;
+  const data = preview.structuredContent?.result ?? JSON.parse(preview.content[0].text);
+  return instance.internals.invokeRegisteredTool(name, { ...input, previewToken: data.preview_token, confirmed: true });
+}
+
 test("dollars converts milliunits and passes null through", () => {
   assert.equal(dollars(-12340), -12.34);
   assert.equal(dollars(35710), 35.71);
@@ -141,11 +149,13 @@ test("mapTransactionUpdate converts subtransactions when provided", () => {
 test("parseToolExecuteInput accepts importId-based bulk updates and enforces limits", () => {
   const parsed = parseToolExecuteInput("update_transactions", {
     transactions: [{ importId: "YNAB:-25000:2026-01-02:1", approved: true }],
+    previewToken: "synthetic-schema-token", confirmed: true,
   });
   assert.equal(parsed.transactions[0].importId, "YNAB:-25000:2026-01-02:1");
   assert.throws(
     () => parseToolExecuteInput("update_transactions", {
       transactions: [{ id: "t1", payeeName: "x".repeat(201) }],
+      previewToken: "synthetic-schema-token", confirmed: true,
     }),
     /Invalid input for update_transactions/,
   );
@@ -185,6 +195,18 @@ test("transactionUpdateMismatches only checks requested fields", () => {
   assert.equal(mismatches[0].field, "categoryId");
   assert.equal(mismatches[0].expected, "cat-1");
   assert.equal(mismatches[0].actual, null);
+});
+
+test("split verification ignores generated IDs/order while detecting a wrong line category or memo", () => {
+  const requested = { id: "t1", subtransactions: [{ amount: -8, categoryId: "food" }, { amount: -4, categoryId: "travel", memo: "Transit" }] };
+  const persisted = { subtransactions: [{ id: "generated-second", amount: -4, category_id: "travel", memo: "Transit", deleted: false }, { id: "generated-first", amount: -8, category_id: "food", deleted: false }] };
+  assert.deepEqual(transactionUpdateMismatches(requested, persisted), []);
+  const wrongCategory = structuredClone(persisted);
+  wrongCategory.subtransactions[0].category_id = "food";
+  assert.ok(transactionUpdateMismatches(requested, wrongCategory).some((row) => row.field === "subtransactions"));
+  const wrongMemo = structuredClone(persisted);
+  wrongMemo.subtransactions[0].memo = "Changed";
+  assert.ok(transactionUpdateMismatches(requested, wrongMemo).some((row) => row.field === "subtransactions"));
 });
 
 test("parseSimpleTomlSections parses sections, strings, and comments", () => {
@@ -469,14 +491,14 @@ test("beforeFieldsForUpdate captures only the requested fields' before-values", 
 
 test("summarizeIncomeExpenseByMonth separates income, spending, and transfers", () => {
   const txns = [
-    { date: "2026-06-01", amount: 5000, category_name: "Inflow: Ready to Assign", transfer_account_id: null, deleted: false },
+    { date: "2026-06-01", amount: 5000, category_id: "income", category_name: "Inflow: Ready to Assign", transfer_account_id: null, deleted: false },
     { date: "2026-06-05", amount: -1000, category_name: "Groceries", transfer_account_id: null, deleted: false },
     { date: "2026-06-07", amount: -500, category_name: null, transfer_account_id: "acct-2", deleted: false }, // transfer: excluded
     { date: "2026-06-09", amount: -200, category_name: "Dining", transfer_account_id: null, deleted: true }, // deleted: excluded
-    { date: "2026-07-01", amount: 4000, category_name: "Inflow: Ready to Assign", transfer_account_id: null, deleted: false },
+    { date: "2026-07-01", amount: 4000, category_id: "income", category_name: "Inflow: Ready to Assign", transfer_account_id: null, deleted: false },
     { date: "2026-07-02", amount: -1000, category_name: "Rent", transfer_account_id: null, deleted: false },
   ];
-  const months = summarizeIncomeExpenseByMonth(txns);
+  const months = summarizeIncomeExpenseByMonth(txns, { incomeCategoryIds: ["income"] });
   assert.deepEqual(months, [
     { month: "2026-06", income: 5000, spending: 1000, net: 4000, savings_rate_pct: 80 },
     { month: "2026-07", income: 4000, spending: 1000, net: 3000, savings_rate_pct: 75 },
@@ -819,7 +841,7 @@ test("envNumber falls back and warns for unparseable and out-of-range values", (
 
 test("write tool schemas enforce YNAB's documented field lengths", () => {
   const instance = createYnabServer({ hasCredentials: true, writesEnabled: true, journal: null });
-  const parse = instance.internals.parseToolExecuteInput;
+  const parse = (name, input) => instance.internals.parseToolExecuteInput(name, { ...input, previewToken: "synthetic-schema-token", confirmed: true });
 
   // Category group name: YNAB caps SaveCategoryGroup.name at 50.
   parse("create_category_group", { name: "g".repeat(50) });
@@ -966,7 +988,7 @@ test("create_transaction resolves transferToAccountName into the destination tra
   };
   t.after(() => { globalThis.fetch = realFetch; });
 
-  const result = await instance.internals.invokeRegisteredTool("create_transaction", {
+  const result = await invokeApprovedWrite(instance, "create_transaction", {
     accountId: "a-check", date: "2026-09-14", amount: -250, transferToAccountName: "sapphire", memo: "card payment",
   });
   assert.equal(result.isError ?? false, false, result.content?.[0]?.text);
@@ -978,10 +1000,10 @@ test("create_transaction resolves transferToAccountName into the destination tra
   assert.equal(post.body.transaction.payee_id, "tp-visa");
   assert.equal(post.body.transaction.payee_name, undefined);
   assert.equal("transferToAccountName" in post.body.transaction, false);
-  assert.equal(calls.filter((c) => c.url.includes("/accounts")).length, 1);
+  assert.equal(calls.filter((c) => c.url.includes("/accounts")).length, 5, "preview, revalidation and execution each resolve fresh transfer state");
 });
 
-test("create_transactions fetches accounts once for a batch and rejects a transfer paired with a payee", async (t) => {
+test("create_transactions resolves one account list per batch stage and rejects a transfer paired with a payee", async (t) => {
   const instance = createYnabServer({
     hasCredentials: true,
     writesEnabled: true,
@@ -1007,7 +1029,7 @@ test("create_transactions fetches accounts once for a batch and rejects a transf
   };
   t.after(() => { globalThis.fetch = realFetch; });
 
-  const ok = await instance.internals.invokeRegisteredTool("create_transactions", { transactions: [
+  const ok = await invokeApprovedWrite(instance, "create_transactions", { transactions: [
     { accountId: "a-check", date: "2026-09-14", amount: -100, transferToAccountId: "a-visa" },
     { accountId: "a-check", date: "2026-09-14", amount: -50, transferToAccountName: "Chase Freedom" },
     { accountId: "a-check", date: "2026-09-14", amount: -5, payeeName: "Coffee" },
@@ -1015,9 +1037,9 @@ test("create_transactions fetches accounts once for a batch and rejects a transf
   assert.equal(ok.isError ?? false, false, ok.content?.[0]?.text);
   const body = JSON.parse(ok.content[0].text);
   assert.deepEqual(body.created.map((c) => c.payee_id), ["tp-visa", "tp-freedom", null]);
-  assert.equal(calls.filter((c) => c.url.includes("/accounts")).length, 1);
+  assert.equal(calls.filter((c) => c.url.includes("/accounts")).length, 5, "one list for each preview/revalidation/execute stage, independent of batch length");
 
-  const bad = await instance.internals.invokeRegisteredTool("create_transactions", { transactions: [
+  const bad = await invokeApprovedWrite(instance, "create_transactions", { transactions: [
     { accountId: "a-check", date: "2026-09-14", amount: -100, transferToAccountId: "a-visa", payeeName: "Transfer : Chase Sapphire Visa" },
   ] });
   assert.equal(bad.isError, true);
@@ -1035,12 +1057,12 @@ test("create_transaction surfaces the transfer hint on YNAB's internal-payee rej
     defaultBudgetId: "plan-1",
   });
   const realFetch = globalThis.fetch;
-  globalThis.fetch = async () => new Response(JSON.stringify({ error: {
+  globalThis.fetch = async (url, init = {}) => init.method === "POST" ? new Response(JSON.stringify({ error: {
     id: "400", name: "bad_request", detail: "payee name must not start with an internal payee name",
-  } }), { status: 400, headers: { "content-type": "application/json" } });
+  } }), { status: 400, headers: { "content-type": "application/json" } }) : new Response(JSON.stringify({ data: { accounts } }), { status: 200, headers: { "content-type": "application/json" } });
   t.after(() => { globalThis.fetch = realFetch; });
 
-  const result = await instance.internals.invokeRegisteredTool("create_transaction", {
+  const result = await invokeApprovedWrite(instance, "create_transaction", {
     accountId: "a-check", date: "2026-09-14", amount: -250, payeeName: "Transfer : Chase Sapphire Visa",
   });
   assert.equal(result.isError, true);
@@ -1095,7 +1117,7 @@ test("tool-execute validation names the accepted arguments so a wrong key is sel
   );
   // The transfer fields are part of both create schemas.
   const instance = createYnabServer({ hasCredentials: true, writesEnabled: true, journal: null });
-  const parse = instance.internals.parseToolExecuteInput;
+  const parse = (name, input) => instance.internals.parseToolExecuteInput(name, { ...input, previewToken: "synthetic-schema-token", confirmed: true });
   assert.deepEqual(
     parse("create_transaction", { accountId: "a", date: "2026-09-14", amount: -1, transferToAccountName: "Checking" }).transferToAccountName,
     "Checking",
@@ -1211,29 +1233,32 @@ test("create_category and update_category send goal_frequency and reject bad com
   const realFetch = globalThis.fetch;
   globalThis.fetch = async (url, init = {}) => {
     calls.push({ url: String(url), method: init.method, body: init.body ? JSON.parse(init.body) : null });
+    if (String(url).endsWith("/categories") && (!init.method || init.method === "GET")) {
+      return new Response(JSON.stringify({ data: { category_groups: [{ id: "g1", name: "Fitness", categories: [{ id: "c1", name: "Gym", deleted: false }] }] } }), { status: 200, headers: { "content-type": "application/json" } });
+    }
     return new Response(JSON.stringify({ data: { category: { id: "c1", name: "Gym", goal_type: "NEED", goal_target: 50000, goal_cadence: 1, goal_cadence_frequency: 1, internal: false, deleted: false } } }), { status: 200, headers: { "content-type": "application/json" } });
   };
   t.after(() => { globalThis.fetch = realFetch; });
 
-  const created = await instance.internals.invokeRegisteredTool("create_category", { categoryGroupId: "g1", name: "Gym", goalTarget: 50, goalFrequency: "monthly" });
+  const created = await invokeApprovedWrite(instance, "create_category", { categoryGroupId: "g1", name: "Gym", goalTarget: 50, goalFrequency: "monthly" });
   assert.equal(created.isError ?? false, false, created.content?.[0]?.text);
   assert.equal(calls.at(-1).body.category.goal_frequency, "monthly");
   assert.equal(calls.at(-1).body.category.goal_target, 50000);
   assert.equal(JSON.parse(created.content[0].text).internal, false);
 
-  const updated = await instance.internals.invokeRegisteredTool("update_category", { categoryId: "c1", goalTarget: 20, goalFrequency: "weekly" });
+  const updated = await invokeApprovedWrite(instance, "update_category", { categoryId: "c1", goalTarget: 20, goalFrequency: "weekly" });
   assert.equal(updated.isError ?? false, false, updated.content?.[0]?.text);
   assert.equal(calls.at(-1).method, "PATCH");
   assert.equal(calls.at(-1).body.category.goal_frequency, "weekly");
 
-  const before = calls.length;
-  const bad = await instance.internals.invokeRegisteredTool("update_category", { categoryId: "c1", goalFrequency: "monthly" });
+  const writesBefore = calls.filter((call) => call.method && call.method !== "GET").length;
+  const bad = await invokeApprovedWrite(instance, "update_category", { categoryId: "c1", goalFrequency: "monthly" });
   assert.equal(bad.isError, true);
   assert.match(bad.content[0].text, /requires goalTarget/);
-  const bad2 = await instance.internals.invokeRegisteredTool("create_category", { categoryGroupId: "g1", name: "X", goalTarget: 5, goalTargetDate: "2026-12-01", goalFrequency: "yearly" });
+  const bad2 = await invokeApprovedWrite(instance, "create_category", { categoryGroupId: "g1", name: "X", goalTarget: 5, goalTargetDate: "2026-12-01", goalFrequency: "yearly" });
   assert.equal(bad2.isError, true);
   assert.match(bad2.content[0].text, /cannot be combined with goalTargetDate/);
-  assert.equal(calls.length, before, "no request reaches YNAB for a rejected combination");
+  assert.equal(calls.filter((call) => call.method && call.method !== "GET").length, writesBefore, "no financial write reaches YNAB for a rejected combination");
 });
 
 test("server advertises instructions at initialize", () => {

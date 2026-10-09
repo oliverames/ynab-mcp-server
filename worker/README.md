@@ -19,16 +19,66 @@ Not affiliated with YNAB.
   app-client contract: human-readable title, input/output schemas, matching
   `structuredContent`, and private/bounded impact hints.
 - The consent page redirects to YNAB's own OAuth with PKCE S256. Consent and
-  callback state use 192-bit opaque values, keyed hashes, one-time KV records,
+  callback state use 192-bit opaque values, keyed hashes, atomic Durable Object records,
   and 10-minute TTLs without depending on browser cookies. Access tokens last 2
   hours; refresh happens automatically inside a 60-second safety window;
-  refresh tokens rotate and are persisted per YNAB user in KV. Users choose
+  refresh tokens rotate and are persisted per consent credential. Users choose
   read-only vs write access at consent (`read-only` scope vs no scope).
-- YNAB tokens and undo journals are encrypted with AES-GCM before they enter KV.
+- YNAB tokens and operation/undo journals are encrypted with AES-GCM before they
+  enter the credential Durable Object's storage. One object per YNAB user
+  serializes refresh and deletion; separate consent credentials bind the client
+  ID and read/write choice. Different clients never share an upstream token.
   The encryption key is separate from the cookie-signing key.
-- The undo journal is scoped to each YNAB user; `/delete` proves identity with a
-  fresh YNAB sign-in, then purges tokens, journal entries, and every paginated
-  connector grant.
+- Each consent has its own journal, with revision checks and journal-only CAS
+  retries to protect concurrent MCP sessions. `/delete` proves identity with a
+  fresh YNAB sign-in, then purges all the user's consent credentials, journals,
+  old shared KV records, and every paginated connector grant.
+
+Deletion retains only a non-financial generation marker inside the credential
+object so a final-consent form displayed before deletion cannot recreate its
+credentials afterward. A concurrent provider completion is rejected and its
+exact grant is revoked when visible; the provider's eventually consistent KV
+listing can leave an unusable grant until expiry or a repeated deletion. Its
+removed credential cannot authorize a YNAB API request.
+
+## Credential isolation migration (issue #32)
+
+The `v3` Wrangler migration adds the `OAuthCredentials` Durable Object and
+`YNAB_CREDENTIALS` binding. Deploying this reviewed code is a separate action;
+the implementation and tests do not deploy or create an authorization grant.
+
+All existing grants without `credentialVersion: 2` and a consent credential ID
+become discovery-only and show a reconnect instruction. Reconnect each MCP
+client and approve its required access. The old per-user token cannot establish
+which client and scope produced it, so it is never adopted by a new grant. Its
+encrypted token and undo records remain inaccessible in KV until the user uses
+`/delete`; they cannot safely become another client's undo history. New consent
+stores a unique credential and rollback removes only that credential. The OAuth
+provider's existing same-client replacement policy remains unchanged.
+
+MCP Durable Object addresses also include the authenticated consent identity.
+A different client's valid token and a disclosed MCP session ID cannot attach
+to the original session. Opening a new MCP session with the same grant can
+recover its journal after fresh approval. Replacing a consent creates a new
+isolated journal; it cannot automatically adopt a prior consent's unfinished
+operation. Reconcile such an operation directly in YNAB if its old grant is no
+longer usable, instead of blindly repeating the move or merge.
+
+The private credential object serializes refresh across MCP sessions, but a
+successful upstream rotation followed by a lost response or storage failure can
+still require reauthorization. It does not make YNAB OAuth or financial writes
+transactional. New ordinary budget caches and previews live only in the MCP
+session's memory; durable operation records retain relevant before/after values
+for recovery and undo, and are encrypted with the journal.
+Encrypted journals use atomically committed 512 KiB ciphertext chunks, with a
+16 MiB encrypted-journal bound, to avoid SQLite's single-value storage limit.
+Storage failures are surfaced; they never authorize an automatic financial retry.
+
+The agent's optional durable MCP response replay is disabled so ordinary
+financial response bodies and previews are not saved as stream events. If a
+stream disconnects, clients can reconnect and request fresh reads. A write with
+an uncertain result requires the encrypted operation journal, a fresh preview,
+and explicit approval before recovery.
 
 ## Deploy
 

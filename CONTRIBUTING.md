@@ -10,6 +10,7 @@ Use Node.js 20 or newer, then install the locked dependencies and run the same c
 npm ci --no-audit --no-fund
 npm run test:unit
 npm run test:safety
+npm run test:eval
 npm run release:check
 YNAB_DISABLE_AGENT_CONFIG_FALLBACK=1 npm run smoke:list-tools
 ```
@@ -29,7 +30,7 @@ The live integration suite writes temporary records to a real YNAB budget. Use a
 ## Pull requests
 
 - Keep the server read-only by default.
-- Preserve confirmation and expected-count checks for destructive or bulk writes.
+- Preserve exact single-use previews, separate human confirmation, and expected-count checks for writes.
 - Never commit YNAB tokens, budget exports, transaction details, or local credential files.
 - Add or update offline tests for behavior changes.
 - Update the README and plugin metadata when a user-facing interface changes.
