@@ -1,5 +1,36 @@
 # Worklog
 
+## 2026-10-09 - Prepare approved 6.0.0 release and hosted rollout
+
+**What changed**: Synchronize all version carriers to 6.0.0 after merging
+[PR #33](https://github.com/oliverames/ynab-mcp-server/pull/33) as
+`9a8aff98f1d48b3c2b4caa4109307ccbbfc12c4d`. Issue #32 closed automatically.
+The major version reflects the required exact preview and explicit approval
+protocol for every write. See [6.0.0 rollout notes](docs/release-6.0.0.md).
+
+**Verification**: Release preparation passed 238 root tests, 37 Worker tests,
+safety, real stdio discovery, Wrangler dry run, version consistency, MCPB build
+and npm pack review. Seven synthetic agent fixtures and both production
+dependency audits passed. The implementation head passed all nine CI jobs;
+the clean version commit must pass CI before publication. No live YNAB financial
+operation or paid provider call ran.
+
+**Decisions made**: Oliver explicitly approved "merge, publish, deploy, clean up"
+for PR #33. Use the existing npm/GitHub/MCPB release process and existing Worker,
+account, custom domain and secrets. The v3 OAuthCredentials migration is part of
+this approved OAuth rollout; it requires direct deployment with preserved vars.
+Cloudflare blocks rollback across this class migration, so any failure requires
+a forward repair preserving encrypted state. Existing hosted clients reconnect.
+No new grants, pricing changes or unrelated services are in scope.
+
+**Left off at**: Prepared 6.0.0 in the owned isolated checkout. Publication,
+receiving artifact checks, production deployment/readback and owned-work cleanup
+follow from the exact clean version commit. [Issue #34](https://github.com/oliverames/ynab-mcp-server/issues/34)
+records inaccessible billing controls without private account records; no billing
+or access change was requested. Authenticated live acceptance remains in #24.
+
+---
+
 ## 2026-10-09 - Approved isolation, write safety, recovery and read improvements
 
 **What changed**: Implemented the eight approved areas from remote main

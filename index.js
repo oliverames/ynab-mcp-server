@@ -587,7 +587,7 @@ const {
   previewTtlMs = 300000,
   now = Date.now,
   runtime = {},
-  serverInfo = { name: "YNAB Local", version: "5.5.0" },
+  serverInfo = { name: "YNAB Local", version: "6.0.0" },
 } = options;
 
 // This state belongs to this factory invocation only. Hosted callers supply

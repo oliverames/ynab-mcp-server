@@ -24,8 +24,9 @@ found. No repository AGENTS.md or .agents/skills instructions were present.
 - [x] 8. Add category/payee trends, observational anomalies and scheduled
   balance scenarios; distinguish existing recurring/health/reconciliation.
 
-All verification uses synthetic values and fake tokens. Production deployment,
-package publication, live YNAB financial writes and new grants are out of scope.
+Implementation verification uses synthetic values and fake tokens. Live YNAB
+financial writes and new grants remain out of scope. Oliver subsequently approved
+the 6.0.0 release and hosted rollout; see [rollout notes](release-6.0.0.md).
 
 ## Reference and license review
 
@@ -55,8 +56,9 @@ Implemented with the following local checks (synthetic data only):
 | Local MCPB build + unpacked runtime | Builds; unpacked runtime imports all modules and advertises 71 tools |
 | `npm pack --dry-run`, syntax, `git diff --check` | Runtime modules included and checks pass |
 
-CI will be reported against the exact pushed head. Passing local tests does not
-prove production behavior. The original checkout remains untouched.
+All nine CI jobs passed at implementation head `d0ff361`. The 6.0.0 version commit
+must pass CI before publication. Passing local tests does not prove production
+behavior. Receiving artifact and deployment checks are recorded separately.
 
 Material behavior changes and honest limits:
 
@@ -88,5 +90,5 @@ Material behavior changes and honest limits:
 - Existing hosted shared grants become discovery-only and require reconnection
   after a separately approved deployment. New consents never adopt ambiguous old
   credentials/journals. Multi-step recovery across MCP sessions works within the
-  same authenticated consent. Production deployment and package publication were
-  not requested and are not performed.
+  same authenticated consent. The subsequently approved release and rollout
+  require independent artifact and production readback checks.
