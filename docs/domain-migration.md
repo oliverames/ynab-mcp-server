@@ -234,7 +234,10 @@ validation; system resolver/network configuration was not changed.
 Five final public checks after retirement also passed with valid TLS and
 resolved IPs: Googlebot homepage `200`, Python MCP `401` and new metadata
 `200`, and the 256px favicon `200`. Session evidence is `final-new-host.json`.
-These checks do not claim ordinary system DNS or an authenticated budget read.
+At 16:25 UTC, the local negative cache expired. Ordinary macOS DNS and Chrome
+then reached the new site successfully; all five public checks also passed
+without a resolver override. Session evidence is `ordinary-dns-final.json` and
+`new-domain-after.jpg`. No authenticated budget read is claimed.
 
 The approved AmesVT directory cleanup also completed: website PR #8 merged and
 deployed as `b264eb8`, with successful Actions run `38154799390`. The catalog
