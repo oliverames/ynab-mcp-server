@@ -52,16 +52,85 @@ ${body}
 </html>`;
 }
 
+// This script only copies the public endpoint. The homepage permits its exact
+// SHA-256 hash; consent and other public pages remain script-free.
+export const LANDING_SCRIPT = `
+const endpoint = document.getElementById("connector-endpoint");
+const copyButton = document.getElementById("copy-endpoint");
+const copyStatus = document.getElementById("copy-status");
+copyButton.hidden = false;
+copyButton.addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(endpoint.value);
+    copyStatus.textContent = "Endpoint copied.";
+  } catch {
+    endpoint.focus();
+    endpoint.select();
+    copyStatus.textContent = "Select and copy the endpoint above.";
+  }
+});
+`;
+
 export function landingPage({ origin = CONNECTOR_ORIGIN } = {}) {
   const safeEndpoint = escapeHtml(new URL("/mcp", origin).href);
   return layout("MCP Server for YNAB | Remote Connector", `
-<h1><span class="accent">MCP Server for YNAB</span>: remote connector</h1>
-<div class="card">
-<p>This is a remote <a href="https://modelcontextprotocol.io">Model Context Protocol</a> endpoint for YNAB budgets. Add it to an MCP-capable AI client and authorize with your own YNAB account. There is no personal access token to copy anywhere.</p>
-<p><strong>Endpoint:</strong> <code>${safeEndpoint}</code> (streamable HTTP; legacy SSE at <code>/sse</code>)</p>
-<p>Your AI client will walk you through YNAB's own sign-in and consent. You choose at consent time whether the connection can write to your budget or stay read-only.</p>
-<p class="muted">Source code, tool reference, and the local stdio version: <a href="https://github.com/oliverames/ynab-mcp-server">oliverames/ynab-mcp-server</a>.</p>
-</div>`, { origin, canonicalPath: "/" });
+<style>
+  .landing h1 { font-size: clamp(1.8rem, 5vw, 2.3rem); line-height: 1.2; letter-spacing: -.025em; margin: 0 0 .75rem; }
+  .landing .intro { font-size: 1.1rem; color: #444; margin: 0 0 1.75rem; }
+  .landing h2 { font-size: 1.2rem; margin: 0 0 .4rem; }
+  .landing .card { padding: 1.4rem; border-color: #dcdce5; }
+  .landing .transport { color: #62626f; font-size: .85rem; margin: 0 0 1rem; }
+  .landing label { font-size: .9rem; font-weight: 600; margin: 0 0 .4rem; }
+  .landing .endpoint-control { display: flex; gap: .5rem; }
+  .landing input { box-sizing: border-box; min-width: 0; width: 100%; border: 1px solid #c7c7d2; border-radius: 8px; padding: .7rem; font: .9rem ui-monospace, SFMono-Regular, monospace; background: #f8f8fb; color: #242438; }
+  .landing button { flex-shrink: 0; min-height: 44px; background: #514a86; color: #fff; font-weight: 600; padding: .6rem 1rem; }
+  .landing :is(input, button, a):focus-visible { outline: 3px solid #847ab5; outline-offset: 3px; }
+  .landing .copy-status { min-height: 1.4em; margin: .4rem 0 .8rem; color: #555; font-size: .85rem; }
+  .landing ol { padding-left: 1.3rem; margin: 0; }
+  .landing li { padding-left: .25rem; margin: .65rem 0; }
+  .landing .oauth-note { color: #555; font-size: .9rem; margin: 1rem 0 0; }
+  .landing .capabilities { margin-top: 1.8rem; }
+  .landing .capabilities p { margin: .6rem 0; }
+  .landing .examples { padding-left: 1.2rem; }
+  .landing .project-link { display: inline-block; margin-top: .65rem; color: #463e78; font-weight: 600; }
+  @media (max-width: 480px) {
+    .landing .card { padding: 1rem; }
+    .landing .endpoint-control { flex-direction: column; }
+    .landing input { font-size: .85rem; }
+    .landing button { width: 100%; }
+  }
+</style>
+<main class="landing">
+<h1>MCP Server for YNAB</h1>
+<p class="intro">Connect your AI assistant to your YNAB budget. This remote <a href="https://modelcontextprotocol.io">MCP</a> connector lets it review spending, category balances and transactions using your own YNAB account.</p>
+<section class="card" aria-labelledby="setup-heading">
+<h2 id="setup-heading">Connect your assistant</h2>
+<p class="transport">Remote MCP &middot; Streamable HTTP &middot; OAuth</p>
+<label for="connector-endpoint">Connector endpoint</label>
+<div class="endpoint-control">
+  <input id="connector-endpoint" type="url" value="${safeEndpoint}" readonly spellcheck="false">
+  <button id="copy-endpoint" type="button" hidden>Copy endpoint</button>
+</div>
+<p id="copy-status" class="copy-status" role="status"></p>
+<ol>
+  <li>Add a remote MCP connector in your assistant's settings, using the endpoint above and OAuth authentication.</li>
+  <li>Choose your access. Read-only is the default; enable write access only if you want your assistant to make changes.</li>
+  <li>Sign in with YNAB and finish the connector's confirmation. Then ask your assistant about your budget.</li>
+</ol>
+<p class="oauth-note">OAuth handles sign-in, so you don't need to enter a personal access token. Your assistant must support remote MCP connections with OAuth.</p>
+</section>
+<section class="capabilities" aria-labelledby="capabilities-heading">
+<h2 id="capabilities-heading">Review your budget</h2>
+<p>Ask about your spending or find transactions that need attention:</p>
+<ul class="examples">
+  <li>&ldquo;Which categories are overspent?&rdquo;</li>
+  <li>&ldquo;Show me my unapproved transactions.&rdquo;</li>
+</ul>
+<p>If you enable writes, you can also categorize transactions and adjust category budgets. Every change requires an exact preview and your approval.</p>
+<a class="project-link" href="https://github.com/oliverames/ynab-mcp-server">View source and setup on GitHub</a>
+</section>
+</main>
+<script>${LANDING_SCRIPT}</script>`, { origin, canonicalPath: "/" });
 }
 
 export function consentPage({ clientName, redirectUri, consentId, csrfToken, origin = CONNECTOR_ORIGIN }) {
