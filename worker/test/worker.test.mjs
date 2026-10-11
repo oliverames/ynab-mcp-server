@@ -35,6 +35,12 @@ import { allowedMcpOrigins, rejectUntrustedMcpOrigin } from "../src/mcp-origin.j
 import { consentPage, errorPage, finalConsentPage, privacyPage } from "../src/pages.js";
 import { applyTransportSecurityHeaders } from "../src/response-security.js";
 import {
+  consumeTransientRecord,
+  consumeTransientState,
+  putTransientState,
+  LEGACY_CONNECTOR_ORIGIN,
+} from "../src/transient-state.js";
+import {
   buildYnabAuthorizeUrl,
   createKvJournal,
   fetchYnabUserId,
@@ -50,14 +56,16 @@ import {
 
 const DATA_KEY = "test-only-data-encryption-key-with-enough-entropy";
 const COOKIE_KEY = "test-only-cookie-signing-key-with-enough-entropy";
+const MIGRATION_TEST_ORIGIN = "https://connector-migration.example";
 
 class MemoryKV {
   constructor() {
     this.values = new Map();
   }
 
-  async get(key) {
-    return this.values.get(key) ?? null;
+  async get(key, options) {
+    const value = this.values.get(key) ?? null;
+    return options?.type === "json" && typeof value === "string" ? JSON.parse(value) : value;
   }
 
   async put(key, value) {
@@ -111,7 +119,7 @@ class MemoryCredentialNamespace {
 }
 
 function credentialEnv(extra = {}) {
-  return { OAUTH_KV: new MemoryKV(), DATA_ENCRYPTION_KEY: DATA_KEY, YNAB_CREDENTIALS: new MemoryCredentialNamespace(), ...extra };
+  return { CONNECTOR_BASE_URL: LEGACY_CONNECTOR_ORIGIN, OAUTH_KV: new MemoryKV(), DATA_ENCRYPTION_KEY: DATA_KEY, YNAB_CREDENTIALS: new MemoryCredentialNamespace(), ...extra };
 }
 
 async function storeCredential(env, binding, tokens = { accessToken: "fake-access", refreshToken: "fake-refresh", expiresAt: Date.now() + 7200000 }) {
@@ -123,6 +131,7 @@ async function storeCredential(env, binding, tokens = { accessToken: "fake-acces
 class MemoryTransientNamespace {
   constructor() {
     this.records = new Map();
+    this.alarms = new Map();
     this.queues = new Map();
   }
 
@@ -132,15 +141,19 @@ class MemoryTransientNamespace {
         const request = new Request(input, init);
         const url = new URL(request.url);
         if (request.method === "PUT" && url.pathname === "/record") {
-          this.records.set(name, await request.json());
+          const record = await request.json();
+          this.records.set(name, record);
+          this.alarms.set(name, record.expiresAt);
           return new Response(null, { status: 204 });
         }
         if (request.method === "POST" && url.pathname === "/consume") {
-          const record = this.records.get(name);
-          this.records.delete(name);
-          if (!record) return new Response(null, { status: 404 });
-          if (record.expiresAt <= Date.now()) return new Response(null, { status: 410 });
-          return Response.json(record.value);
+          return consumeTransientRecord({
+            transaction: (callback) => callback({
+              get: async () => this.records.get(name),
+              delete: async () => this.records.delete(name),
+            }),
+            deleteAlarm: async () => this.alarms.delete(name),
+          }, await request.json());
         }
         return new Response(null, { status: 404 });
       }),
@@ -179,6 +192,254 @@ function sameOriginNavigationHeaders({ origin } = {}) {
   if (origin !== undefined) headers.Origin = origin;
   return headers;
 }
+
+function migrationEnvironment(origin, shared) {
+  return {
+    COOKIE_ENCRYPTION_KEY: COOKIE_KEY,
+    DATA_ENCRYPTION_KEY: DATA_KEY,
+    CONNECTOR_BASE_URL: origin,
+    YNAB_CLIENT_ID: "fake-upstream-client",
+    YNAB_CLIENT_SECRET: "fake-upstream-secret",
+    OAUTH_KV: shared.kv,
+    OAUTH_STATE: shared.transient,
+    YNAB_CREDENTIALS: shared.credentials,
+    OAUTH_PROVIDER: {
+      async parseAuthRequest() {
+        return {
+          responseType: "code",
+          clientId: "shared-client",
+          redirectUri: "https://client.example/callback",
+          resource: `${origin}/mcp`,
+        };
+      },
+      async lookupClient() { return { clientName: "Migration test client" }; },
+      async listUserGrants() { return { items: [] }; },
+      async completeAuthorization(args) {
+        shared.completed.push({ origin, args });
+        return { redirectTo: "https://client.example/callback?code=fake-connector-code" };
+      },
+    },
+  };
+}
+
+function migrationSharedState(t) {
+  const shared = {
+    kv: new MemoryKV(),
+    transient: new MemoryTransientNamespace(),
+    credentials: new MemoryCredentialNamespace(),
+    completed: [],
+    exchanges: [],
+  };
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  globalThis.fetch = async (input, init = {}) => {
+    if (String(input) === "https://app.ynab.com/oauth/token") {
+      shared.exchanges.push(new URLSearchParams(init.body));
+      return Response.json({
+        access_token: "migration-pending-access",
+        refresh_token: "migration-pending-refresh",
+        expires_in: 7200,
+      });
+    }
+    if (String(input) === "https://api.ynab.com/v1/user") {
+      return Response.json({ data: { user: { id: "migration-user" } } });
+    }
+    throw new Error(`Unexpected migration fetch: ${input}`);
+  };
+  return shared;
+}
+
+test("production transient consumption binds records atomically without burning other origins", async () => {
+  const namespace = new MemoryTransientNamespace();
+  const env = { OAUTH_STATE: namespace };
+  const binding = (expectedOrigin) => ({ expectedOrigin, legacyOrigin: LEGACY_CONNECTOR_ORIGIN });
+  await putTransientState(env, "bound", { connectorOrigin: MIGRATION_TEST_ORIGIN, state: "bound-state" }, 600);
+  const alarm = namespace.alarms.get("bound");
+  assert.equal(await consumeTransientState(env, "bound", binding(LEGACY_CONNECTOR_ORIGIN)), null);
+  assert.equal(namespace.alarms.get("bound"), alarm);
+  assert.equal(namespace.records.get("bound").value.state, "bound-state");
+  const results = await Promise.all([
+    consumeTransientState(env, "bound", binding(LEGACY_CONNECTOR_ORIGIN)),
+    consumeTransientState(env, "bound", binding(MIGRATION_TEST_ORIGIN)),
+    consumeTransientState(env, "bound", binding(MIGRATION_TEST_ORIGIN)),
+  ]);
+  assert.equal(results.filter(Boolean).length, 1);
+  assert.equal(results.find(Boolean).state, "bound-state");
+  assert.equal(namespace.alarms.has("bound"), false);
+
+  await putTransientState(env, "legacy", { state: "pre-deploy" }, 600);
+  assert.equal(await consumeTransientState(env, "legacy", binding(MIGRATION_TEST_ORIGIN)), null);
+  assert.equal((await consumeTransientState(env, "legacy", binding(LEGACY_CONNECTOR_ORIGIN))).state, "pre-deploy");
+  for (const invalidOrigin of [null, "", false, `${LEGACY_CONNECTOR_ORIGIN}/`]) {
+    await putTransientState(env, "invalid", { connectorOrigin: invalidOrigin }, 600);
+    assert.equal(await consumeTransientState(env, "invalid", binding(LEGACY_CONNECTOR_ORIGIN)), null);
+    assert.ok(namespace.records.has("invalid"));
+  }
+  await assert.rejects(consumeTransientState(env, "invalid", {
+    expectedOrigin: LEGACY_CONNECTOR_ORIGIN,
+    legacyOrigin: MIGRATION_TEST_ORIGIN,
+  }), /HTTP 400/);
+  assert.ok(namespace.records.has("invalid"));
+  namespace.records.set("expired", { value: { connectorOrigin: MIGRATION_TEST_ORIGIN }, expiresAt: Date.now() - 1 });
+  namespace.alarms.set("expired", Date.now() - 1);
+  assert.equal(await consumeTransientState(env, "expired", binding(MIGRATION_TEST_ORIGIN)), null);
+  assert.equal(namespace.records.has("expired"), false);
+  assert.equal(namespace.alarms.has("expired"), false);
+});
+
+for (const legacyRecords of [false, true]) {
+  test(`both hosts isolate consent, exact callback, and final confirmation${legacyRecords ? " while old in-flight records finish" : ""}`, async (t) => {
+    const shared = migrationSharedState(t);
+    for (const origin of [LEGACY_CONNECTOR_ORIGIN, MIGRATION_TEST_ORIGIN]) {
+      const otherOrigin = origin === LEGACY_CONNECTOR_ORIGIN ? MIGRATION_TEST_ORIGIN : LEGACY_CONNECTOR_ORIGIN;
+      const env = migrationEnvironment(origin, shared);
+      const otherEnv = migrationEnvironment(otherOrigin, shared);
+      const page = await YnabHandler.request(`${origin}/authorize`, {}, env);
+      assert.equal(page.status, 200);
+      const html = await page.text();
+      const consent = hiddenValue(html, "consent");
+      const csrf = hiddenValue(html, "csrf");
+      const storedConsent = shared.transient.records.get(`consent:${consent}`).value;
+      assert.equal(storedConsent.connectorOrigin, origin);
+      const simulateLegacy = legacyRecords && origin === LEGACY_CONNECTOR_ORIGIN;
+      if (simulateLegacy) delete storedConsent.connectorOrigin;
+      const crossForm = await YnabHandler.request(`${origin}/authorize`, {
+        method: "POST", headers: formHeaders(otherOrigin), body: new URLSearchParams({ consent, csrf }),
+      }, env);
+      assert.equal(crossForm.status, 403);
+      const wrongConsentHost = await YnabHandler.request(`${otherOrigin}/authorize`, {
+        method: "POST", headers: formHeaders(otherOrigin), body: new URLSearchParams({ consent, csrf }),
+      }, otherEnv);
+      assert.equal(wrongConsentHost.status, 400);
+      assert.ok(shared.transient.records.has(`consent:${consent}`));
+      const approval = await YnabHandler.request(`${origin}/authorize`, {
+        method: "POST", headers: formHeaders(origin), body: new URLSearchParams({ consent, csrf }),
+      }, env);
+      assert.equal(approval.status, 302);
+      const upstream = new URL(approval.headers.get("location"));
+      assert.equal(upstream.searchParams.get("redirect_uri"), `${origin}/callback`);
+      const state = upstream.searchParams.get("state");
+      const stateRecord = shared.transient.records.get(`state:${state}`).value;
+      assert.equal(stateRecord.connectorOrigin, origin);
+      assert.equal(stateRecord.callbackUri, `${origin}/callback`);
+      if (simulateLegacy) {
+        delete stateRecord.connectorOrigin;
+        delete stateRecord.callbackUri;
+      }
+      const exchangesBefore = shared.exchanges.length;
+      const wrongCallbackHost = await YnabHandler.request(`${otherOrigin}/callback?code=fake-code&state=${state}`, {}, otherEnv);
+      assert.equal(wrongCallbackHost.status, 400);
+      assert.equal(shared.exchanges.length, exchangesBefore);
+      assert.ok(shared.transient.records.has(`state:${state}`));
+      const callback = await YnabHandler.request(`${origin}/callback?code=fake-code&state=${state}`, {}, env);
+      assert.equal(callback.status, 200);
+      assert.equal(shared.exchanges.at(-1).get("redirect_uri"), `${origin}/callback`);
+      assert.equal(shared.exchanges.at(-1).get("code_verifier"), stateRecord.codeVerifier);
+      const callbackReplay = await YnabHandler.request(`${origin}/callback?code=fake-code&state=${state}`, {}, env);
+      assert.equal(callbackReplay.status, 400);
+      const finalHtml = await callback.text();
+      const finalize = hiddenValue(finalHtml, "finalize");
+      const finalCsrf = hiddenValue(finalHtml, "csrf");
+      const finalRecord = shared.transient.records.get(`final:${finalize}`).value;
+      assert.equal(finalRecord.connectorOrigin, origin);
+      if (simulateLegacy) delete finalRecord.connectorOrigin;
+      assert.doesNotMatch(JSON.stringify(finalRecord), /migration-pending-access|migration-pending-refresh/);
+      const completedBefore = shared.completed.length;
+      const wrongFinalHost = await YnabHandler.request(`${otherOrigin}/callback`, {
+        method: "POST", headers: formHeaders(otherOrigin), body: new URLSearchParams({ finalize, csrf: finalCsrf }),
+      }, otherEnv);
+      assert.equal(wrongFinalHost.status, 400);
+      assert.equal(shared.completed.length, completedBefore);
+      assert.ok(shared.transient.records.has(`final:${finalize}`));
+      const crossFinalForm = await YnabHandler.request(`${origin}/callback`, {
+        method: "POST", headers: formHeaders(otherOrigin), body: new URLSearchParams({ finalize, csrf: finalCsrf }),
+      }, env);
+      assert.equal(crossFinalForm.status, 403);
+      const finish = await YnabHandler.request(`${origin}/callback`, {
+        method: "POST", headers: formHeaders(origin), body: new URLSearchParams({ finalize, csrf: finalCsrf }),
+      }, env);
+      assert.equal(finish.status, 302);
+      assert.equal(shared.completed.length, completedBefore + 1);
+      assert.equal(shared.completed.at(-1).origin, origin);
+      const replay = await YnabHandler.request(`${origin}/callback`, {
+        method: "POST", headers: formHeaders(origin), body: new URLSearchParams({ finalize, csrf: finalCsrf }),
+      }, env);
+      assert.equal(replay.status, 400);
+    }
+    assert.equal(shared.completed.length, 2);
+    assert.notEqual(shared.completed[0].args.props.credentialId, shared.completed[1].args.props.credentialId);
+  });
+}
+
+test("bound upstream states reject missing or nonexact callback URIs before exchanging tokens", async (t) => {
+  const shared = migrationSharedState(t);
+  const env = migrationEnvironment(MIGRATION_TEST_ORIGIN, shared);
+  for (const uri of [undefined, null, `${LEGACY_CONNECTOR_ORIGIN}/callback`, `${MIGRATION_TEST_ORIGIN}/other`, `${MIGRATION_TEST_ORIGIN}/callback?extra=1`]) {
+    const page = await YnabHandler.request(`${MIGRATION_TEST_ORIGIN}/authorize`, {}, env);
+    const body = await page.text();
+    const approval = await YnabHandler.request(`${MIGRATION_TEST_ORIGIN}/authorize`, {
+      method: "POST", headers: formHeaders(MIGRATION_TEST_ORIGIN),
+      body: new URLSearchParams({ consent: hiddenValue(body, "consent"), csrf: hiddenValue(body, "csrf") }),
+    }, env);
+    const state = new URL(approval.headers.get("location")).searchParams.get("state");
+    const record = shared.transient.records.get(`state:${state}`).value;
+    if (uri === undefined) delete record.callbackUri;
+    else record.callbackUri = uri;
+    const callback = await YnabHandler.request(`${MIGRATION_TEST_ORIGIN}/callback?code=fake-code&state=${state}`, {}, env);
+    assert.equal(callback.status, 400);
+    assert.match(await callback.text(), /Stored callback did not match/);
+  }
+  assert.equal(shared.exchanges.length, 0);
+});
+
+test("ownership-verified deletion binds its upstream and final state to either starting host", async (t) => {
+  const shared = migrationSharedState(t);
+  for (const origin of [LEGACY_CONNECTOR_ORIGIN, MIGRATION_TEST_ORIGIN]) {
+    const otherOrigin = origin === LEGACY_CONNECTOR_ORIGIN ? MIGRATION_TEST_ORIGIN : LEGACY_CONNECTOR_ORIGIN;
+    const env = migrationEnvironment(origin, shared);
+    const otherEnv = migrationEnvironment(otherOrigin, shared);
+    const binding = testBinding({ user: "migration-user" });
+    await storeCredential(env, binding);
+    const page = await YnabHandler.request(`${origin}/delete`, {}, env);
+    const cookie = page.headers.get("set-cookie").split(";", 1)[0];
+    const csrf = hiddenValue(await page.text(), "csrf");
+    const wrongForm = await YnabHandler.request(`${origin}/delete`, {
+      method: "POST", headers: { ...formHeaders(otherOrigin), Cookie: cookie },
+      body: new URLSearchParams({ csrf }),
+    }, env);
+    assert.equal(wrongForm.status, 403);
+    const approval = await YnabHandler.request(`${origin}/delete`, {
+      method: "POST", headers: { ...formHeaders(origin), Cookie: cookie },
+      body: new URLSearchParams({ csrf }),
+    }, env);
+    assert.equal(approval.status, 302);
+    const upstream = new URL(approval.headers.get("location"));
+    assert.equal(upstream.searchParams.get("scope"), "read-only");
+    const state = upstream.searchParams.get("state");
+    assert.equal(shared.transient.records.get(`state:${state}`).value.connectorOrigin, origin);
+    const wrongCallback = await YnabHandler.request(`${otherOrigin}/callback?code=fake-delete-code&state=${state}`, {}, otherEnv);
+    assert.equal(wrongCallback.status, 400);
+    assert.ok(shared.transient.records.has(`state:${state}`));
+    const callback = await YnabHandler.request(`${origin}/callback?code=fake-delete-code&state=${state}`, {}, env);
+    assert.equal(callback.status, 200);
+    const body = await callback.text();
+    const finalize = hiddenValue(body, "finalize");
+    const finalCsrf = hiddenValue(body, "csrf");
+    assert.equal(shared.transient.records.get(`final:${finalize}`).value.connectorOrigin, origin);
+    const wrongFinal = await YnabHandler.request(`${otherOrigin}/callback`, {
+      method: "POST", headers: formHeaders(otherOrigin), body: new URLSearchParams({ finalize, csrf: finalCsrf }),
+    }, otherEnv);
+    assert.equal(wrongFinal.status, 400);
+    assert.ok(await env.YNAB_CREDENTIALS.storage("migration-user").get(tokenRecordKey(binding)));
+    const finish = await YnabHandler.request(`${origin}/callback`, {
+      method: "POST", headers: formHeaders(origin), body: new URLSearchParams({ finalize, csrf: finalCsrf }),
+    }, env);
+    assert.equal(finish.status, 200);
+    assert.match(await finish.text(), /deleted|removed/i);
+    assert.equal(await env.YNAB_CREDENTIALS.storage("migration-user").get(tokenRecordKey(binding)), null);
+  }
+  assert.equal(shared.completed.length, 0);
+});
 
 test("hosted connector uses the exact Codex plugin icon and conventional favicons", async () => {
   const codexIcon = await readFile(new URL("../../codex/assets/icon.png", import.meta.url));
@@ -264,9 +525,9 @@ test("favicon.ico stays small enough for icon resolvers", () => {
 test("landing page advertises the connector icon", async () => {
   const response = await YnabHandler.request("https://ynab.amesvt.com/");
   const body = await response.text();
-  // The square tree favicon leads, with a small ICO as the alternate. Icon
-  // resolvers take the first usable declaration, so nothing large or ambiguous
-  // is advertised ahead of it. See WORKLOG 2026-07-30.
+  // A high-resolution square PNG supports Search, with SVG for browsers and
+  // the small ICO retained for older icon resolvers. See WORKLOG 2026-07-30.
+  assert.match(body, /<link rel="icon" type="image\/png" sizes="256x256" href="\/favicon-256x256\.png">/);
   assert.match(body, /<link rel="icon" href="\/favicon\.svg" type="image\/svg\+xml">/);
   assert.match(body, /<link rel="alternate icon" href="\/favicon\.ico" sizes="32x32">/);
   assert.match(body, /<link rel="icon" type="image\/png" sizes="32x32" href="\/favicon-32x32\.png">/);
@@ -551,6 +812,7 @@ test("failed connector authorization removes only its new credential", async () 
   await assert.rejects(persistTokensAndAuthorize({
     ...env,
     OAUTH_PROVIDER: {
+      async listUserGrants() { return { items: [] }; },
       async completeAuthorization() { throw new Error("provider failed"); },
     },
   }, {
@@ -564,6 +826,39 @@ test("failed connector authorization removes only its new credential", async () 
   assert.equal([...storage.values.keys()].filter((key) => key.startsWith("ynab_token:v2:")).length, 1);
 });
 
+test("failed prior-grant cleanup preserves the successfully completed new consent", async () => {
+  const env = credentialEnv();
+  await env.OAUTH_KV.put("grant:user-1:previous-grant", JSON.stringify({
+    id: "previous-grant", userId: "user-1", clientId: "client-1", resource: `${LEGACY_CONNECTOR_ORIGIN}/mcp`,
+  }));
+  let binding;
+  const revoked = [];
+  const result = await persistTokensAndAuthorize({
+    ...env,
+    OAUTH_PROVIDER: {
+      async listUserGrants() {
+        return { items: [{ id: "previous-grant", userId: "user-1", clientId: "client-1" }] };
+      },
+      async completeAuthorization(args) {
+        assert.equal(args.revokeExistingGrants, false);
+        binding = args.props;
+        return { redirectTo: "https://client.example/callback?code=successful-new-code" };
+      },
+      async revokeGrant(id) {
+        revoked.push(id);
+        throw new Error("temporary prior-grant cleanup failure");
+      },
+    },
+  }, {
+    record: { oauthReqInfo: { clientId: "client-1" }, writesEnabled: false, credentialGeneration: 0 },
+    tokens: { accessToken: "new-successful-access", refreshToken: "new-successful-refresh", expiresAt: Date.now() + 7200000 },
+    ynabUserId: "user-1",
+  });
+  assert.equal(result.redirectTo, "https://client.example/callback?code=successful-new-code");
+  assert.deepEqual(revoked, ["previous-grant"]);
+  assert.equal((await readTokenRecord(env.YNAB_CREDENTIALS.storage(), binding, DATA_KEY)).accessToken, "new-successful-access");
+});
+
 test("failed connector authorization cannot overwrite a concurrent successful consent", async () => {
   const env = credentialEnv();
   const concurrent = { accessToken: "concurrent", refreshToken: "concurrent-refresh", expiresAt: 999 };
@@ -572,8 +867,10 @@ test("failed connector authorization cannot overwrite a concurrent successful co
   await assert.rejects(persistTokensAndAuthorize({
     ...env,
     OAUTH_PROVIDER: {
+      async listUserGrants() { return { items: [] }; },
       async completeAuthorization() {
         await persistTokensAndAuthorize({ ...env, OAUTH_PROVIDER: {
+          async listUserGrants() { return { items: [] }; },
           async completeAuthorization(args) { concurrentBinding = args.props; return { redirectTo: "https://fake.example/callback" }; },
         } }, { record: { oauthReqInfo: { clientId: "peer-client" }, writesEnabled: false, credentialGeneration: 0 }, tokens: concurrent, ynabUserId: "user-1" });
         throw new Error("provider failed after concurrent update");
@@ -901,6 +1198,7 @@ test("YNAB callback completes through a native client scheme after final confirm
         };
       },
       async lookupClient() { return { clientName: "Attacker Controlled Client" }; },
+      async listUserGrants() { return { items: [] }; },
       async completeAuthorization(args) {
         completed += 1;
         completedBinding = args.props;
@@ -1123,8 +1421,10 @@ test("overlapping YNAB approvals validate cookie-free state and reject replay", 
 async function approveFakeConsent(env, { user = "user-1", client = "client-1", writes = false, access = "fake-access" } = {}) {
   let binding;
   await persistTokensAndAuthorize({ ...env, OAUTH_PROVIDER: {
+    async listUserGrants() { return { items: [] }; },
     async completeAuthorization(args) {
       binding = args.props;
+      assert.equal(args.revokeExistingGrants, false);
       assert.deepEqual(args.scope, writes ? ["read", "write"] : ["read"]);
       return { redirectTo: "https://fake-client.example/callback" };
     },
@@ -1240,10 +1540,10 @@ test("deletion invalidates previously displayed final consents and concurrent pr
       await deleteUserCredentials(env, "user-1");
       return { redirectTo: "https://fake.example/callback" };
     },
-    async listUserGrants() { return { items: [
+    async listUserGrants() { return { items: binding ? [
       { id: "fake-new-grant", metadata: { credentialId: binding.credentialId } },
       { id: "fake-unrelated-grant", metadata: { credentialId: "unrelated" } },
-    ] }; },
+    ] : [] }; },
     async revokeGrant(id, user) { revoked.push([id, user]); },
   } }, {
     record: { oauthReqInfo: { clientId: "fake-client" }, writesEnabled: true, credentialGeneration: await credentialGeneration(env, "user-1") },

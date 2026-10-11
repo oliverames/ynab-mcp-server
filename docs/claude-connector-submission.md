@@ -10,13 +10,13 @@ user must confirm before anyone submits it.
 - Server name: `YNAB`
 - Tagline: `Explore and manage your YNAB budget through Claude`
 - Suggested category: Finance
-- Server URL: `https://ynab.amesvt.com/mcp`
+- Server URL: `https://ames-ynab.link/mcp`
 - Documentation: `https://github.com/oliverames/ynab-mcp-server#readme`
-- Privacy policy: `https://ynab.amesvt.com/privacy`
+- Privacy policy: `https://ames-ynab.link/privacy`
 - Support: `https://github.com/oliverames/ynab-mcp-server/issues`
 - Company name: `Oliver Ames`
-- Company website: `https://ynab.amesvt.com`
-- Icon: `https://ynab.amesvt.com/assets/icon.png`
+- Company website: `https://ames-ynab.link`
+- Icon: `https://ames-ynab.link/assets/icon.png`
 
 ### Description
 
@@ -30,7 +30,7 @@ Write tools keep confirmation checks for destructive actions and record enough
 information to undo supported changes. The connector stores encrypted YNAB
 OAuth tokens, the YNAB user ID, the user's read or write choice, and an
 encrypted undo journal. Users can delete this data and revoke connector grants
-at `https://ynab.amesvt.com/delete`.
+at `https://ames-ynab.link/delete`.
 
 This is an independent open-source project by Oliver Ames. It is not affiliated
 with, sponsored by, or endorsed by YNAB.
@@ -60,8 +60,8 @@ credentials.
 - Conversation data: not collected or stored by this connector.
 - Health data: none.
 - Sponsored content: none.
-- Data deletion: `https://ynab.amesvt.com/delete`.
-- Privacy policy: `https://ynab.amesvt.com/privacy`.
+- Data deletion: `https://ames-ynab.link/delete`.
+- Privacy policy: `https://ames-ynab.link/privacy`.
 
 ## Icon roles and trademark basis
 
@@ -76,7 +76,7 @@ consent, callback, privacy, and deletion pages use the exact
 ["Works with YNAB" integration mark](https://api.ynab.com/papi/works_with_ynab.svg)
 that YNAB permits under section 5.3 of its
 [API Terms](https://api.ynab.com/#terms). The unchanged SVG is available at
-`https://ynab.amesvt.com/assets/works-with-ynab.svg`.
+`https://ames-ynab.link/assets/works-with-ynab.svg`.
 
 YNAB's terms expressly permit the integration mark and the "for YNAB" naming
 form. The square Codex-matched connector icon is documented as a separate

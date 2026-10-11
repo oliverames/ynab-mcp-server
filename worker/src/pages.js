@@ -1,6 +1,8 @@
 // Static page bodies for the connector. Every page carries non-affiliation
 // language per docs/hosted-oauth-connector.md and YNAB's naming guidance.
 
+import { CONNECTOR_ORIGIN } from "./brand-assets.js";
+
 const NON_AFFILIATION = "MCP Server for YNAB is an independent open-source project by Oliver Ames. We are not affiliated, associated, or in any way officially connected with YNAB or any of its subsidiaries or affiliates. The official YNAB website can be found at <a href=\"https://www.ynab.com\">www.ynab.com</a>. The names YNAB and You Need A Budget, as well as related names, tradenames, marks, trademarks, emblems, and images are registered trademarks of YNAB.";
 
 export function escapeHtml(value) {
@@ -12,19 +14,22 @@ export function escapeHtml(value) {
     .replace(/'/g, "&#039;");
 }
 
-function layout(title, body) {
+function layout(title, body, { origin = CONNECTOR_ORIGIN, canonicalPath } = {}) {
+  const safeOrigin = escapeHtml(new URL(origin).origin);
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${title}</title>
+<link rel="icon" type="image/png" sizes="256x256" href="/favicon-256x256.png">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="alternate icon" href="/favicon.ico" sizes="32x32">
 <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
 <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
 <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
-<meta property="og:image" content="https://ynab.amesvt.com/assets/icon.png">
+${canonicalPath ? `<link rel="canonical" href="${safeOrigin}${escapeHtml(canonicalPath)}">\n<meta property="og:url" content="${safeOrigin}${escapeHtml(canonicalPath)}">` : ""}
+<meta property="og:image" content="${safeOrigin}/assets/icon.png">
 <meta property="og:image:type" content="image/png">
 <meta property="og:image:width" content="1024">
 <meta property="og:image:height" content="1024">
@@ -47,18 +52,19 @@ ${body}
 </html>`;
 }
 
-export function landingPage() {
+export function landingPage({ origin = CONNECTOR_ORIGIN } = {}) {
+  const safeEndpoint = escapeHtml(new URL("/mcp", origin).href);
   return layout("MCP Server for YNAB | Remote Connector", `
 <h1><span class="accent">MCP Server for YNAB</span>: remote connector</h1>
 <div class="card">
 <p>This is a remote <a href="https://modelcontextprotocol.io">Model Context Protocol</a> endpoint for YNAB budgets. Add it to an MCP-capable AI client and authorize with your own YNAB account. There is no personal access token to copy anywhere.</p>
-<p><strong>Endpoint:</strong> <code>https://ynab.amesvt.com/mcp</code> (streamable HTTP; legacy SSE at <code>/sse</code>)</p>
+<p><strong>Endpoint:</strong> <code>${safeEndpoint}</code> (streamable HTTP; legacy SSE at <code>/sse</code>)</p>
 <p>Your AI client will walk you through YNAB's own sign-in and consent. You choose at consent time whether the connection can write to your budget or stay read-only.</p>
 <p class="muted">Source code, tool reference, and the local stdio version: <a href="https://github.com/oliverames/ynab-mcp-server">oliverames/ynab-mcp-server</a>.</p>
-</div>`);
+</div>`, { origin, canonicalPath: "/" });
 }
 
-export function consentPage({ clientName, redirectUri, consentId, csrfToken }) {
+export function consentPage({ clientName, redirectUri, consentId, csrfToken, origin = CONNECTOR_ORIGIN }) {
   const safeClientName = escapeHtml(clientName);
   const safeRedirectUri = escapeHtml(redirectUri);
   const safeConsentId = escapeHtml(consentId);
@@ -74,10 +80,10 @@ export function consentPage({ clientName, redirectUri, consentId, csrfToken }) {
   <label><input type="checkbox" name="writes" value="1"> Allow <strong>write access</strong> (create, edit, approve, and delete transactions; destructive tools still require per-call confirmation). Leave unchecked for read-only.</label>
   <button type="submit">Continue to YNAB</button>
 </form>
-</div>`);
+</div>`, { origin });
 }
 
-export function finalConsentPage({ clientName, redirectUri, writesEnabled, purpose, finalId, csrfToken }) {
+export function finalConsentPage({ clientName, redirectUri, writesEnabled, purpose, finalId, csrfToken, origin = CONNECTOR_ORIGIN }) {
   const deleting = purpose === "delete";
   const safeClientName = escapeHtml(clientName || "YNAB");
   const safeRedirectUri = escapeHtml(redirectUri || "connector data deletion");
@@ -99,10 +105,10 @@ export function finalConsentPage({ clientName, redirectUri, writesEnabled, purpo
   <input type="hidden" name="csrf" value="${safeCsrfToken}">
   <button type="submit">${button}</button>
 </form>
-</div>`);
+</div>`, { origin });
 }
 
-export function privacyPage() {
+export function privacyPage({ origin = CONNECTOR_ORIGIN } = {}) {
   return layout("Privacy | MCP Server for YNAB", `
 <h1>Privacy policy</h1>
 <p class="muted"><strong>Last updated:</strong> October 9, 2026</p>
@@ -115,10 +121,10 @@ export function privacyPage() {
 <p><strong>Deletion:</strong> use <a href="/delete">the deletion page</a> to revoke this connector's grants and erase stored tokens and journal entries. You can also revoke the application from your YNAB account settings.</p>
 <p>A non-financial deletion marker remains to invalidate earlier pending consent forms. An authorization already in progress can briefly leave an unusable provider grant while revocation propagates; the removed credential cannot make API requests.</p>
 <p><strong>Contact:</strong> file an issue at <a href="https://github.com/oliverames/ynab-mcp-server/issues">github.com/oliverames/ynab-mcp-server</a>.</p>
-</div>`);
+</div>`, { origin, canonicalPath: "/privacy" });
 }
 
-export function deletePage({ csrfToken } = {}) {
+export function deletePage({ csrfToken, origin = CONNECTOR_ORIGIN } = {}) {
   return layout("Delete my data | MCP Server for YNAB", `
 <h1>Delete my data</h1>
 <div class="card">
@@ -128,19 +134,19 @@ export function deletePage({ csrfToken } = {}) {
   <button type="submit">Sign in with YNAB and delete my data</button>
 </form>
 <p>Also revoke the application in YNAB: <strong>Account Settings → Apps / Developer Settings</strong> → revoke “MCP Server for YNAB”.</p>
-</div>`);
+</div>`, { origin, canonicalPath: "/delete" });
 }
 
-export function deletedPage() {
+export function deletedPage({ origin = CONNECTOR_ORIGIN } = {}) {
   return layout("Data deleted | MCP Server for YNAB", `
 <h1>Data deleted</h1>
 <div class="card">
 <p>All stored tokens, undo journal entries, and authorization grants for your YNAB user have been removed. Remember to also revoke the application in YNAB's Account Settings.</p>
-</div>`);
+</div>`, { origin });
 }
 
-export function errorPage(message) {
+export function errorPage(message, { origin = CONNECTOR_ORIGIN } = {}) {
   return layout("Error | MCP Server for YNAB", `
 <h1>Something went wrong</h1>
-<div class="card"><p>${escapeHtml(message)}</p><p><a href="/">Back to the landing page</a></p></div>`);
+<div class="card"><p>${escapeHtml(message)}</p><p><a href="/">Back to the landing page</a></p></div>`, { origin });
 }

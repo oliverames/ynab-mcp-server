@@ -5,7 +5,7 @@
 
 import { McpAgent } from "agents/mcp";
 import { createYnabServer } from "../../index.js";
-import { REMOTE_SERVER_INFO } from "./brand-assets.js";
+import { remoteServerInfo } from "./brand-assets.js";
 import { hostedServerOptions } from "./hosted-options.js";
 
 export class YnabMCP extends McpAgent {
@@ -21,7 +21,7 @@ export class YnabMCP extends McpAgent {
       // Called per outbound YNAB request; handles the 2-hour token expiry by
       // refreshing (and rotating the refresh token) inside the safety window.
       ...hostedServerOptions(this.env, this.props, this.name),
-      serverInfo: REMOTE_SERVER_INFO,
+      serverInfo: remoteServerInfo(this.env.CONNECTOR_BASE_URL),
     });
     this.server = server;
   }

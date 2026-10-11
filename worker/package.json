@@ -2,7 +2,7 @@
   "name": "ynab-mcp-connector",
   "private": true,
   "version": "0.1.0",
-  "description": "Hosted OAuth remote MCP connector for YNAB on Cloudflare Workers (ynab.amesvt.com). Not affiliated with YNAB.",
+  "description": "Hosted OAuth remote MCP connector for YNAB on Cloudflare Workers (ames-ynab.link). Not affiliated with YNAB.",
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",

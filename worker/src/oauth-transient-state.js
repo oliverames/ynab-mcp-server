@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import { consumeTransientRecord } from "./transient-state.js";
 
 const RECORD_KEY = "record";
 
@@ -22,15 +23,13 @@ export class OAuthTransientState extends DurableObject {
     }
 
     if (request.method === "POST" && url.pathname === "/consume") {
-      const record = await this.ctx.storage.transaction(async (txn) => {
-        const current = await txn.get(RECORD_KEY);
-        if (current) await txn.delete(RECORD_KEY);
-        return current;
-      });
-      if (!record) return new Response(null, { status: 404 });
-      await this.ctx.storage.deleteAlarm();
-      if (record.expiresAt <= Date.now()) return new Response(null, { status: 410 });
-      return Response.json(record.value);
+      let binding;
+      try {
+        binding = await request.json();
+      } catch {
+        return new Response("Invalid transient origin binding", { status: 400 });
+      }
+      return consumeTransientRecord(this.ctx.storage, binding);
     }
 
     return new Response("Not found", { status: 404 });

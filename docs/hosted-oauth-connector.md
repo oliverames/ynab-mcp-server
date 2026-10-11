@@ -1,6 +1,6 @@
 # Hosted OAuth Connector Pattern
 
-This repository includes both the local stdio MCP server and a hosted connector at `https://ynab.amesvt.com/mcp`. The hosted connector does not ask users for a YNAB personal access token. It uses YNAB's authorization-code flow, stores encrypted credentials per consent server-side, and exposes MCP over HTTPS.
+This repository includes both the local stdio MCP server and a hosted connector at `https://ames-ynab.link/mcp`. The hosted connector does not ask users for a YNAB personal access token. It uses YNAB's authorization-code flow, stores encrypted credentials per consent server-side, and exposes MCP over HTTPS.
 
 ## Architecture
 
@@ -101,8 +101,9 @@ encrypted KV records cannot identify their original client and effective scope,
 so they are never migrated into a new consent. Ownership-verified `/delete`
 revokes every paginated connector grant, clears all the user's scoped credential
 and journal records, and deletes the legacy token/journal records. It does not
-remove another user's data. The existing OAuth provider's same-client grant
-replacement policy remains in force.
+remove another user's data. Reconnecting replaces the same client's grants only
+for the exact connector resource origin, preserving its grants on the retained
+compatibility domain.
 MCP object addresses include the authenticated consent identity, so a disclosed
 session ID cannot attach a different client or user to the original session.
 A new MCP session with the same grant can recover its existing journal with a
