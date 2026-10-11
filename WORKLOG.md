@@ -26,6 +26,17 @@ metadata and quality update does not refresh Google's favicon cache, change
 edge rules, or guarantee an existing client's logo display. No client was
 disconnected or reauthorized, and no budget data was fetched.
 
+**Published**: [PR #37](https://github.com/oliverames/ynab-mcp-server/pull/37)
+merged as `5ba8d92442e5111bb9e75cab9c1720f87a1357db` after all nine CI checks
+passed. Worker version `d3da76f6-9578-448c-b2d1-450fc78f586d` is deployed to
+`ames-ynab.link`. All 20 public HTTPS checks passed: every advertised icon and
+legacy image URL, exact new asset bytes, OAuth issuer/resource discovery,
+unauthenticated MCP `401`, and untrusted Origin `403`. New icons also passed
+HEAD and conditional ETag `304` checks. Authenticated live initialization and
+actual Gemini/Claude/ChatGPT logo display remain unverified; the wire metadata
+was verified in a credential-free runtime test of the deployed source. The
+previous compatible Worker version is `e4ff76f3-682c-4903-bcd5-6ea0db317a69`.
+
 ## 2026-10-11 - Hosted landing page setup guide
 
 **What changed**: The homepage now explains how to add the remote connector,
