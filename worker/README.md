@@ -1,9 +1,10 @@
 # ynab-mcp-connector (worker/)
 
 Cloudflare Worker that hosts the same MCP server as the repo root, remotely at
-**https://ynab.amesvt.com/mcp**, with per-user YNAB OAuth instead of a personal
+**https://ames-ynab.link/mcp**, with per-user YNAB OAuth instead of a personal
 access token. Design blueprint: [docs/hosted-oauth-connector.md](../docs/hosted-oauth-connector.md).
 Not affiliated with YNAB.
+Domain changes follow the [cutover, retirement, and rollback runbook](../docs/domain-migration.md).
 
 ## How it works
 
@@ -54,7 +55,9 @@ which client and scope produced it, so it is never adopted by a new grant. Its
 encrypted token and undo records remain inaccessible in KV until the user uses
 `/delete`; they cannot safely become another client's undo history. New consent
 stores a unique credential and rollback removes only that credential. The OAuth
-provider's existing same-client replacement policy remains unchanged.
+provider's replacement policy retains other clients' grants; temporary domain
+compatibility also retains the same client's grants for other connector origins.
+Removing the old domain does not delete those stored grants or credentials.
 
 MCP Durable Object addresses also include the authenticated consent identity.
 A different client's valid token and a disclosed MCP session ID cannot attach
@@ -82,6 +85,10 @@ and explicit approval before recovery.
 
 ## Deploy
 
+For the existing hosted service, follow the [domain migration runbook](../docs/domain-migration.md).
+Keep its existing namespace, Durable Objects, and secrets. The initialization
+commands below are for a new installation; do not repeat them during migration.
+
 ```bash
 cd worker
 npm install
@@ -90,13 +97,17 @@ npx wrangler secret put YNAB_CLIENT_ID        # from the YNAB OAuth application
 npx wrangler secret put YNAB_CLIENT_SECRET
 npx wrangler secret put COOKIE_ENCRYPTION_KEY # any random 32+ byte string
 npx wrangler secret put DATA_ENCRYPTION_KEY   # a different random 32+ byte string
-npx wrangler deploy                           # provisions ynab.amesvt.com DNS + cert
+npx wrangler deploy                           # provisions configured domains + certs
 ```
 
 Prerequisites: a YNAB OAuth application (YNAB → Account Settings → Developer
-Settings) whose redirect URI is exactly `https://ynab.amesvt.com/callback`, and
-wrangler authenticated against the Cloudflare account that owns the amesvt.com
-zone. Local dev: copy `.dev.vars.example` to `.dev.vars` (redirect URI
+Settings) whose redirect URI list includes both `https://ames-ynab.link/callback`
+and the temporarily retained `https://ynab.amesvt.com/callback` during cutover,
+and Wrangler authenticated against the Ames Consulting account that owns both
+zones. After new-origin authorization is tested and the old route is retired,
+remove the old callback while retaining the new callback and any other
+registered development callbacks.
+Local dev: copy `.dev.vars.example` to `.dev.vars` (redirect URI
 `http://localhost:8787/callback` must also be registered on the YNAB app while
 testing locally).
 
@@ -109,6 +120,67 @@ rollout limit, not a cause of connector consent errors that happen before the
 browser reaches YNAB.
 Do not submit the review form or publish the connector without Oliver's explicit
 approval.
+
+## Canonical origin and temporary compatibility
+
+`CONNECTOR_BASE_URL` is the canonical public origin. This draft stages
+`https://ames-ynab.link`; production remains at `https://ynab.amesvt.com` until
+the bundled live-change approval and deployment.
+`CONNECTOR_COMPATIBILITY_ORIGINS` is an optional comma-separated list of other
+exact connector origins served on the same Worker. The staged configuration
+keeps the old origin temporarily for cutover checks and rollback:
+
+```json
+{
+  "CONNECTOR_BASE_URL": "https://ames-ynab.link",
+  "CONNECTOR_COMPATIBILITY_ORIGINS": "https://ynab.amesvt.com"
+}
+```
+
+Use HTTPS origins with no path, query, fragment, or credentials; HTTP loopback
+origins are supported only for local development. The Worker accepts only these
+configured connector origins and returns `421` for an unconfigured origin.
+Public canonical links use `CONNECTOR_BASE_URL`, while each supported request
+origin retains its own OAuth issuer, exact `/mcp` resource, and origin-bound
+consent/callback flow. A compatibility origin serves MCP and OAuth directly
+without redirecting existing clients to the canonical domain. Oliver's requested
+endstate retires `ynab.amesvt.com` after the replacement passes live checks;
+clients must reconnect at `https://ames-ynab.link/mcp` and approve a new consent.
+The old origin is not a permanent endpoint.
+
+After validation and the approved retirement, remove only the old custom-domain
+mapping and connector-managed DNS record, remove its Wrangler route, and use:
+
+```json
+{
+  "CONNECTOR_BASE_URL": "https://ames-ynab.link",
+  "CONNECTOR_COMPATIBILITY_ORIGINS": ""
+}
+```
+
+Remove `https://ynab.amesvt.com/callback` from the existing YNAB OAuth
+application after the new callback is tested and any known old authorization
+flow finishes or expires. Preserve stored grants, credentials, encrypted
+journals, all bindings and secrets, and renewal settings. Keep the old code
+version and routing/OAuth settings available for rollback through validation;
+once new clients exist, a rollback must preserve the new issuer too.
+
+Local Wrangler forwards the configured route's hostname by default. For
+credential-free loopback runtime checks, override that upstream hostname too:
+
+```bash
+npx wrangler dev --local --host localhost:8787 --upstream-protocol http \
+  --var CONNECTOR_BASE_URL:http://localhost:8787 \
+  --var CONNECTOR_COMPATIBILITY_ORIGINS:
+```
+
+During temporary both-host operation, keep each configured hostname attached to
+`ynab-mcp-connector` as an exact Cloudflare custom domain and retain its exact
+YNAB `/callback` URI. The separate
+`MCP_ALLOWED_ORIGINS` variable lists browser client origins such as
+`https://chatgpt.com`; it does not grant connector aliases. See
+[the migration runbook](../docs/domain-migration.md) before adding a domain,
+changing published URLs, or retiring an old issuer.
 
 ## Connector identity
 
@@ -125,9 +197,9 @@ first, followed by `/assets/icon.png`, which is generated from the exact
 landing page publishes the latter artwork as its Open Graph image. Conventional
 ICO, 16px, 32px, 48px, 64px, 96px, 128px, 256px, and Apple touch icon routes
 use the Blurple YNAB tree artwork from `assets/ynab-tree-blurple.svg`, downloaded
-from YNAB's public Webflow CDN asset. The ICO includes a 256px frame so hosts that
-derive custom-connector branding from the origin favicon can use a card-sized
-asset. The Claude-facing 256px PNG is forced to 8-bit RGBA and served from the
+from YNAB's public Webflow CDN asset. The ICO uses one 32px frame and stays below
+10 KiB for clients that skip larger ICO responses. The Claude-facing 256px PNG
+is forced to 8-bit RGBA and served from the
 versioned `/assets/ynab-tree-icon-v1.png` route so a previously rejected image
 cannot remain pinned by the immutable asset cache. The generator, dimensions,
 MIME types, and
@@ -148,10 +220,10 @@ decision.
 ```bash
 npm test
 npx wrangler deploy --dry-run
-curl -I https://ynab.amesvt.com/
-curl -I https://ynab.amesvt.com/assets/works-with-ynab.png
-curl https://ynab.amesvt.com/.well-known/oauth-protected-resource/mcp
-curl https://ynab.amesvt.com/.well-known/oauth-authorization-server
+curl -I https://ames-ynab.link/
+curl -I https://ames-ynab.link/assets/works-with-ynab.png
+curl https://ames-ynab.link/.well-known/oauth-protected-resource/mcp
+curl https://ames-ynab.link/.well-known/oauth-authorization-server
 ```
 
 The unit suite is credential-free. Production acceptance passed on July 15,

@@ -1,5 +1,34 @@
 # Worklog
 
+## 2026-10-11 - Prepare hosted domain migration
+
+**What changed**: Stage `ames-ynab.link` as the canonical hosted origin with
+temporary direct compatibility at `ynab.amesvt.com`. Each host has its own OAuth
+issuer, exact MCP resource/audience, and origin-bound consent/callback state.
+Reconnect cleanup retains grants for the other origin. Public metadata and docs
+use the new canonical URL, and the existing official YNAB tree favicon and
+Works with YNAB attribution remain intact. The page now links the supported
+256px square PNG explicitly for Google Search. See [the cutover and retirement
+runbook](docs/domain-migration.md).
+
+**Verification**: All 56 credential-free Worker tests, release consistency,
+Wrangler dry run, and isolated local workerd discovery/authentication checks
+passed. An independent review reproduced the authenticated SSE audience failure
+on the unchanged 6.0.1 baseline; this migration doesn't widen token audiences.
+Read-only Cloudflare inspection confirmed the owned new zone and active TLS
+certificate. The supplied Library screenshot couldn't be downloaded after two
+supported attempts; the account and registration email corroborate the hostname.
+
+**Left off at**: Oliver confirmed `ames-ynab.link` and requested completing the
+deployment. The exact DNS/OAuth/security action-time confirmation remains
+pending. Production remains on the recorded
+6.0.1 Worker. Oliver requested retiring the old host after validating the new
+endpoint, including relevant AmesVT directory links. Existing storage, keys,
+grants and renewal settings stay intact. New-domain signed-in acceptance and
+live after screenshots must follow deployment.
+
+---
+
 ## 2026-10-09 - Correct Worker bootstrap for 6.0.1
 
 **What changed**: Skip the unused default stdio server instance when Cloudflare

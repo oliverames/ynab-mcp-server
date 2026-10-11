@@ -20,7 +20,13 @@ import {
   encryptStoredJson,
   decryptStoredJson,
 } from "./ynab-oauth.js";
-import { putTransientState, consumeTransientState } from "./transient-state.js";
+import {
+  putTransientState,
+  consumeTransientState,
+  transientStateMatchesOrigin,
+  LEGACY_CONNECTOR_ORIGIN,
+} from "./transient-state.js";
+import { captureSameOriginGrantIds, revokeCapturedGrants } from "./grant-replacement.js";
 import {
   CONNECTOR_APPLE_TOUCH_ICON_PNG,
   CONNECTOR_APPLE_TOUCH_ICON_PNG_SHA256,
@@ -49,13 +55,21 @@ import {
   WORKS_WITH_YNAB_SVG,
   WORKS_WITH_YNAB_SVG_SHA256,
 } from "./brand-assets.js";
-import { landingPage, consentPage, finalConsentPage, privacyPage, deletePage, deletedPage, errorPage } from "./pages.js";
+import { landingPage, consentPage, finalConsentPage, privacyPage, deletePage, deletedPage, errorPage as buildErrorPage } from "./pages.js";
 
 const STATE_TTL_SECONDS = 600;
 const CSRF_COOKIE = "__Host-ynab_mcp_csrf";
 const OPAQUE_ID_PATTERN = /^[A-Za-z0-9_-]{32}$/;
 
 const app = new Hono();
+
+function pageOptions(c) {
+  return { origin: c.env?.CONNECTOR_CANONICAL_URL || c.env?.CONNECTOR_BASE_URL };
+}
+
+function errorPage(c, message) {
+  return buildErrorPage(message, pageOptions(c));
+}
 
 function formActionSources(urls) {
   const sources = new Set(["'self'"]);
@@ -125,7 +139,7 @@ function callbackUri(c) {
   const baseUrl = c.env.CONNECTOR_BASE_URL;
   if (!baseUrl) throw new Error("CONNECTOR_BASE_URL is required");
   const base = new URL(baseUrl);
-  const isLocal = base.protocol === "http:" && ["localhost", "127.0.0.1"].includes(base.hostname);
+  const isLocal = base.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(base.hostname);
   if (base.protocol !== "https:" && !isLocal) {
     throw new Error("CONNECTOR_BASE_URL must use HTTPS (except localhost development)");
   }
@@ -134,6 +148,27 @@ function callbackUri(c) {
 
 function canonicalOrigin(c) {
   return new URL(c.env.CONNECTOR_BASE_URL).origin;
+}
+
+function consumeConnectorState(c, id) {
+  return consumeTransientState(c.env, id, {
+    expectedOrigin: canonicalOrigin(c),
+    legacyOrigin: LEGACY_CONNECTOR_ORIGIN,
+  });
+}
+
+function storedCallbackUri(c, record) {
+  const origin = canonicalOrigin(c);
+  if (!transientStateMatchesOrigin(record, origin, LEGACY_CONNECTOR_ORIGIN)) return null;
+  const expected = callbackUri(c);
+  if (Object.hasOwn(record, "callbackUri")) {
+    return record.callbackUri === expected ? record.callbackUri : null;
+  }
+  // Deploys may leave existing ten-minute upstream states in flight. Their
+  // callback was always the old origin; newly bound records require the URI.
+  return !Object.hasOwn(record, "connectorOrigin") && origin === LEGACY_CONNECTOR_ORIGIN
+    ? expected
+    : null;
 }
 
 function isSameOriginPost(c) {
@@ -176,7 +211,7 @@ async function validateCsrf(c, form, cookieName = CSRF_COOKIE) {
   return valid;
 }
 
-app.get("/", (c) => html(c, landingPage()));
+app.get("/", (c) => html(c, landingPage(pageOptions(c))));
 app.get("/assets/works-with-ynab.png", (c) => worksWithYnabAsset(c, {
   body: WORKS_WITH_YNAB_PNG,
   contentType: "image/png",
@@ -260,10 +295,10 @@ app.get("/apple-touch-icon.png", (c) => worksWithYnabAsset(c, {
   contentType: "image/png",
   sha256: CONNECTOR_APPLE_TOUCH_ICON_PNG_SHA256,
 }));
-app.get("/privacy", (c) => html(c, privacyPage()));
+app.get("/privacy", (c) => html(c, privacyPage(pageOptions(c))));
 app.get("/delete", async (c) => html(
   c,
-  deletePage({ csrfToken: await issueCsrf(c) }),
+  deletePage({ ...pageOptions(c), csrfToken: await issueCsrf(c) }),
   200,
   { formActionUrls: ["https://app.ynab.com"] }
 ));
@@ -275,9 +310,9 @@ app.get("/authorize", async (c) => {
   try {
     oauthReqInfo = await c.env.OAUTH_PROVIDER.parseAuthRequest(c.req.raw);
   } catch (e) {
-    return html(c, errorPage("Invalid authorization request."), 400);
+    return html(c, errorPage(c, "Invalid authorization request."), 400);
   }
-  if (!oauthReqInfo?.clientId) return html(c, errorPage("Missing OAuth client id."), 400);
+  if (!oauthReqInfo?.clientId) return html(c, errorPage(c, "Missing OAuth client id."), 400);
   const client = await c.env.OAUTH_PROVIDER.lookupClient(oauthReqInfo.clientId);
   const clientName = client?.clientName || oauthReqInfo.clientId;
   const redirectUri = oauthReqInfo.redirectUri || (client?.redirectUris?.[0] ?? "unknown");
@@ -288,6 +323,7 @@ app.get("/authorize", async (c) => {
     `oauth-consent:${consentId}:${csrfToken}`
   );
   await putTransientState(c.env, `consent:${consentId}`, {
+    connectorOrigin: canonicalOrigin(c),
     oauthReqInfo,
     csrfHash,
     clientName,
@@ -296,6 +332,7 @@ app.get("/authorize", async (c) => {
   return html(
     c,
     consentPage({
+      ...pageOptions(c),
       clientName,
       redirectUri,
       consentId,
@@ -308,25 +345,25 @@ app.get("/authorize", async (c) => {
 
 app.post("/authorize", async (c) => {
   if (!isSameOriginPost(c)) {
-    return html(c, errorPage("Authorization forms must be submitted from the same connector origin."), 403);
+    return html(c, errorPage(c, "Authorization forms must be submitted from the same connector origin."), 403);
   }
   const form = await c.req.parseBody();
   const consentId = String(form.consent || "");
-  if (!consentId) return html(c, errorPage("Missing authorization request."), 400);
-  if (!OPAQUE_ID_PATTERN.test(consentId)) return html(c, errorPage("Consent form expired or invalid. Start again from your MCP client."), 400);
-  const storedConsent = await consumeTransientState(c.env, `consent:${consentId}`);
-  if (!storedConsent) return html(c, errorPage("Authorization request expired. Start again from your MCP client."), 400);
+  if (!consentId) return html(c, errorPage(c, "Missing authorization request."), 400);
+  if (!OPAQUE_ID_PATTERN.test(consentId)) return html(c, errorPage(c, "Consent form expired or invalid. Start again from your MCP client."), 400);
+  const storedConsent = await consumeConnectorState(c, `consent:${consentId}`);
+  if (!storedConsent) return html(c, errorPage(c, "Authorization request expired. Start again from your MCP client."), 400);
   const csrfValid = await hmacVerify(
     c.env.COOKIE_ENCRYPTION_KEY,
     `oauth-consent:${consentId}:${String(form.csrf || "")}`,
     storedConsent?.csrfHash
   );
   if (!csrfValid) {
-    return html(c, errorPage("Consent form expired or invalid. Start again from your MCP client."), 400);
+    return html(c, errorPage(c, "Consent form expired or invalid. Start again from your MCP client."), 400);
   }
   const oauthReqInfo = storedConsent?.oauthReqInfo;
   if (!oauthReqInfo?.clientId || !oauthReqInfo?.redirectUri) {
-    return html(c, errorPage("Stored authorization request was incomplete."), 400);
+    return html(c, errorPage(c, "Stored authorization request was incomplete."), 400);
   }
   return startYnabDance(c, {
     purpose: "authorize",
@@ -341,9 +378,12 @@ app.post("/authorize", async (c) => {
 
 // Deletion proves ownership with a read-only YNAB sign-in, then purges.
 app.post("/delete", async (c) => {
+  if (!isSameOriginPost(c)) {
+    return html(c, errorPage(c, "Deletion forms must be submitted from the same connector origin."), 403);
+  }
   const form = await c.req.parseBody();
   if (!await validateCsrf(c, form)) {
-    return html(c, errorPage("Deletion form expired or invalid. Open the deletion page and try again."), 400);
+    return html(c, errorPage(c, "Deletion form expired or invalid. Open the deletion page and try again."), 400);
   }
   return startYnabDance(c, {
     purpose: "delete",
@@ -361,12 +401,14 @@ async function startYnabDance(c, stateRecord) {
     c.env.COOKIE_ENCRYPTION_KEY,
     `oauth-state:${state}`
   );
+  const redirectUri = callbackUri(c);
   await putTransientState(c.env, `state:${state}`, {
     ...stateRecord,
+    connectorOrigin: canonicalOrigin(c),
+    callbackUri: redirectUri,
     codeVerifier,
     stateHash,
   }, STATE_TTL_SECONDS);
-  const redirectUri = callbackUri(c);
   return c.redirect(buildYnabAuthorizeUrl({
     clientId: c.env.YNAB_CLIENT_ID,
     redirectUri,
@@ -382,14 +424,14 @@ app.get("/callback", async (c) => {
   const code = c.req.query("code");
   const state = c.req.query("state");
   const upstreamError = c.req.query("error");
-  if ((!code && !upstreamError) || !state) return html(c, errorPage("Missing authorization result or state from YNAB."), 400);
+  if ((!code && !upstreamError) || !state) return html(c, errorPage(c, "Missing authorization result or state from YNAB."), 400);
   if (!OPAQUE_ID_PATTERN.test(state)) {
-    return html(c, errorPage("Authorization state expired or did not match. Start again from your MCP client."), 400);
+    return html(c, errorPage(c, "Authorization state expired or did not match. Start again from your MCP client."), 400);
   }
 
-  const record = await consumeTransientState(c.env, `state:${state}`);
+  const record = await consumeConnectorState(c, `state:${state}`);
   if (!record) {
-    return html(c, errorPage("Authorization state expired or did not match. Start again from your MCP client."), 400);
+    return html(c, errorPage(c, "Authorization state expired or did not match. Start again from your MCP client."), 400);
   }
   const stateValid = await hmacVerify(
     c.env.COOKIE_ENCRYPTION_KEY,
@@ -397,32 +439,35 @@ app.get("/callback", async (c) => {
     record?.stateHash
   );
   if (!stateValid) {
-    return html(c, errorPage("Authorization state expired or did not match. Start again from your MCP client."), 400);
+    return html(c, errorPage(c, "Authorization state expired or did not match. Start again from your MCP client."), 400);
   }
   if (upstreamError) {
-    return html(c, errorPage("YNAB did not authorize the connector. No connector grant was created."), 400);
+    return html(c, errorPage(c, "YNAB did not authorize the connector. No connector grant was created."), 400);
   }
-  const redirectUri = callbackUri(c);
+  const redirectUri = storedCallbackUri(c, record);
+  if (!redirectUri) {
+    return html(c, errorPage(c, "Stored callback did not match the connector origin. Start again from your MCP client."), 400);
+  }
 
   let tokens;
   try {
     tokens = await exchangeCodeForTokens(c.env, { code, redirectUri, codeVerifier: record.codeVerifier });
   } catch (e) {
-    return html(c, errorPage(`Could not exchange the YNAB authorization code (${e.message}).`), 502);
+    return html(c, errorPage(c, `Could not exchange the YNAB authorization code (${e.message}).`), 502);
   }
 
   let ynabUserId;
   try {
     ynabUserId = await fetchYnabUserId(tokens.accessToken);
   } catch (e) {
-    return html(c, errorPage(`Authorized with YNAB but could not read the user profile (${e.message}).`), 502);
+    return html(c, errorPage(c, `Authorized with YNAB but could not read the user profile (${e.message}).`), 502);
   }
 
   if (record.purpose === "authorize") {
     try {
       record.credentialGeneration = await credentialGeneration(c.env, ynabUserId);
     } catch {
-      return html(c, errorPage("Could not verify the connector authorization state. Start again from your MCP client."), 502);
+      return html(c, errorPage(c, "Could not verify the connector authorization state. Start again from your MCP client."), 502);
     }
   }
 
@@ -438,12 +483,14 @@ app.get("/callback", async (c) => {
     { record, tokens, ynabUserId }
   );
   await putTransientState(c.env, `final:${finalId}`, {
+    connectorOrigin: canonicalOrigin(c),
     csrfHash,
     encryptedAuthorization,
   }, STATE_TTL_SECONDS);
   return html(
     c,
     finalConsentPage({
+      ...pageOptions(c),
       clientName: record.clientName,
       redirectUri: record.redirectUri,
       writesEnabled: !!record.writesEnabled,
@@ -458,16 +505,16 @@ app.get("/callback", async (c) => {
 
 app.post("/callback", async (c) => {
   if (!isSameOriginPost(c)) {
-    return html(c, errorPage("Final confirmation must be submitted from the same connector origin."), 403);
+    return html(c, errorPage(c, "Final confirmation must be submitted from the same connector origin."), 403);
   }
   const form = await c.req.parseBody();
   const finalId = String(form.finalize || "");
   if (!OPAQUE_ID_PATTERN.test(finalId)) {
-    return html(c, errorPage("Final confirmation expired or invalid. Start again from your MCP client."), 400);
+    return html(c, errorPage(c, "Final confirmation expired or invalid. Start again from your MCP client."), 400);
   }
-  const pending = await consumeTransientState(c.env, `final:${finalId}`);
+  const pending = await consumeConnectorState(c, `final:${finalId}`);
   if (!pending) {
-    return html(c, errorPage("Final confirmation expired or invalid. Start again from your MCP client."), 400);
+    return html(c, errorPage(c, "Final confirmation expired or invalid. Start again from your MCP client."), 400);
   }
   const csrfValid = await hmacVerify(
     c.env.COOKIE_ENCRYPTION_KEY,
@@ -475,7 +522,7 @@ app.post("/callback", async (c) => {
     pending.csrfHash
   );
   if (!csrfValid) {
-    return html(c, errorPage("Final confirmation expired or invalid. Start again from your MCP client."), 400);
+    return html(c, errorPage(c, "Final confirmation expired or invalid. Start again from your MCP client."), 400);
   }
 
   let authorization;
@@ -487,11 +534,14 @@ app.post("/callback", async (c) => {
     );
     authorization = decrypted.value;
   } catch {
-    return html(c, errorPage("Stored final authorization was invalid. Start again from your MCP client."), 500);
+    return html(c, errorPage(c, "Stored final authorization was invalid. Start again from your MCP client."), 500);
   }
   const { record, tokens, ynabUserId } = authorization ?? {};
   if (!record || !tokens?.accessToken || !ynabUserId) {
-    return html(c, errorPage("Stored final authorization was incomplete. Start again from your MCP client."), 500);
+    return html(c, errorPage(c, "Stored final authorization was incomplete. Start again from your MCP client."), 500);
+  }
+  if (!transientStateMatchesOrigin(record, canonicalOrigin(c), LEGACY_CONNECTOR_ORIGIN)) {
+    return html(c, errorPage(c, "Stored final authorization did not match the connector origin. Start again from your MCP client."), 400);
   }
 
   if (record.purpose === "delete") {
@@ -499,9 +549,9 @@ app.post("/callback", async (c) => {
       await revokeAllUserGrants(c.env.OAUTH_PROVIDER, ynabUserId);
       await deleteUserCredentials(c.env, ynabUserId);
     } catch {
-      return html(c, errorPage("Could not remove all connector data and grants. No success confirmation was issued; please retry deletion."), 502);
+      return html(c, errorPage(c, "Could not remove all connector data and grants. No success confirmation was issued; please retry deletion."), 502);
     }
-    return html(c, deletedPage());
+    return html(c, deletedPage(pageOptions(c)));
   }
 
   try {
@@ -512,7 +562,7 @@ app.post("/callback", async (c) => {
     });
     return c.redirect(redirectTo);
   } catch {
-    return html(c, errorPage("Could not complete the connector authorization. Start again from your MCP client."), 502);
+    return html(c, errorPage(c, "Could not complete the connector authorization. Start again from your MCP client."), 502);
   }
 });
 
@@ -533,6 +583,10 @@ export async function persistTokensAndAuthorize(env, { record, tokens, ynabUserI
   if (!stored.ok) throw new Error("Could not store the isolated YNAB credential");
 
   try {
+    const priorGrantIds = await captureSameOriginGrantIds(env, env.OAUTH_PROVIDER, {
+      userId: ynabUserId,
+      clientId: record.oauthReqInfo.clientId,
+    });
     const result = await env.OAUTH_PROVIDER.completeAuthorization({
       request: record.oauthReqInfo,
       userId: ynabUserId,
@@ -542,11 +596,15 @@ export async function persistTokensAndAuthorize(env, { record, tokens, ynabUserI
       // MCP agent. Tokens rotate in the private credential Durable Object;
       // props bind identity, client, consent credential, and write choice.
       props: binding,
+      // The provider's default replacement spans all resources in shared KV.
+      // Capture and replace only grants for this exact issuer/resource instead.
+      revokeExistingGrants: false,
     });
     // Deletion may have happened while the OAuth provider awaited KV. Never
     // redirect a client to a grant whose credential was concurrently removed.
     const exists = await credentialStoreRequest(env, ynabUserId, "/exists", { binding });
     if (!exists.ok) throw new Error("Authorization changed concurrently; start again");
+    await revokeCapturedGrants(env.OAUTH_PROVIDER, ynabUserId, priorGrantIds);
     return result;
   } catch (error) {
     // Rollback touches only this callback's unique credential. No prior

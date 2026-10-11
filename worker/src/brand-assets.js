@@ -99,3 +99,17 @@ export const CONNECTOR_RESOURCE_METADATA = {
   bearer_methods_supported: ["header"],
   resource_name: "YNAB",
 };
+
+// Public branding follows the configured canonical endpoint. OAuth resource
+// metadata is separately scoped to the exact hostname handling each request.
+export function remoteServerInfo(origin = CONNECTOR_ORIGIN) {
+  const canonical = new URL(origin).origin;
+  return {
+    ...REMOTE_SERVER_INFO,
+    websiteUrl: canonical,
+    icons: REMOTE_SERVER_INFO.icons.map((icon) => ({
+      ...icon,
+      src: new URL(new URL(icon.src).pathname, canonical).href,
+    })),
+  };
+}

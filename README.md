@@ -36,7 +36,7 @@
 
 ---
 
-Run YNAB through Claude Code, Codex, Hermes, Antigravity, or any stdio MCP host. For clients that need a remote URL, the hosted connector at [`https://ynab.amesvt.com/mcp`](https://ynab.amesvt.com) signs each user in through YNAB OAuth, with no personal access token to copy into another service. Both paths use the same rate-aware tool layer and convert amounts between dollars and YNAB milliunits. Direct registration starts read-only, and the undo journal records supported changes. Some operations still require manual recovery in YNAB.
+Run YNAB through Claude Code, Codex, Hermes, Antigravity, or any stdio MCP host. For clients that need a remote URL, the hosted connector at [`https://ames-ynab.link/mcp`](https://ames-ynab.link) signs each user in through YNAB OAuth, with no personal access token to copy into another service. Both paths use the same rate-aware tool layer and convert amounts between dollars and YNAB milliunits. Direct registration starts read-only, and the undo journal records supported changes. Some operations still require manual recovery in YNAB.
 
 ## Why This Exists
 
@@ -77,10 +77,17 @@ The npm package is the local, owner-run option. It uses a personal access token 
 Add this Streamable HTTP URL to Claude.ai, ChatGPT, Mistral Vibe Work, or another remote MCP client:
 
 ```text
-https://ynab.amesvt.com/mcp
+https://ames-ynab.link/mcp
 ```
 
-The client opens this connector's consent page and then sends you to YNAB to sign in. Leave the write-access box unchecked for a read-only connection, or enable it when you need the write tools. The connector stores OAuth tokens and undo data with application-layer encryption in Cloudflare KV; the AI client receives only the connector's own scoped token. See the live [privacy policy](https://ynab.amesvt.com/privacy), [data-deletion flow](https://ynab.amesvt.com/delete), and [deployment documentation](worker/README.md).
+The old `https://ynab.amesvt.com/mcp` endpoint stays available during cutover
+validation and will then retire. Add the new URL as a new connection and
+authorize there; OAuth tokens stay bound to the hostname where they were issued.
+Stored credentials and journals are preserved, but a new consent has its own
+isolated journal. See the
+[migration and rollback plan](docs/domain-migration.md).
+
+The client opens this connector's consent page and then sends you to YNAB to sign in. Leave the write-access box unchecked for a read-only connection, or enable it when you need the write tools. The connector stores OAuth tokens and undo data with application-layer encryption in Cloudflare KV; the AI client receives only the connector's own scoped token. See the live [privacy policy](https://ames-ynab.link/privacy), [data-deletion flow](https://ames-ynab.link/delete), and [deployment documentation](worker/README.md).
 
 The [July 15 acceptance record](docs/YNAB-COMPLETE-WORKLOG-2026-07-15.md) documents earlier signed-in checks. It isn't a current availability check. The Worker supports scoped authorization, encrypted token storage, and account deletion. High-impact tools retain their `confirmed: true` input requirement after write access is enabled.
 
@@ -723,7 +730,7 @@ When the trailing-hour budget drops to 50 requests or fewer, tool responses appe
 - **Validation:** All parameters validated with [Zod](https://zod.dev) schemas
 - **Error handling:** API errors are caught, formatted, and returned as MCP error responses with detail messages
 
-The hosted OAuth connector runs on Cloudflare Workers at [`ynab.amesvt.com`](https://ynab.amesvt.com). Its implementation notes are in [worker/README.md](worker/README.md) and [docs/hosted-oauth-connector.md](docs/hosted-oauth-connector.md). For data handling details for the local package, see [docs/privacy.md](docs/privacy.md).
+The hosted OAuth connector runs on Cloudflare Workers at [`ames-ynab.link`](https://ames-ynab.link). Its implementation notes are in [worker/README.md](worker/README.md) and [docs/hosted-oauth-connector.md](docs/hosted-oauth-connector.md). For data handling details for the local package, see [docs/privacy.md](docs/privacy.md).
 
 The Cloudflare connector is separate from a private container deployment. Its availability also depends on the YNAB application's authorization limits and approval state. Repository code doesn't establish the current upstream approval status.
 

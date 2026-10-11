@@ -4,7 +4,7 @@ Last Updated: October 9, 2026
 
 MCP Server for YNAB is a local stdio MCP server that runs on the user's machine or in a user-controlled MCP host. It connects the user's MCP client to the YNAB API.
 
-This policy covers the local owner-run package published as `@oliverames/mcp-server-for-ynab`. The hosted OAuth connector at `https://ynab.amesvt.com/mcp` has its own current policy at `https://ynab.amesvt.com/privacy`; third-party MCP hosts have their own privacy and retention policies.
+This policy covers the local owner-run package published as `@oliverames/mcp-server-for-ynab`. The hosted OAuth connector at `https://ames-ynab.link/mcp` has its own current policy at `https://ames-ynab.link/privacy`; third-party MCP hosts have their own privacy and retention policies.
 
 ## Data Access
 
@@ -46,7 +46,7 @@ To erase locally persisted financial journal data, remove `~/.ynab-mcp-undo.json
 2. Delete any local token file or environment variable used for `YNAB_API_TOKEN`.
 3. Revoke the personal access token in YNAB Developer Settings.
 
-For the hosted OAuth connector, use `https://ynab.amesvt.com/delete` to revoke connector grants and remove its consent-scoped encrypted credential, undo and durable operation records and legacy KV records.
+For the hosted OAuth connector, use `https://ames-ynab.link/delete` to revoke connector grants and remove its consent-scoped encrypted credential, undo and durable operation records and legacy KV records.
 
 ## Support and Data Requests
 
