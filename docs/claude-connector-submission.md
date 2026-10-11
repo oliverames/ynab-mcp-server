@@ -67,9 +67,11 @@ credentials.
 
 Use the square 1024x1024 connector-hosted PNG URL above in Anthropic's icon
 field. It is generated from the exact `codex/assets/icon.png` artwork used by
-the Codex plugin and advertised in MCP `serverInfo.icons`. The source path,
-dimensions, MIME type, and SHA-256 digest are pinned in the Worker source and
-covered by its tests.
+the Codex plugin. MCP `serverInfo.icons` separately advertises the official tree
+vector, a 4096px PNG, and a 256px fallback. Directory branding is a separate
+submission field; changing MCP metadata does not update a directory listing.
+The source path, dimensions, MIME type, and SHA-256 digest remain pinned in the
+Worker source and covered by its tests.
 
 Keep the square connector icon separate from the hosted authorization experience. The
 consent, callback, privacy, and deletion pages use the exact

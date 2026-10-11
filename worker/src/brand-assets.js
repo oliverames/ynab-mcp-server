@@ -25,6 +25,8 @@ import {
   CONNECTOR_FAVICON_SVG_SHA256,
   CONNECTOR_ICON_PNG,
   CONNECTOR_ICON_PNG_SHA256,
+  CONNECTOR_TREE_4096_PNG,
+  CONNECTOR_TREE_4096_PNG_SHA256,
 } from "./connector-icon-assets.js";
 
 export { WORKS_WITH_YNAB_PNG, WORKS_WITH_YNAB_PNG_SHA256 };
@@ -51,6 +53,8 @@ export {
   CONNECTOR_FAVICON_SVG_SHA256,
   CONNECTOR_ICON_PNG,
   CONNECTOR_ICON_PNG_SHA256,
+  CONNECTOR_TREE_4096_PNG,
+  CONNECTOR_TREE_4096_PNG_SHA256,
 };
 
 // The YNAB API Terms expressly permit integrations to use this exact
@@ -70,6 +74,10 @@ export const CONNECTOR_ICON_PNG_URL =
   `${CONNECTOR_ORIGIN}${CONNECTOR_ICON_PNG_PATH}`;
 export const CONNECTOR_FAVICON_256_PNG_URL =
   `${CONNECTOR_ORIGIN}/assets/ynab-tree-icon-v1.png`;
+export const CONNECTOR_TREE_SVG_URL =
+  `${CONNECTOR_ORIGIN}/assets/ynab-tree-icon-v2.svg`;
+export const CONNECTOR_TREE_4096_PNG_URL =
+  `${CONNECTOR_ORIGIN}/assets/ynab-tree-icon-v2.png`;
 
 export const REMOTE_SERVER_INFO = {
   name: "YNAB",
@@ -79,14 +87,19 @@ export const REMOTE_SERVER_INFO = {
     "Independent open-source connector for accessing a user's own YNAB budget. Not affiliated with, sponsored by, or endorsed by YNAB.",
   icons: [
     {
+      src: CONNECTOR_TREE_SVG_URL,
+      mimeType: "image/svg+xml",
+      sizes: ["any"],
+    },
+    {
+      src: CONNECTOR_TREE_4096_PNG_URL,
+      mimeType: "image/png",
+      sizes: ["4096x4096"],
+    },
+    {
       src: CONNECTOR_FAVICON_256_PNG_URL,
       mimeType: "image/png",
       sizes: ["256x256"],
-    },
-    {
-      src: CONNECTOR_ICON_PNG_URL,
-      mimeType: "image/png",
-      sizes: ["1024x1024"],
     },
   ],
   websiteUrl: CONNECTOR_ORIGIN,

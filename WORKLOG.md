@@ -1,5 +1,31 @@
 # Worklog
 
+## 2026-10-11 - Vector and high-resolution connector icons
+
+**What changed**: Hosted MCP icon metadata now advertises the official Blurple
+YNAB tree as a genuine SVG, then a transparent 4096x4096 PNG and the existing
+256px PNG fallback. New versioned routes are `/assets/ynab-tree-icon-v2.svg`
+and `/assets/ynab-tree-icon-v2.png`. The 271,000-byte PNG is rendered directly
+from the vector; the 4,953-byte SVG preserves the source paths and attribution.
+The existing 22 generated asset exports are byte-identical. OAuth, grants,
+credential isolation, API behavior, favicons and Cloudflare configuration remain
+unchanged.
+
+**Verification**: All 60 credential-free Worker tests passed. Tests decode the
+complete PNG, preserve vector paths, check public GET/HEAD/ETag/MIME/CORS
+responses, and capture the real `2025-11-25` initialization response with icons
+in `result.serverInfo` and no network calls. The generator's repeated output is
+byte-identical. The recorded official CDN vector matches the original source
+artwork. Rendered artwork and Wrangler dry-run passed (1,765.23 KiB gzipped).
+
+**Client limits**: Gemini's local cache contains Google S2 favicon lookups for
+existing custom connectors. Google's favicon service currently returns a
+fallback globe for `ames-ynab.link`; direct icon requests succeed for curl and
+Googlebot, while a Python urllib user agent receives edge 403 responses. The
+metadata and quality update does not refresh Google's favicon cache, change
+edge rules, or guarantee an existing client's logo display. No client was
+disconnected or reauthorized, and no budget data was fetched.
+
 ## 2026-10-11 - Hosted landing page setup guide
 
 **What changed**: The homepage now explains how to add the remote connector,
