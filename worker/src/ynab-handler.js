@@ -50,6 +50,8 @@ import {
   CONNECTOR_FAVICON_SVG_SHA256,
   CONNECTOR_ICON_PNG,
   CONNECTOR_ICON_PNG_SHA256,
+  CONNECTOR_TREE_4096_PNG,
+  CONNECTOR_TREE_4096_PNG_SHA256,
   WORKS_WITH_YNAB_PNG,
   WORKS_WITH_YNAB_PNG_SHA256,
   WORKS_WITH_YNAB_SVG,
@@ -287,6 +289,16 @@ app.get("/assets/ynab-tree-icon-v1.png", (c) => worksWithYnabAsset(c, {
   body: CONNECTOR_FAVICON_256_PNG,
   contentType: "image/png",
   sha256: CONNECTOR_FAVICON_256_PNG_SHA256,
+}));
+app.get("/assets/ynab-tree-icon-v2.svg", (c) => worksWithYnabAsset(c, {
+  body: CONNECTOR_FAVICON_SVG,
+  contentType: "image/svg+xml; charset=utf-8",
+  sha256: CONNECTOR_FAVICON_SVG_SHA256,
+}));
+app.get("/assets/ynab-tree-icon-v2.png", (c) => worksWithYnabAsset(c, {
+  body: CONNECTOR_TREE_4096_PNG,
+  contentType: "image/png",
+  sha256: CONNECTOR_TREE_4096_PNG_SHA256,
 }));
 app.get("/favicon.png", (c) => worksWithYnabAsset(c, {
   body: CONNECTOR_FAVICON_32_PNG,

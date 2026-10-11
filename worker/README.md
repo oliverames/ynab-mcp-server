@@ -42,6 +42,28 @@ exact grant is revoked when visible; the provider's eventually consistent KV
 listing can leave an unusable grant until expiry or a repeated deletion. Its
 removed credential cannot authorize a YNAB API request.
 
+## Connector icons
+
+Hosted MCP initialization publishes `serverInfo.icons` using the supported
+`2025-11-25` protocol: the official YNAB tree as a genuine SVG, a transparent
+4096 × 4096 PNG rendered directly from that vector, and a small 256 × 256 PNG
+fallback. Icon URLs use the configured connector origin. The versioned public
+routes are `/assets/ynab-tree-icon-v2.svg` and `/assets/ynab-tree-icon-v2.png`;
+the existing `/assets/ynab-tree-icon-v1.png` remains available.
+
+The source artwork and its attribution are retained in
+[`assets/ynab-tree-blurple.svg`](../assets/ynab-tree-blurple.svg). Regenerate the
+embedded assets with `npm run build:worker-icons` from the repository root.
+Existing favicons, Apple touch icons and the Codex app icon retain their bytes.
+
+Clients may choose a separate logo source. Gemini's installed image cache has
+Google `/s2/favicons` requests for existing custom connectors; on October 11,
+2026, that service returned a generic globe for `ames-ynab.link` while the
+origin served valid tree icons. Some machine user agents also received an edge
+`403` on public assets. This metadata update does not change Cloudflare rules,
+Google's favicon cache, or a client's saved logo. Verify the actual client after
+publication without disconnecting its working authorization.
+
 ## Credential isolation migration (issue #32)
 
 The `v3` Wrangler migration adds the `OAuthCredentials` Durable Object and
@@ -190,10 +212,11 @@ The Worker serves YNAB's permitted, unmodified
 pages use this mark and carry the required non-affiliation and trademark
 language.
 
-For connector discovery, MCP `initialize` advertises the 256px Blurple tree
-first, followed by `/assets/icon.png`, which is generated from the exact
-1024x1024 `codex/assets/icon.png` artwork displayed by the Codex plugin. The
-landing page publishes the latter artwork as its Open Graph image. Conventional
+For connector discovery, MCP `initialize` advertises the Blurple tree vector
+first, followed by a 4096px PNG and a small 256px PNG fallback. The versioned
+vector and high-resolution routes are described under Connector icons above.
+The existing 1024x1024 `/assets/icon.png` continues to match the Codex plugin
+artwork and remains the landing page's Open Graph image. Conventional
 ICO, 16px, 32px, 48px, 64px, 96px, 128px, 256px, and Apple touch icon routes
 use the Blurple YNAB tree artwork from `assets/ynab-tree-blurple.svg`, downloaded
 from YNAB's public Webflow CDN asset. The ICO uses one 32px frame and stays below
@@ -205,9 +228,9 @@ MIME types, and
 SHA-256 digests are pinned in source and covered by the Worker tests.
 
 YNAB's API Terms expressly permit the integration mark and the "for YNAB"
-naming form. The square connector icon is documented as the repository's
-existing Codex branding choice rather than as a Terms-permitted integration
-asset.
+naming form. The tree and Codex square icons are separate branding assets; the Terms'
+express permission applies to the integration mark. The source attribution
+and existing non-affiliation text remain intact.
 
 Custom connectors may ignore MCP icon metadata or cached favicon changes. A
 Connectors Directory listing has a separate icon field, but public submission is

@@ -43,9 +43,17 @@ test("MCP branding follows canonical configuration without mutating static fallb
   const info = remoteServerInfo(CANONICAL_ORIGIN);
   assert.equal(info.websiteUrl, CANONICAL_ORIGIN);
   assert.deepEqual(info.icons.map((icon) => icon.src), [
+    `${CANONICAL_ORIGIN}/assets/ynab-tree-icon-v2.svg`,
+    `${CANONICAL_ORIGIN}/assets/ynab-tree-icon-v2.png`,
     `${CANONICAL_ORIGIN}/assets/ynab-tree-icon-v1.png`,
-    `${CANONICAL_ORIGIN}/assets/icon.png`,
   ]);
+  assert.deepEqual(info.icons.map(({ mimeType, sizes }) => ({ mimeType, sizes })), [
+    { mimeType: "image/svg+xml", sizes: ["any"] },
+    { mimeType: "image/png", sizes: ["4096x4096"] },
+    { mimeType: "image/png", sizes: ["256x256"] },
+  ]);
+  assert.ok(info.icons.every((icon) => new URL(icon.src).origin === CANONICAL_ORIGIN));
+  assert.equal(new Set(info.icons.map((icon) => icon.src)).size, info.icons.length);
   assert.equal(info.description, REMOTE_SERVER_INFO.description);
   assert.equal(REMOTE_SERVER_INFO.websiteUrl, OLD_ORIGIN);
   assert.ok(REMOTE_SERVER_INFO.icons.every((icon) => icon.src.startsWith(OLD_ORIGIN)));

@@ -459,14 +459,19 @@ test("hosted connector uses the exact Codex plugin icon and conventional favicon
   assert.equal(REMOTE_SERVER_INFO.title, "YNAB");
   assert.deepEqual(REMOTE_SERVER_INFO.icons, [
     {
+      src: "https://ynab.amesvt.com/assets/ynab-tree-icon-v2.svg",
+      mimeType: "image/svg+xml",
+      sizes: ["any"],
+    },
+    {
+      src: "https://ynab.amesvt.com/assets/ynab-tree-icon-v2.png",
+      mimeType: "image/png",
+      sizes: ["4096x4096"],
+    },
+    {
       src: "https://ynab.amesvt.com/assets/ynab-tree-icon-v1.png",
       mimeType: "image/png",
       sizes: ["256x256"],
-    },
-    {
-      src: "https://ynab.amesvt.com/assets/icon.png",
-      mimeType: "image/png",
-      sizes: ["1024x1024"],
     },
   ]);
 
@@ -609,27 +614,51 @@ test("privacy policy states current retention, hosting, and client delivery", ()
   assert.doesNotMatch(html, /send data to any host other than/);
 });
 
-test("MCP initialization exposes the connector name and icons", async () => {
+test("MCP initialization publishes icons in serverInfo under the supported 2025-11-25 protocol", { timeout: 5000 }, async () => {
   process.env.YNAB_MCP_NO_AUTOSTART = "1";
   process.env.YNAB_DISABLE_AGENT_CONFIG_FALLBACK = "1";
-  const [{ createYnabServer }, { Client }, { InMemoryTransport }] = await Promise.all([
+  process.env.YNAB_API_TOKEN = "synthetic-unused-bootstrap-token";
+  const [{ createYnabServer }, { InitializeResultSchema }, { InMemoryTransport }, { remoteServerInfo }] = await Promise.all([
     import("../../index.js"),
-    import("@modelcontextprotocol/sdk/client/index.js"),
+    import("@modelcontextprotocol/sdk/types.js"),
     import("@modelcontextprotocol/sdk/inMemory.js"),
+    import("../src/brand-assets.js"),
   ]);
+  const serverInfo = remoteServerInfo("https://ames-ynab.link");
+  let networkCalls = 0;
   const { server } = createYnabServer({
     hasCredentials: false,
     writesEnabled: false,
-    serverInfo: REMOTE_SERVER_INFO,
+    serverInfo,
+    fetchImpl: async () => { networkCalls++; throw new Error("Initialization must not fetch YNAB data"); },
   });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  const client = new Client({ name: "worker-metadata-test", version: "1.0.0" });
+  const reply = new Promise((resolve, reject) => {
+    clientTransport.onmessage = (message) => { if (message.id === 1) resolve(message); };
+    clientTransport.onerror = reject;
+  });
   try {
     await server.connect(serverTransport);
-    await client.connect(clientTransport);
-    assert.deepEqual(client.getServerVersion(), REMOTE_SERVER_INFO);
+    await clientTransport.start();
+    await clientTransport.send({
+      jsonrpc: "2.0", id: 1, method: "initialize",
+      params: {
+        protocolVersion: "2025-11-25",
+        capabilities: {},
+        clientInfo: { name: "worker-metadata-test", version: "1.0.0" },
+      },
+    });
+    const message = await reply;
+    assert.equal(message.error, undefined);
+    assert.equal(message.result.protocolVersion, "2025-11-25");
+    const result = InitializeResultSchema.parse(message.result);
+    assert.deepEqual(result.serverInfo, serverInfo);
+    assert.deepEqual(message.result.serverInfo, serverInfo, "metadata must survive on the actual wire");
+    assert.equal(message.result._meta?.["io.modelcontextprotocol/serverInfo"], undefined,
+      "this protocol version carries identity in serverInfo");
+    assert.equal(networkCalls, 0);
   } finally {
-    await client.close();
+    await clientTransport.close();
     await server.close();
   }
 });
