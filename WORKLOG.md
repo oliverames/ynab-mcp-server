@@ -19,6 +19,18 @@ clipboard API fallbacks. Screenshots and logs remain outside Git in the session
 workspace. No OAuth, MCP, storage, DNS, or Cloudflare security configuration
 changed. Oliver approved publication and accepted the visible design.
 
+**Published**: [PR #36](https://github.com/oliverames/ynab-mcp-server/pull/36)
+merged as `58033c549b2e4fc8cb657c552a910ec700bc1b27` after all nine CI checks passed.
+That source is live at `https://ames-ynab.link/` as Worker version
+`e4ff76f3-682c-4903-bcd5-6ea0db317a69`. All 13 public HTTPS checks passed after
+deployment, including the exact script hash, canonical issuer/resource, favicon
+assets, Python discovery/MCP responses, and untrusted-origin rejection. Privacy
+and deletion bodies and CSP match the live baseline (temporary CSRF values
+normalized). Desktop/mobile screenshots and copy feedback were verified in
+Chrome with no console errors. For a homepage-only rollback, the prior Worker
+version `f98c174c-eb6e-4b55-8159-b9ca522adfaa` already uses the same new domain
+and retained storage; it does not require restoring the retired domain.
+
 ## 2026-10-11 - Approved hosted cutover deployed
 
 **What changed**: [PR #35](https://github.com/oliverames/ynab-mcp-server/pull/35)
