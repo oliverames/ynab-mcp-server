@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createHash } from "node:crypto";
 import { YnabHandler } from "../src/ynab-handler.js";
 import { remoteServerInfo, REMOTE_SERVER_INFO } from "../src/brand-assets.js";
 
@@ -48,4 +49,24 @@ test("MCP branding follows canonical configuration without mutating static fallb
   assert.equal(info.description, REMOTE_SERVER_INFO.description);
   assert.equal(REMOTE_SERVER_INFO.websiteUrl, OLD_ORIGIN);
   assert.ok(REMOTE_SERVER_INFO.icons.every((icon) => icon.src.startsWith(OLD_ORIGIN)));
+});
+
+test("the homepage allows its exact copy script while policy pages remain script-free", async () => {
+  const env = { CONNECTOR_BASE_URL: CANONICAL_ORIGIN, COOKIE_ENCRYPTION_KEY: "synthetic-branding-test-cookie-key" };
+  const response = await YnabHandler.request(`${CANONICAL_ORIGIN}/`, {}, env);
+  const body = await response.text();
+  const scripts = [...body.matchAll(/<script>([\s\S]*?)<\/script>/g)];
+  assert.equal(scripts.length, 1);
+  const hash = createHash("sha256").update(scripts[0][1]).digest("base64");
+  const policy = response.headers.get("content-security-policy");
+  assert.ok(policy.includes(`script-src 'sha256-${hash}'`));
+  assert.ok(!policy.includes("script-src 'unsafe-inline'"));
+  assert.ok(!policy.includes("script-src 'self'"));
+  assert.ok(body.includes(`value="${CANONICAL_ORIGIN}/mcp" readonly`));
+  assert.ok(body.includes('href="https://github.com/oliverames/ynab-mcp-server"'));
+  for (const path of ["/privacy", "/delete"]) {
+    const policyResponse = await YnabHandler.request(`${CANONICAL_ORIGIN}${path}`, {}, env);
+    assert.ok(!policyResponse.headers.get("content-security-policy").includes("script-src"));
+    assert.ok(!(await policyResponse.text()).includes("<script>"));
+  }
 });

@@ -55,7 +55,7 @@ import {
   WORKS_WITH_YNAB_SVG,
   WORKS_WITH_YNAB_SVG_SHA256,
 } from "./brand-assets.js";
-import { landingPage, consentPage, finalConsentPage, privacyPage, deletePage, deletedPage, errorPage as buildErrorPage } from "./pages.js";
+import { LANDING_SCRIPT, landingPage, consentPage, finalConsentPage, privacyPage, deletePage, deletedPage, errorPage as buildErrorPage } from "./pages.js";
 
 const STATE_TTL_SECONDS = 600;
 const CSRF_COOKIE = "__Host-ynab_mcp_csrf";
@@ -93,9 +93,9 @@ function formActionSources(urls) {
   return [...sources].join(" ");
 }
 
-function html(c, body, status = 200, { formActionUrls = [] } = {}) {
+function html(c, body, status = 200, { formActionUrls = [], scriptHash } = {}) {
   c.header("Cache-Control", "no-store");
-  c.header("Content-Security-Policy", `default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; form-action ${formActionSources(formActionUrls)}; frame-ancestors 'none'; base-uri 'none'`);
+  c.header("Content-Security-Policy", `default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; form-action ${formActionSources(formActionUrls)}; frame-ancestors 'none'; base-uri 'none'${scriptHash ? `; script-src 'sha256-${scriptHash}'` : ""}`);
   c.header("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
   c.header("Referrer-Policy", "same-origin");
   c.header("X-Content-Type-Options", "nosniff");
@@ -211,7 +211,10 @@ async function validateCsrf(c, form, cookieName = CSRF_COOKIE) {
   return valid;
 }
 
-app.get("/", (c) => html(c, landingPage(pageOptions(c))));
+app.get("/", async (c) => {
+  const scriptHash = (await sha256base64url(LANDING_SCRIPT)).replace(/-/g, "+").replace(/_/g, "/") + "=";
+  return html(c, landingPage(pageOptions(c)), 200, { scriptHash });
+});
 app.get("/assets/works-with-ynab.png", (c) => worksWithYnabAsset(c, {
   body: WORKS_WITH_YNAB_PNG,
   contentType: "image/png",

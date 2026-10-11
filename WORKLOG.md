@@ -1,5 +1,24 @@
 # Worklog
 
+## 2026-10-11 - Hosted landing page setup guide
+
+**What changed**: The homepage now explains how to add the remote connector,
+shows `https://ames-ynab.link/mcp` in a selectable field with a copy button,
+and gives budget review examples and a direct source/setup link. Read-only
+access remains the default; the page explains optional writes and the required
+preview and approval. Existing official branding and non-affiliation text remain.
+
+**Verification**: All 57 credential-free Worker tests passed, including an exact
+SHA-256 check for the homepage's only script. That script only copies the public
+endpoint; its CSP permission applies only to the homepage. Consent, privacy,
+deletion, and error page bodies are byte-identical to the previous source.
+Wrangler dry-run passed. Chrome desktop and 390/320-pixel layouts showed no
+horizontal overflow or clipped endpoint; copy feedback appeared and no console
+errors were recorded. Independent checks covered clipboard denial and missing
+clipboard API fallbacks. Screenshots and logs remain outside Git in the session
+workspace. No OAuth, MCP, storage, DNS, or Cloudflare security configuration
+changed. Oliver approved publication and accepted the visible design.
+
 ## 2026-10-11 - Approved hosted cutover deployed
 
 **What changed**: [PR #35](https://github.com/oliverames/ynab-mcp-server/pull/35)
