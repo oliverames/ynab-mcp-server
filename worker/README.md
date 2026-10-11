@@ -159,7 +159,7 @@ mapping and connector-managed DNS record, remove its Wrangler route, and use:
 ```
 
 Remove `https://ynab.amesvt.com/callback` from the existing YNAB OAuth
-application after the new callback is tested and any known old authorization
+application after the new callback configuration is verified and any known old authorization
 flow finishes or expires. Preserve stored grants, credentials, encrypted
 journals, all bindings and secrets, and renewal settings. Keep the old code
 version and routing/OAuth settings available for rollback through validation;

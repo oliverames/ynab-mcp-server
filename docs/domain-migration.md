@@ -124,10 +124,12 @@ connector domain aliases.
    checks below on **both** origins. Publish the canonical new URLs only after
    they pass. Capture after screenshots and record commit, Cloudflare version,
    exact endpoint URLs, results, and any deferred live authorization check.
-7. Complete an authorized new-origin sign-in and read-only MCP check, provide
-   the reconnect URL to affected clients, and perform the approved old-domain
-   retirement below. A deferred new-origin authorization check does not establish
-   a verified replacement and is a blocker to retirement.
+7. Verify the new origin's public endpoint/discovery checks and the saved
+   server-side YNAB callback configuration, then perform the approved old-domain
+   retirement below. Give Oliver `https://ames-ynab.link/mcp` to enter himself.
+   Oliver will migrate his client connector configurations; do not edit them or
+   make their migration a service-deployment completion gate. Report any
+   deferred signed-in read-only check separately.
 
 ### Exact proposed edge changes
 
@@ -167,7 +169,7 @@ Include these targets and consequences in the bundled live-change approval:
   `CONNECTOR_COMPATIBILITY_ORIGINS` after validation. Keep
   `CONNECTOR_BASE_URL=https://ames-ynab.link`; the final deployment accepts only
   the new connector origin and retains its exact issuer and `/mcp` audience.
-- After testing the new callback and completing or expiring any known
+- After verifying the new callback configuration and completing or expiring any known
   in-flight old-origin authorization, remove only
   `https://ynab.amesvt.com/callback` from the existing YNAB OAuth application's
   allowlist. Retain `https://ames-ynab.link/callback` and other unrelated
@@ -203,8 +205,9 @@ separately; do not widen token origins or audiences to conceal this baseline.
 - Use an existing authorized old-origin connection for a read-only smoke check
   when available. Verify MCP initialization icons, `ynab_auth_status`, and a
   budget-list read without logging financial data or credentials. Creating a
-  new live grant requires an authorized sign-in; report this as deferred if
-  that authorization is unavailable. Do not perform a budget mutation merely
+   new live grant requires an authorized sign-in; report this as deferred if
+   that authorization is unavailable. Client configuration is Oliver's own
+   follow-up, rather than a service-deployment gate. Do not perform a budget mutation merely
   to validate the domain change.
 
 Retain the unmodified [Works with YNAB integration mark](https://api.ynab.com/papi/works_with_ynab.svg)
