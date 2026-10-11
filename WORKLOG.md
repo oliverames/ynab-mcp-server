@@ -1,12 +1,17 @@
 # Worklog
 
-## 2026-10-11 - Approved hosted cutover in progress
+## 2026-10-11 - Approved hosted cutover deployed
 
 **What changed**: [PR #35](https://github.com/oliverames/ynab-mcp-server/pull/35)
 merged as `674b88c`. The reviewed code was deployed with both exact custom
-domains as Worker version `2763a745-8f0f-4a34-8d86-8d59ad3bd87c`. Prepared the
-approved final configuration locally: only `ames-ynab.link` in Wrangler routes
-and an empty `CONNECTOR_COMPATIBILITY_ORIGINS`. Existing KV, Durable Objects,
+domains as Worker version `2763a745-8f0f-4a34-8d86-8d59ad3bd87c`. Final source
+commit `2e3277a4fbe698e77633fa26d8a0fc5bc583f2f6` is deployed as Worker version
+`f98c174c-eb6e-4b55-8159-b9ca522adfaa`: only `ames-ynab.link` in Wrangler routes
+and an empty `CONNECTOR_COMPATIBILITY_ORIGINS`. Cloudflare shows only that
+custom domain with Workers.dev and preview disabled. YNAB callback readback
+contains only `http://localhost:8787/callback` and
+`https://ames-ynab.link/callback`, with website and privacy URLs on the new host.
+Existing budget settings and Terms acceptance are unchanged. Existing KV, Durable Objects,
 secrets, grants, credentials, encrypted journals, and renewal settings are retained.
 
 **Verification**: New-domain TLS and unauthenticated `/mcp` (`401`) passed.
@@ -25,11 +30,33 @@ enforcement does not promise an exact eleventh-request cutoff. The prepared fina
 passed all 56 credential-free Worker tests, Wrangler dry-run, and a semantic
 comparison preserving identity, storage/migrations, and browser-origin policy.
 Wrangler logs were redirected into the owned workspace after its default log
-path hit a sandbox write restriction.
+path hit a sandbox write restriction. Before final configuration deployment,
+independent checks passed 25
+GET/OPTIONS checks and 16 policy checks with certificate validation via
+`curl --resolve`. The old public `/` and `/mcp` returned Cloudflare `530` / `1016`
+after detachment. Subsequent signed-in `amesvt.com` DNS search for `ynab` shows
+no records: Wrangler removed the old custom domain and managed DNS record
+automatically. Session screenshot evidence is `old-dns-after.jpg`. Public
+`1.1.1.1` and Tailscale DNS resolve the new host to
+`104.21.60.34` and `172.67.191.32`; the Mac's ordinary resolver and Chrome still
+had a cached negative result at readback. Public checks used fresh resolved
+addresses with certificate validation; system resolver/network configuration
+was not changed. All nine checks in CI run `38154790327` passed. Five final public
+checks after retirement passed with valid TLS and resolved IPs, including
+Googlebot homepage `200`, Python MCP `401` / new metadata `200`, and the 256px
+favicon `200` (`final-new-host.json`). Ordinary system DNS success and an
+authenticated budget read are not claimed.
 
-**Left off at**: The final single-domain configuration has not been deployed or
-committed. Old custom-domain/DNS retirement, old callback removal, final Worker
-version, and final independent checks remain pending. Oliver will reconnect his
+The AmesVT directory cleanup merged and deployed website PR #8 as `b264eb8`,
+with Actions run `38154799390` successful. Its catalog artifact contains 12
+remaining entries and no YNAB entry, with every other entry and order unchanged.
+The live private directory returns the expected `303` passkey gate; its
+authenticated rendered count requires Oliver's existing sign-in. No bypass or
+client-configuration change was performed.
+
+**Left off at**: Final Worker deployment, old custom-domain/DNS removal, old
+callback removal, edge protections, and directory artifact cleanup are verified.
+Oliver will reconnect his
 clients at `https://ames-ynab.link/mcp`; client configuration is his follow-up,
 not a service-deployment gate. See [the cutover and retirement
 runbook](docs/domain-migration.md) and preserve the cutover version/settings for

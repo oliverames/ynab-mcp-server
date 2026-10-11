@@ -101,12 +101,11 @@ npx wrangler deploy                           # provisions configured domains + 
 ```
 
 Prerequisites: a YNAB OAuth application (YNAB → Account Settings → Developer
-Settings) whose redirect URI list includes both `https://ames-ynab.link/callback`
-and the temporarily retained `https://ynab.amesvt.com/callback` during cutover,
-and Wrangler authenticated against the Ames Consulting account that owns both
-zones. After new-origin authorization is tested and the old route is retired,
-remove the old callback while retaining the new callback and any other
-registered development callbacks.
+Settings) with `https://ames-ynab.link/callback` registered, and Wrangler
+authenticated against the Ames Consulting account that owns the new zone.
+The approved cutover temporarily retained the old hostname; the final deployment
+retired its custom domain, DNS record, and YNAB callback. The saved callback list contains
+`https://ames-ynab.link/callback` and `http://localhost:8787/callback`.
 Local dev: copy `.dev.vars.example` to `.dev.vars` (redirect URI
 `http://localhost:8787/callback` must also be registered on the YNAB app while
 testing locally).
@@ -123,12 +122,13 @@ approval.
 
 ## Canonical origin and temporary compatibility
 
-`CONNECTOR_BASE_URL` is the canonical public origin, now `https://ames-ynab.link`
-in the first production cutover deployment. The final configuration in this
-checkout prepares old-domain retirement; that final deployment is still pending.
+`CONNECTOR_BASE_URL` is the canonical public origin, now `https://ames-ynab.link`.
+Final Worker version `f98c174c-eb6e-4b55-8159-b9ca522adfaa` serves only the new
+custom domain with `CONNECTOR_COMPATIBILITY_ORIGINS` empty. The old custom
+domain, its managed DNS record, and its YNAB callback are removed and verified.
 `CONNECTOR_COMPATIBILITY_ORIGINS` is an optional comma-separated list of other
-exact connector origins served on the same Worker. The staged configuration
-keeps the old origin temporarily for cutover checks and rollback:
+exact connector origins served on the same Worker. The first cutover deployment
+temporarily used the following configuration for validation and rollback:
 
 ```json
 {
@@ -148,8 +148,8 @@ endstate retires `ynab.amesvt.com` after the replacement passes live checks;
 clients must reconnect at `https://ames-ynab.link/mcp` and approve a new consent.
 The old origin is not a permanent endpoint.
 
-After validation and the approved retirement, remove only the old custom-domain
-mapping and connector-managed DNS record, remove its Wrangler route, and use:
+The approved retirement removed the old custom-domain mapping, connector-managed
+DNS record, and Wrangler route. The current production configuration is:
 
 ```json
 {
@@ -158,9 +158,8 @@ mapping and connector-managed DNS record, remove its Wrangler route, and use:
 }
 ```
 
-Remove `https://ynab.amesvt.com/callback` from the existing YNAB OAuth
-application after the new callback configuration is verified and any known old authorization
-flow finishes or expires. Preserve stored grants, credentials, encrypted
+The old `https://ynab.amesvt.com/callback` is removed from the existing YNAB
+OAuth application. Preserve stored grants, credentials, encrypted
 journals, all bindings and secrets, and renewal settings. Keep the old code
 version and routing/OAuth settings available for rollback through validation;
 once new clients exist, a rollback must preserve the new issuer too.
