@@ -123,9 +123,9 @@ approval.
 
 ## Canonical origin and temporary compatibility
 
-`CONNECTOR_BASE_URL` is the canonical public origin. This draft stages
-`https://ames-ynab.link`; production remains at `https://ynab.amesvt.com` until
-the bundled live-change approval and deployment.
+`CONNECTOR_BASE_URL` is the canonical public origin, now `https://ames-ynab.link`
+in the first production cutover deployment. The final configuration in this
+checkout prepares old-domain retirement; that final deployment is still pending.
 `CONNECTOR_COMPATIBILITY_ORIGINS` is an optional comma-separated list of other
 exact connector origins served on the same Worker. The staged configuration
 keeps the old origin temporarily for cutover checks and rollback:

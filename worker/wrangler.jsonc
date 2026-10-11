@@ -2,17 +2,15 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "ynab-mcp-connector",
   "main": "src/index.js",
-  // Cutover stage: retain the old custom domain until the new origin passes
-  // live acceptance, then retire it as described in docs/domain-migration.md.
-  // Apply only after approval and both upstream callbacks are registered.
+  // Approved final retirement configuration: serve only the new custom domain.
+  // Preserve the cutover version/settings for rollback; see docs/domain-migration.md.
   "workers_dev": false,
   "compatibility_date": "2025-03-10",
   "compatibility_flags": ["nodejs_compat"],
   // Cloudflare creates each custom-domain DNS record and certificate at deploy
-  // time. Keep the old issuer working directly during cutover validation.
+  // time. The old custom domain and its connector-managed DNS are retired separately.
   "routes": [
-    { "pattern": "ames-ynab.link", "custom_domain": true },
-    { "pattern": "ynab.amesvt.com", "custom_domain": true }
+    { "pattern": "ames-ynab.link", "custom_domain": true }
   ],
   "kv_namespaces": [
     // OAuthProvider grant/client/token storage (props encrypted; tokens hashed),
@@ -36,9 +34,9 @@
   "vars": {
     // Never let the shared stdio module autostart or read local config in the Worker.
     "CONNECTOR_BASE_URL": "https://ames-ynab.link",
-    // Exact alternate issuer origins served directly, never redirected,
-    // preserving the existing issuer and grant audiences during migration.
-    "CONNECTOR_COMPATIBILITY_ORIGINS": "https://ynab.amesvt.com",
+    // Temporary old-origin compatibility ends after validated cutover.
+    // Clearing this does not delete stored grants, credentials, or journals.
+    "CONNECTOR_COMPATIBILITY_ORIGINS": "",
     // Explicit browser origins allowed to call the MCP transport. Native and
     // server-to-server clients omit Origin and remain supported.
     "MCP_ALLOWED_ORIGINS": "https://chatgpt.com,https://claude.ai,https://claude.com,https://chat.mistral.ai,https://lechat.mistral.ai",

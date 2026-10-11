@@ -1,14 +1,19 @@
 # Hosted connector domain migration
 
-This is a migration preparation runbook, not a cutover record. The production
-connector remains `https://ynab.amesvt.com`. On October 11, 2026, the signed-in
+The approved migration is in progress. [PR #35](https://github.com/oliverames/ynab-mcp-server/pull/35)
+merged as `674b88c`, and the first two-host production deployment is Worker
+version `2763a745-8f0f-4a34-8d86-8d59ad3bd87c`. New-domain HTTPS and
+unauthenticated `https://ames-ynab.link/mcp` (`401`) are verified. The final
+single-domain configuration is prepared locally; its deployment, old-domain
+retirement, and final live version are not yet recorded as complete.
+
+On October 11, 2026, the signed-in
 Cloudflare account showed the active zone `ames-ynab.link`, with no Worker
 attached, and the registration email independently corroborated that hostname
 and its October 11, 2027 expiry. The supplied purchase screenshot could not be
 materialized after two supported attempts. Oliver subsequently confirmed
-`ames-ynab.link` and requested completing the live migration. This draft stages
-that canonical origin; the exact DNS/OAuth/security action-time confirmation
-remains before changing those settings.
+`ames-ynab.link` and approved the live cutover and old-domain retirement scope
+recorded below.
 Do not change the domain's renewal settings.
 
 Oliver's requested endstate is to retire the YNAB connector from
@@ -16,11 +21,12 @@ Oliver's requested endstate is to retire the YNAB connector from
 temporary cutover and rollback stage. Clients must reconnect at
 `https://ames-ynab.link/mcp`; the old domain is not a permanent endpoint.
 
-The new zone has zero DNS records, no custom or rate-limiting rules, and an
+Before cutover, the new zone had zero DNS records, no custom or rate-limiting rules, and an
 active Universal TLS certificate for `ames-ynab.link` and `*.ames-ynab.link`
 (managed expiry January 9, 2027). Browser Integrity Check is enabled and Bot
-Fight Mode is disabled. These are read-only dashboard observations, not live
-changes or proof that machine clients already reach the new Worker.
+Fight Mode was disabled. These are the saved pre-cutover dashboard observations.
+The approved new-host rate limit and narrow Browser Integrity Check exception
+are now active, as recorded below; unrelated protection controls remain intact.
 
 The verified starting deployment is release `6.0.1`, source commit
 `1b2f0411d7886caddcf81f1d31f42706c9483ec0`, Cloudflare Worker version
@@ -29,10 +35,11 @@ Recheck that version and concurrent deployments immediately before cutover.
 
 ## Endpoint inventory
 
-The right-hand column is the proposed cutover target, pending live-change
-approval; none of those URLs is a claim of current availability.
+The right-hand column is the canonical cutover target. HTTPS, unauthenticated
+MCP, and authorization-server discovery are verified; the remaining acceptance
+checks and old-domain retirement must be recorded separately.
 
-| Surface | Existing URL | Proposed canonical URL |
+| Surface | Temporary old URL | Canonical URL |
 |---|---|---|
 | Landing page | `https://ynab.amesvt.com/` | `https://ames-ynab.link/` |
 | Streamable HTTP MCP | `https://ynab.amesvt.com/mcp` | `https://ames-ynab.link/mcp` |
@@ -51,8 +58,10 @@ approval; none of those URLs is a claim of current availability.
 
 During cutover, keep both exact custom domains on the **same Worker**. Set
 `CONNECTOR_BASE_URL` to the confirmed canonical HTTPS origin and set
-`CONNECTOR_COMPATIBILITY_ORIGINS=https://ynab.amesvt.com`. This branch stages
-that configuration; production retains its existing value until approval.
+`CONNECTOR_COMPATIBILITY_ORIGINS=https://ynab.amesvt.com`. The first production
+cutover deployment uses that temporary configuration. The final configuration
+now prepared in `worker/wrangler.jsonc` keeps only `ames-ynab.link` in `routes`
+and clears `CONNECTOR_COMPATIBILITY_ORIGINS`; it has not yet been deployed.
 Origins contain no credentials,
 path, query, or fragment; never infer an accepted origin from request headers.
 Keep `workers_dev` disabled.
@@ -96,10 +105,8 @@ connector domain aliases.
 2. Complete and review origin-scoped runtime tests. Stage both exact custom
    domains in `worker/wrangler.jsonc`, the canonical/compatibility variables,
    canonical public links and brand metadata, and hosted connector documentation.
-   The draft branch contains the proposed canonical links; do not merge or
-   publish them until the domain and live changes are confirmed.
-3. Before live DNS, OAuth, or security edits that require action-time approval,
-   present one list with the exact targets and consequences: attach the confirmed
+   PR #35 merged the reviewed cutover code and canonical links as `674b88c`.
+3. The approved live-change scope is: attach the confirmed
    hostname to `ynab-mcp-connector` while temporarily retaining
    `ynab.amesvt.com`; add
    `https://ames-ynab.link/callback` to the existing YNAB OAuth application
@@ -131,33 +138,44 @@ connector domain aliases.
    make their migration a service-deployment completion gate. Report any
    deferred signed-in read-only check separately.
 
-### Exact proposed edge changes
+### Verified edge changes
 
 The old zone's existing MCP exception skips **only Browser Integrity Check**,
 with logging enabled, and its registration limit blocks an IP exceeding 10
 requests per 10 seconds for 10 seconds. Those settings were read in the signed-in
 dashboard; its shared rules also cover unrelated services and must remain intact.
-The new zone currently has neither rule. Include the following new-zone-only
-rules in the bundled action-time approval, and apply the exception only if the
-new-host user-agent comparison demonstrates that it is needed:
+The new-host comparison returned Cloudflare `1010` for Python-urllib/3.11,
+confirming that the approved narrow exception was needed. Rule
+`94bb62a40ade4c44905caf2da19692f7` is now saved and active with this exact
+new-host expression:
 
 ```text
 (http.host eq "ames-ynab.link" and (http.request.uri.path in {"/mcp" "/sse" "/register" "/token"} or starts_with(http.request.uri.path, "/.well-known/") or starts_with(http.request.uri.path, "/register/")))
 ```
 
-Action: Skip **Browser Integrity Check only**, log matching requests. Leave
+Verified action: Skip **Browser Integrity Check only**, log matching requests
+enabled. Python-urllib/3.11 now receives HTTPS `200` for the authorization-server
+discovery document, whose issuer and authorization/token/registration endpoints
+all use `ames-ynab.link`, and `/mcp` returns its proper `401` and resource-metadata
+challenge. HSTS is `max-age=31536000`. Leave
 managed rules, other custom rules, rate limiting, Bot Fight Mode, Security Level,
 and browser consent/callback pages under their current protections.
 
-Pair it with a registration rate limit matching
+The active registration rate-limit rule `d95d0e4938ee47aea353617a2a5cbe4c`
+matches
 `http.host eq "ames-ynab.link" and http.request.uri.path eq "/register"`, keyed
 by IP, threshold **10 requests / 10 seconds**, action **Block / 10 seconds**.
-Verify the saved expression and behaviour. No edits to `amesvt.com` rules, domain
+The bounded 16-request concurrent empty-POST check returned application `400`
+for the first 12 responses and Cloudflare `429` / `1015` for the final four.
+Missing `redirect_uris` prevented OAuth client creation. This confirms observed
+rate-limit enforcement; distributed counters do not guarantee rejection of
+exactly the eleventh request. Evidence: `task/evidence/register-rate-check.json`.
+No edits to `amesvt.com` rules, domain
 renewal, or unrelated hostnames are part of this migration.
 
-### Exact retirement changes
+### Approved retirement changes, pending completion
 
-Include these targets and consequences in the bundled live-change approval:
+The approved retirement targets and consequences are:
 
 - Remove the `ynab.amesvt.com` custom-domain mapping from
   `ynab-mcp-connector`, then verify that its connector-managed DNS record is
@@ -180,6 +198,13 @@ encrypted journals, and domain renewal settings. Record the final Worker
 version, new-domain checks, and absence of the old custom domain/DNS record.
 
 ## Acceptance
+
+The prepared final configuration passed all 56 credential-free Worker tests,
+Wrangler dry-run, and a semantic comparison confirming that only the old route
+and compatibility-origin value changed from the merged cutover configuration.
+Identity, storage bindings/migrations, and browser-origin policy are unchanged.
+These checks do not establish final deployment or old-domain retirement.
+
 The release 6.0.1 baseline has an authenticated legacy SSE limitation: its exact
 `/mcp` audience is rejected by the provider on `/sse` and `/sse/message` before
 the handler runs (`401 invalid_token`). The migration retains those routes but
@@ -240,7 +265,8 @@ returned 200 for the old homepage and these assets, without challenge or
 `noindex` headers. Its `/robots.txt` returned 404, which Google treats as no
 crawl restrictions. [Google's robots status handling](https://developers.google.com/crawling/docs/robots-txt/robots-txt-spec#handling-of-errors-and-http-status-codes)
 These are public-response checks, not requests from verified Google IPs.
-Repeat them on the new origin after DNS activation; it does not resolve yet.
+Repeat them on the new origin after DNS activation; those new-origin crawler
+checks are not yet recorded here.
 Eligibility does not guarantee that Google indexes the site or displays its
 favicon, and a recrawl can take days or weeks.
 

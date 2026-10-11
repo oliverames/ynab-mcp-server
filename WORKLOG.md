@@ -1,5 +1,42 @@
 # Worklog
 
+## 2026-10-11 - Approved hosted cutover in progress
+
+**What changed**: [PR #35](https://github.com/oliverames/ynab-mcp-server/pull/35)
+merged as `674b88c`. The reviewed code was deployed with both exact custom
+domains as Worker version `2763a745-8f0f-4a34-8d86-8d59ad3bd87c`. Prepared the
+approved final configuration locally: only `ames-ynab.link` in Wrangler routes
+and an empty `CONNECTOR_COMPATIBILITY_ORIGINS`. Existing KV, Durable Objects,
+secrets, grants, credentials, encrypted journals, and renewal settings are retained.
+
+**Verification**: New-domain TLS and unauthenticated `/mcp` (`401`) passed.
+Python-urllib/3.11 initially received Cloudflare `1010`; the approved narrow
+Browser Integrity Check skip is now saved and active as
+`94bb62a40ade4c44905caf2da19692f7`, with only that component skipped and matching
+requests logged. The same user agent now gets `200` from authorization-server
+discovery, with the new issuer/endpoints and HSTS `max-age=31536000`; `/mcp`
+returns its proper `401` and resource-metadata challenge for that agent. New-host
+registration rule `d95d0e4938ee47aea353617a2a5cbe4c` is active at exact
+`/register`: 10 requests per IP per 10 seconds, Block for 10 seconds. Other
+Cloudflare protection controls remain intact. A bounded concurrent 16-request
+empty-POST registration probe returned 12 application `400` responses and four
+Cloudflare `429` / `1015` responses without creating OAuth clients; observed
+enforcement does not promise an exact eleventh-request cutoff. The prepared final configuration
+passed all 56 credential-free Worker tests, Wrangler dry-run, and a semantic
+comparison preserving identity, storage/migrations, and browser-origin policy.
+Wrangler logs were redirected into the owned workspace after its default log
+path hit a sandbox write restriction.
+
+**Left off at**: The final single-domain configuration has not been deployed or
+committed. Old custom-domain/DNS retirement, old callback removal, final Worker
+version, and final independent checks remain pending. Oliver will reconnect his
+clients at `https://ames-ynab.link/mcp`; client configuration is his follow-up,
+not a service-deployment gate. See [the cutover and retirement
+runbook](docs/domain-migration.md) and preserve the cutover version/settings for
+rollback without rolling storage or keys backward.
+
+---
+
 ## 2026-10-11 - Prepare hosted domain migration
 
 **What changed**: Stage `ames-ynab.link` as the canonical hosted origin with
