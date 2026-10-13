@@ -80,9 +80,9 @@ Add this Streamable HTTP URL to Claude.ai, ChatGPT, Mistral Vibe Work, or anothe
 https://ames-ynab.link/mcp
 ```
 
-The old `https://ynab.amesvt.com/mcp` endpoint stays available during cutover
-validation and will then retire. Add the new URL as a new connection and
-authorize there; OAuth tokens stay bound to the hostname where they were issued.
+The old `https://ynab.amesvt.com/mcp` endpoint has been retired. If a client
+still uses the old hostname, add the new URL as a new connection and authorize
+there; OAuth tokens stay bound to the hostname where they were issued.
 Stored credentials and journals are preserved, but a new consent has its own
 isolated journal. See the
 [migration and rollback plan](docs/domain-migration.md).
