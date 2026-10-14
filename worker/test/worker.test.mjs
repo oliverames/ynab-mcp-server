@@ -1691,6 +1691,52 @@ test("encrypted hosted journal supports recovery across MCP sessions without dup
   assert.doesNotMatch(raw, /fake-source|fake-move|budgeted/);
 });
 
+test("hosted write previews follow their consent across MCP sessions and nowhere else", async () => {
+  const { createStoredWritePreviews } = await import("../../lib/write-previews.mjs");
+  const env = credentialEnv();
+  const binding = await approveFakeConsent(env, { writes: true });
+  const otherClient = await approveFakeConsent(env, { client: "client-2", writes: true });
+  const previews = (options) => createStoredWritePreviews({ tenantId: options.tenantId, store: options.previewStore });
+  const sessionA = hostedServerOptions(env, binding, "fake-session-a");
+  const sessionB = hostedServerOptions(env, binding, "fake-session-b");
+  const otherConsent = hostedServerOptions(env, otherClient, "fake-session-c");
+  const plan = { tool_name: "update_transaction", budget: "fake-budget", ids: ["fake-row"], after: { memo: "Synthetic memo" } };
+
+  const issued = await previews(sessionA).issue(plan);
+  await assert.rejects(previews(otherConsent).consume(issued.preview_token, plan), /missing/);
+  await previews(sessionB).consume(issued.preview_token, plan);
+  await assert.rejects(previews(sessionA).consume(issued.preview_token, plan), /already used/);
+
+  // The store keeps only a hashed token, a fingerprint, and an expiry.
+  const pending = await previews(sessionA).issue(plan);
+  const stored = JSON.stringify([...env.YNAB_CREDENTIALS.storage().values]);
+  assert.doesNotMatch(stored, new RegExp(pending.preview_token));
+  assert.doesNotMatch(stored, /Synthetic memo|fake-row/);
+  // Removing the consent removes its outstanding previews.
+  assert.equal((await credentialStoreRequest(env, binding.ynabUserId, "/remove", { binding })).status, 204);
+  await storeCredential(env, binding);
+  await assert.rejects(previews(sessionB).consume(pending.preview_token, plan), /missing/);
+
+  assert.equal(hostedServerOptions(env, { ynabUserId: "legacy-user", writesEnabled: true }, "session").previewStore, undefined);
+});
+
+test("credential store accepts only bounded preview records", async () => {
+  const env = credentialEnv();
+  const binding = await approveFakeConsent(env, { writes: true });
+  const issue = (token, record) => credentialStoreRequest(env, binding.ynabUserId, "/preview/issue", { binding, token, record });
+  const token = crypto.randomUUID();
+  const fingerprint = "a".repeat(64);
+  assert.equal((await issue("not-a-preview-token", { fingerprint, expires: Date.now() + 60000 })).status, 400);
+  assert.equal((await issue(token, { fingerprint: "short", expires: Date.now() + 60000 })).status, 400);
+  assert.equal((await issue(token, { fingerprint, expires: Date.now() - 1 })).status, 400);
+  assert.equal((await issue(token, { fingerprint, expires: Date.now() + 24 * 3600000 })).status, 400);
+  assert.equal((await issue(token, { fingerprint, expires: Date.now() + 60000, plan: { memo: "never stored" } })).status, 204);
+  assert.doesNotMatch(JSON.stringify([...env.YNAB_CREDENTIALS.storage().values]), /never stored/);
+  for (let index = 0; index < 120; index += 1) await issue(crypto.randomUUID(), { fingerprint, expires: Date.now() + 60000 });
+  const previewKeys = [...env.YNAB_CREDENTIALS.storage().values.keys()].filter((key) => key.startsWith("ynab_preview:"));
+  assert.ok(previewKeys.length <= 100, `preview records are unbounded: ${previewKeys.length}`);
+});
+
 test("full MCP sessions keep client scope and HTTP credentials isolated", async (t) => {
   process.env.YNAB_MCP_NO_AUTOSTART = "1";
   process.env.YNAB_DISABLE_AGENT_CONFIG_FALLBACK = "1";

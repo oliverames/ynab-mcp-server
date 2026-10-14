@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createMcpHarness, assertToolOk, toolData } from "./support/mcp-harness.mjs";
+import { createMcpHarness, createMemoryPreviewStore, assertToolOk, toolData } from "./support/mcp-harness.mjs";
 import { FakeYnabHttpServer } from "./support/fake-ynab.mjs";
 
 test("MCP initialize/list/call reaches tenant-isolated fake HTTP and complete explicit history", async (t) => {
@@ -110,6 +110,23 @@ test("preview tokens cannot cross authenticated sessions or budgets and are sing
   const fresh = await first.preview("update_transaction", args);
   assertToolOk(await first.call("update_transaction", { ...args, previewToken: fresh.previewToken, confirmed: true }));
   assert.equal((await first.call("update_transaction", { ...args, previewToken: fresh.previewToken, confirmed: true })).isError, true);
+  assert.equal(fake.writes().length, 1);
+});
+
+test("hosted preview store lets one authorization preview and write on different MCP sessions", async (t) => {
+  // Hosted clients such as ChatGPT can open a new MCP session for each tool call.
+  const fake = await new FakeYnabHttpServer().start(); t.after(() => fake.close());
+  const previewStore = createMemoryPreviewStore();
+  const previewSession = await createMcpHarness({ fake, sessionId: "fake-session-preview", previewStore }); t.after(() => previewSession.close());
+  const writeSession = await createMcpHarness({ fake, sessionId: "fake-session-write", previewStore }); t.after(() => writeSession.close());
+  const otherTenant = await createMcpHarness({ fake, token: "fake-token-b", sessionId: "fake-session-other", previewStore }); t.after(() => otherTenant.close());
+  const args = { transactionId: "fake-import", memo: "Synthetic cross-session edit" };
+  const foreign = await previewSession.preview("update_transaction", args);
+  assert.equal((await otherTenant.call("update_transaction", { ...args, previewToken: foreign.previewToken, confirmed: true })).isError, true);
+  assert.equal(fake.writes().length, 0);
+  const { previewToken } = await previewSession.preview("update_transaction", args);
+  assertToolOk(await writeSession.call("update_transaction", { ...args, previewToken, confirmed: true }));
+  assert.equal((await previewSession.call("update_transaction", { ...args, previewToken, confirmed: true })).isError, true);
   assert.equal(fake.writes().length, 1);
 });
 

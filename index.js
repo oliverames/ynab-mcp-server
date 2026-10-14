@@ -3,7 +3,7 @@
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { createWritePreviews, fingerprint } from "./lib/write-previews.mjs";
+import { createStoredWritePreviews, createWritePreviews, fingerprint } from "./lib/write-previews.mjs";
 import { readWriteToolState } from "./lib/write-tool-state.mjs";
 import { createSerializedJournal, createDurableOperationRunner, retainJournalEntries } from "./lib/write-recovery.mjs";
 import { registerCategorySuggestionTools } from "./modules/category-suggestions.mjs";
@@ -585,6 +585,7 @@ const {
   sessionId = randomUUID(),
   fetchImpl = (...args) => globalThis.fetch(...args),
   previewTtlMs = 300000,
+  previewStore = null,
   now = Date.now,
   runtime = {},
   serverInfo = { name: "YNAB Local", version: "6.0.1" },
@@ -598,7 +599,11 @@ const invalidateReadCache = (budgetId) => entityCache.invalidate(budgetId);
 const journal = createSerializedJournal(journalAdapter);
 const operationRunner = createDurableOperationRunner({ journal, readStep: readOperationStep, writeStep: writeOperationStep });
 const writeContext = new AsyncLocalStorage();
-const previews = createWritePreviews({ tenantId, sessionId, ttlMs: previewTtlMs, now });
+// Hosted callers supply a consent-scoped store so approval survives a new MCP
+// session; local previews stay in this session's memory.
+const previews = previewStore
+  ? createStoredWritePreviews({ tenantId, store: previewStore, ttlMs: previewTtlMs, now })
+  : createWritePreviews({ tenantId, sessionId, ttlMs: previewTtlMs, now });
 let writeQueue = Promise.resolve();
 function serializeWrite(fn) {
   const result = writeQueue.then(fn, fn);
@@ -1769,7 +1774,7 @@ function registerTool(name, config, handler) {
   const guardedHandler = isGuardedWrite ? (input, extra) => run(() => serializeWrite(async () => {
     if (input.confirmed !== true) throw new Error("Explicit human approval is required separately from the preview token (confirmed:true).");
     if (!input.previewToken) throw new Error("Call preview_write_tool and obtain explicit human approval before writing.");
-    const validate = previews.claim(input.previewToken);
+    const validate = await previews.claim(input.previewToken);
     const plan = await prepareWrite(name, input, handler);
     validate({ tool_name: name, ...plan });
     if (name === "undo_operation") {
@@ -1962,7 +1967,7 @@ registerTool("preview_write_tool", {
   if (!tool) throw new Error("Write tool is unavailable in this session.");
   const parsed = parseToolExecuteInput(tool_name, { ...input, previewToken: "preview-preparation", confirmed: true });
   const plan = await prepareWrite(tool_name, parsed, tool.rawHandler);
-  return ok(previews.issue({ tool_name, ...plan }));
+  return ok(await previews.issue({ tool_name, ...plan }));
 })));
 
 // ==================== User & Budgets ====================
