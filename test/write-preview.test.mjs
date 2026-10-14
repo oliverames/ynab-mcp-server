@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, statSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createWritePreviews } from '../lib/write-previews.mjs';
+import { createStoredWritePreviews, createWritePreviews, fingerprint } from '../lib/write-previews.mjs';
 process.env.YNAB_MCP_NO_AUTOSTART = '1';
 process.env.YNAB_DISABLE_AGENT_CONFIG_FALLBACK = '1';
 process.env.YNAB_API_TOKEN = 'fake-preview-test-token';
@@ -29,6 +29,30 @@ test('preview capability cannot move to another tenant/session or altered values
   const token = first.issue(plan).preview_token;
   assert.throws(()=>second.consume(token,plan),/another authenticated session/);
   assert.throws(()=>first.consume(token,{...plan,after:{category:'different'}}),/Stale/);
+});
+
+function memoryPreviewStore() {
+  const records = new Map();
+  return { records, async put(token, record) { records.set(token, record); }, async take(token) { const record = records.get(token) ?? null; records.delete(token); return record; } };
+}
+
+test('stored previews follow one authorization across MCP sessions and stay single-use, expiring and exact', async () => {
+  let clock = 1000;
+  const store = memoryPreviewStore();
+  const options = {tenantId:'fake-consent',store,ttlMs:100,now:()=>clock};
+  const sessionA = createStoredWritePreviews(options), sessionB = createStoredWritePreviews(options);
+  const issued = await sessionA.issue(plan);
+  assert.equal(issued.fingerprint, fingerprint(plan)); assert.equal(issued.human_approval_required, true);
+  assert.deepEqual(Object.keys([...store.records.values()][0]).sort(), ['expires','fingerprint']);
+  await sessionB.consume(issued.preview_token, plan);
+  await assert.rejects(sessionA.consume(issued.preview_token, plan), /already used/);
+  const expired = await sessionA.issue(plan); clock += 100;
+  await assert.rejects(sessionB.consume(expired.preview_token, plan), /expired/);
+  const stale = await sessionA.issue(plan);
+  await assert.rejects(sessionB.consume(stale.preview_token, {...plan,ids:['different-row']}), /Stale preview/);
+  await assert.rejects(sessionB.consume(stale.preview_token, plan), /already used/);
+  const foreign = await sessionA.issue(plan);
+  await assert.rejects(createStoredWritePreviews({...options,tenantId:'fake-other-consent'}).consume(foreign.preview_token, plan), /Stale preview/);
 });
 
 test('split readback validates count, exact amount and requested category independently of generated IDs/order', () => {

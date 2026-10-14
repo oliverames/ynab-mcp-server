@@ -118,7 +118,12 @@ grant is revoked when visible, but eventually consistent provider KV listing
 may temporarily retain an unusable grant. Deleted credentials cannot be used
 for API requests; retry deletion to remove residual provider records.
 
-Ordinary merged budget caches and write previews are held in session memory.
+Ordinary merged budget caches are held in session memory. Write previews are
+held in the consent's credential Durable Object as a token hash, plan
+fingerprint and expiry only. Some clients open a new MCP session for each tool
+call, so a preview must outlive the session that issued it: any session of the
+same consent can redeem it once, another consent cannot see it, and removing
+the consent removes it.
 Durable recovery/undo records contain the relevant operation identifiers and
 before/after values. All journal contents are encrypted; a preview token is not
 human consent and does not authorize a write without explicit user approval.
@@ -140,7 +145,7 @@ flow and a newly approved preview.
   See "Edge configuration (Cloudflare)" below.
 - Run read-only smoke tests through `/mcp`.
 - If writes are enabled, run the batch category+approval smoke against a dedicated test budget and assert post-write refetch verification.
-- Require an exact expiring session-bound preview token and separate `confirmed: true` human approval for every write. A preview is not consent. Validate stale state, conflicts, partial outcomes and credential/session boundaries with synthetic fixtures before any approved deployment.
+- Require an exact expiring single-use preview token bound to the consent and separate `confirmed: true` human approval for every write. A preview is not consent. Validate stale state, conflicts, partial outcomes and credential/session boundaries with synthetic fixtures before any approved deployment.
 
 ## Edge configuration (Cloudflare)
 

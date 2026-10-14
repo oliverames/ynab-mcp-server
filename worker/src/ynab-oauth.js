@@ -43,6 +43,10 @@ export function undoJournalKey(binding) {
   return typeof binding === "string" ? `ynab_undo:${binding}` : `ynab_undo:v2:${credentialIdentity(binding)}`;
 }
 
+export function previewKeyPrefix(binding) {
+  return `ynab_preview:v2:${credentialIdentity(binding)}:`;
+}
+
 export function credentialBindingsMatch(a, b) {
   return isCredentialBinding(a) && isCredentialBinding(b)
     && ["credentialVersion", "ynabUserId", "clientId", "credentialId", "writesEnabled"].every((key) => a[key] === b[key]);
@@ -290,6 +294,25 @@ export async function credentialGeneration(env, ynabUserId) {
 // Durable encrypted journal per consent credential. CAS prevents another MCP
 // session's read/modify/write from silently losing entries. mutate retries
 // only journal transformations, never an outbound financial operation.
+// Write previews for one consent, shared by all of its MCP sessions. The
+// credential Durable Object serializes requests, so take is an atomic
+// read-and-delete: a token is redeemable once, whichever session presents it.
+export function createCredentialPreviewStore(env, binding) {
+  credentialIdentity(binding);
+  return {
+    async put(token, record) {
+      const response = await credentialStoreRequest(env, binding.ynabUserId, "/preview/issue", { binding, token, record });
+      if (!response.ok) throw new Error("Could not store the write preview. Request a new preview.");
+    },
+    async take(token) {
+      const response = await credentialStoreRequest(env, binding.ynabUserId, "/preview/claim", { binding, token });
+      if (response.status === 404) return null;
+      if (!response.ok) throw new Error("Could not read the write preview. Request a new preview.");
+      return response.json();
+    },
+  };
+}
+
 export function createKvJournal(env, binding) {
   credentialIdentity(binding);
   let revision;

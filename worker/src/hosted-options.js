@@ -1,4 +1,4 @@
-import { credentialIdentity, createKvJournal, getFreshAccessToken, isCredentialBinding, randomToken } from "./ynab-oauth.js";
+import { credentialIdentity, createCredentialPreviewStore, createKvJournal, getFreshAccessToken, isCredentialBinding, randomToken } from "./ynab-oauth.js";
 
 export function hostedServerOptions(env, props, sessionId = randomToken(24)) {
   const bound = isCredentialBinding(props);
@@ -9,7 +9,7 @@ export function hostedServerOptions(env, props, sessionId = randomToken(24)) {
     writesEnabled: bound && props.writesEnabled,
     tenantId: identity,
     sessionId: `${identity}:${sessionId}`,
-    ...(bound ? { journal: createKvJournal(env, props) } : {}),
+    ...(bound ? { journal: createKvJournal(env, props), previewStore: createCredentialPreviewStore(env, props) } : {}),
     runtime: {
       tokenSource: { source: "ynab_oauth", source_label: "YNAB OAuth (isolated hosted consent)" },
       detected_agent: "remote",

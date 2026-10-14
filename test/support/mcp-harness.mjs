@@ -29,7 +29,21 @@ export function assertToolOk(result) {
   return toolData(result);
 }
 
-export async function createMcpHarness({ fake, token = "fake-token-a", sessionId = "fake-session-a", writesEnabled = true, journalPath, previewTtlMs, cacheTtlMs, now } = {}) {
+// Stands in for a hosted consent-scoped preview store shared by MCP sessions.
+export function createMemoryPreviewStore() {
+  const records = new Map();
+  return {
+    records,
+    async put(token, record) { records.set(token, record); },
+    async take(token) {
+      const record = records.get(token) ?? null;
+      records.delete(token);
+      return record;
+    },
+  };
+}
+
+export async function createMcpHarness({ fake, token = "fake-token-a", sessionId = "fake-session-a", writesEnabled = true, journalPath, previewTtlMs, cacheTtlMs, now, previewStore } = {}) {
   const ownsFake = !fake;
   fake ??= await new FakeYnabHttpServer().start();
   const directory = journalPath ? null : await mkdtemp(join(tmpdir(), "ynab-synthetic-integration-"));
@@ -45,6 +59,7 @@ export async function createMcpHarness({ fake, token = "fake-token-a", sessionId
     ...(previewTtlMs === undefined ? {} : { previewTtlMs }),
     ...(cacheTtlMs === undefined ? {} : { cacheTtlMs }),
     ...(now === undefined ? {} : { now }),
+    ...(previewStore === undefined ? {} : { previewStore }),
     fetchImpl: fake.fetch,
     journal,
     runtime: { tokenSource: "synthetic-test", sessionId },

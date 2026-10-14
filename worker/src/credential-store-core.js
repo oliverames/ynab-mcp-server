@@ -5,15 +5,24 @@ import {
   decryptStoredJson,
   encryptStoredJson,
   isCredentialBinding,
+  previewKeyPrefix,
   readTokenRecord,
   refreshStoredCredential,
   saveTokenRecord,
+  sha256base64url,
   tokenRecordKey,
   undoJournalKey,
 } from "./ynab-oauth.js";
 
 const JOURNAL_CHUNK_SIZE = 512 * 1024;
 const MAX_JOURNAL_CHUNKS = 32;
+const MAX_PREVIEW_TTL_MS = 15 * 60 * 1000;
+const MAX_PREVIEWS_PER_CONSENT = 100;
+const PREVIEW_TOKEN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+async function listPreviews(storage, prefix) {
+  return [...(await storage.list({ prefix }))].filter(([key]) => key.startsWith(prefix));
+}
 
 function journalChunkCount(raw) {
   const header = JSON.parse(raw);
@@ -111,16 +120,48 @@ export class CredentialStoreCore {
         const journalKey = undoJournalKey(binding);
         const journalRaw = await this.storage.get(journalKey);
         const chunks = journalRaw ? journalChunkCount(journalRaw) : 0;
+        const previewKeys = (await listPreviews(this.storage, previewKeyPrefix(binding))).map(([key]) => key);
         await this.storage.transaction(async (txn) => {
           await txn.delete(tokenRecordKey(binding));
           await txn.delete(journalKey);
           for (let index = 0; index < chunks; index += 1) await txn.delete(`${journalKey}:chunk:${index}`);
+          for (let start = 0; start < previewKeys.length; start += 128) await txn.delete(previewKeys.slice(start, start + 128));
         });
         return new Response(null, { status: 204 });
       }
       if (path === "/token") {
         const accessToken = await refreshStoredCredential(this.env, this.storage, binding);
         return accessToken ? Response.json({ accessToken }) : new Response(null, { status: 401 });
+      }
+      if (path === "/preview/issue" || path === "/preview/claim") {
+        // Only a token hash, plan fingerprint, and expiry are stored. Requests
+        // are serialized, so a claim reads and deletes before any other claim.
+        if (typeof body.token !== "string" || !PREVIEW_TOKEN.test(body.token)) return new Response(null, { status: 400 });
+        const prefix = previewKeyPrefix(binding);
+        const key = `${prefix}${await sha256base64url(body.token)}`;
+        const now = Date.now();
+        if (path === "/preview/claim") {
+          const record = await this.storage.get(key);
+          if (record) await this.storage.delete(key);
+          return record?.expires > now ? Response.json(record) : new Response(null, { status: 404 });
+        }
+        const { fingerprint, expires } = body.record ?? {};
+        if (typeof fingerprint !== "string" || !/^[0-9a-f]{64}$/.test(fingerprint)
+          || !Number.isFinite(expires) || expires <= now || expires > now + MAX_PREVIEW_TTL_MS) {
+          return new Response(null, { status: 400 });
+        }
+        // Prune expired previews and evict the oldest beyond the per-consent bound.
+        const existing = await listPreviews(this.storage, prefix);
+        const live = existing.filter(([, record]) => record?.expires > now).sort(([, a], [, b]) => a.expires - b.expires);
+        const remove = [
+          ...existing.filter(([, record]) => !(record?.expires > now)).map(([previewKey]) => previewKey),
+          ...live.slice(0, Math.max(0, live.length - MAX_PREVIEWS_PER_CONSENT + 1)).map(([previewKey]) => previewKey),
+        ];
+        await this.storage.transaction(async (txn) => {
+          for (let start = 0; start < remove.length; start += 128) await txn.delete(remove.slice(start, start + 128));
+          await txn.put(key, { fingerprint, expires });
+        });
+        return new Response(null, { status: 204 });
       }
       if (path === "/journal/read" || path === "/journal/persist") {
         const key = undoJournalKey(binding);
