@@ -14,6 +14,8 @@ The manual live test scripts remain intentional tools. Read the README's testing
 
 Preserved the complete previous worklog in the dated archive below, including the icon work, releases, prior audits and open questions. The current file now points to maintained guidance. Source, tests, dependencies and workflows are unchanged. No npm publication, Worker deployment or YNAB operation ran for this cleanup.
 
+Later, [PR #39](https://github.com/oliverames/ynab-mcp-server/pull/39) corrected the README's old-hostname guidance to match the completed October 11 cutover. Clients still using the old hostname should add the current URL and reconnect; already migrated clients need no change. Documentation checks and all nine GitHub jobs passed before merging at `5ae8b40`. Those checks are dated merge evidence, not reruns for this worklog update. No financial operation or deployment ran.
+
 ## Historical record
 
 The [complete worklog through October 13, 2026](WORKLOG-2026-10-13.md) is an exact copy of the previous file. It stays at the repository root to preserve each relative link's original context. The [preservation record](docs/archive/worklog-2026-10-13.json) records the source revision, byte count and SHA-256 digest.
