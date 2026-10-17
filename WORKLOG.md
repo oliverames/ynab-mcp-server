@@ -16,6 +16,12 @@ Preserved the complete previous worklog in the dated archive below, including th
 
 Later, [PR #39](https://github.com/oliverames/ynab-mcp-server/pull/39) corrected the README's old-hostname guidance to match the completed October 11 cutover. Clients still using the old hostname should add the current URL and reconnect; already migrated clients need no change. Documentation checks and all nine GitHub jobs passed before merging at `5ae8b40`. Those checks are dated merge evidence, not reruns for this worklog update. No financial operation or deployment ran.
 
+## October 17, 2026: agents 0.28.1 and SDK override removal
+
+Resolved [#30](https://github.com/oliverames/ynab-mcp-server/issues/30) in `3f29218`. The Worker now uses `agents ~0.28.1`, which peers `@modelcontextprotocol/sdk` 1.32.1, so the temporary override is gone. A test that read the old `partyserver` package now checks agents' own `getAgentByName` path instead.
+
+Verification: root unit tests 240/240, safety and eval checks passed, Worker tests 60/60, `npm audit` reported 0 vulnerabilities in both packages, and all nine CI jobs passed (run 39060667124). Worker version `ade63bcc-cf12-4996-8b30-04185176fee7` is deployed at 100% and replaced `d3da76f6-9578-448c-b2d1-450fc78f586d`. Unauthenticated checks of `/`, `/mcp` and the OAuth metadata passed. No signed-in tool call ran against the new version; that remains [#24](https://github.com/oliverames/ynab-mcp-server/issues/24). If a reconnected client misbehaves, redeploy `d3da76f6`, which has no migration dependency.
+
 ## Historical record
 
 The [complete worklog through October 13, 2026](WORKLOG-2026-10-13.md) is an exact copy of the previous file. It stays at the repository root to preserve each relative link's original context. The [preservation record](docs/archive/worklog-2026-10-13.json) records the source revision, byte count and SHA-256 digest.
