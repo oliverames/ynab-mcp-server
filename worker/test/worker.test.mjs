@@ -1727,10 +1727,11 @@ test("full MCP sessions keep client scope and HTTP credentials isolated", async 
 
 test("credential-bound sessions satisfy installed SDK naming checks and reject cross-grant attachment on every route", async () => {
   // Run the actual pinned framework's addressing, native name check, and MCP
-  // parsers without loading its Cloudflare-only module into Node. A permissive
-  // fake idFromName alone misses PartyServer's ctx.id.name/setName contract.
-  const [partySource, mcpSource] = await Promise.all([
-    readFile(new URL("../node_modules/partyserver/dist/index.js", import.meta.url), "utf8"),
+  // parsers without loading its Cloudflare-only modules into Node. A permissive
+  // fake idFromName alone misses the native ctx.id.name contract that
+  // Lifecycle.name enforces in agents 0.28.
+  const [routingSource, mcpSource] = await Promise.all([
+    readFile(new URL("../node_modules/agents/dist/agent-routing.js", import.meta.url), "utf8"),
     readFile(new URL("../node_modules/agents/dist/mcp/index.js", import.meta.url), "utf8"),
   ]);
   const between = (source, first, last) => {
@@ -1739,17 +1740,19 @@ test("credential-bound sessions satisfy installed SDK naming checks and reject c
     assert.ok(start >= 0 && end > start, `Pinned SDK method missing: ${first}`);
     return source.slice(start, end);
   };
-  const getServerSource = between(partySource, "async function getServerByName(", "\nfunction camelCaseToKebabCase");
-  const getServer = new Function("durableObjectGetOptions", "retryDurableObjectOperation", `${getServerSource}; return getServerByName;`)(() => undefined, (operation) => operation());
-  const setNameSource = between(partySource, "\tasync setName(name, props)", "\n\t/**\n\t* @internal");
+  const getAgentSource = between(routingSource, "async function getAgentByName(", "\n//#endregion");
+  const getAgent = new Function("durableObjectGetOptions", "retryDurableObjectOperation", `${getAgentSource}; return getAgentByName;`)(() => undefined, (operation) => operation());
   const getTransportSource = between(mcpSource, "\tgetTransportType()", "\n\t/** Read the sessionId");
   const getSessionSource = between(mcpSource, "\tgetSessionId()", "\n\t/** Get the unique");
   const ProbeAgent = new Function(`return class ProbeAgent {
-    #_name; #_props;
+    #_props;
     constructor(id) { this.ctx = { id }; }
-    async #ensureInitialized() { this.name = this.ctx.id.name; }
+    get name() {
+      if (this.ctx.id.name === undefined) throw new Error("could not determine its Durable Object name");
+      return this.ctx.id.name;
+    }
+    async __unsafe_ensureInitialized(props) { void this.name; this.#_props = props; }
     get props() { return this.#_props; }
-    ${setNameSource}
     ${getTransportSource}
     ${getSessionSource}
   };`)();
@@ -1776,7 +1779,7 @@ test("credential-bound sessions satisfy installed SDK naming checks and reject c
       sessionId = id.toString();
       assert.equal(id.toString(), sessionId, "generated IDs must have stable string representations");
     }
-    const agent = await getServer(scopedEnv.MCP_OBJECT, `${protocol}:${sessionId}`, { props: ctx.props });
+    const agent = await getAgent(scopedEnv.MCP_OBJECT, `${protocol}:${sessionId}`, { props: ctx.props });
     assert.equal(agent.ctx.id.name, agent.name);
     assert.equal(agent.getTransportType(), protocol);
     assert.equal(agent.getSessionId(), sessionId, "SDK session parser must match public header/query ID");

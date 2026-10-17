@@ -9,7 +9,7 @@ import { remoteServerInfo } from "./brand-assets.js";
 import { hostedServerOptions } from "./hosted-options.js";
 
 export class YnabMCP extends McpAgent {
-  // agents v0.17.4 otherwise durably logs response messages for SSE replay.
+  // McpAgent (agents 0.28) otherwise durably logs response messages for SSE replay.
   // Financial results/previews stay in memory; interrupted financial writes
   // are recovered from the encrypted operation journal after fresh approval.
   getEventStore() {
