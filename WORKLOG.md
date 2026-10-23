@@ -22,6 +22,10 @@ Resolved [#30](https://github.com/oliverames/ynab-mcp-server/issues/30) in `3f29
 
 Verification: root unit tests 240/240, safety and eval checks passed, Worker tests 60/60, `npm audit` reported 0 vulnerabilities in both packages, and all nine CI jobs passed (run 39060667124). Worker version `ade63bcc-cf12-4996-8b30-04185176fee7` is deployed at 100% and replaced `d3da76f6-9578-448c-b2d1-450fc78f586d`. Unauthenticated checks of `/`, `/mcp` and the OAuth metadata passed. No signed-in tool call ran against the new version; that remains [#24](https://github.com/oliverames/ynab-mcp-server/issues/24). If a reconnected client misbehaves, redeploy `d3da76f6`, which has no migration dependency.
 
+## October 23, 2026: ip-address override and Worker redeploy
+
+`9103ef4` raised the `ip-address` override to 10.7.4 in both packages, clearing the quadratic-time `Address6` zone parsing advisory and the `express-rate-limit` advisory that depended on it. Worker tests and the bundle dry run passed, `npm audit` reported 0 vulnerabilities in both packages, and CI passed. The root `npm test` is the live script, so it read the real budget: every read passed, and every write was refused by the consent gate with "No write was attempted." Worker version `b2aa17ce-1b56-4ccf-be83-b7f15071fa03` is deployed at 100% from `9103ef4` and replaced `ade63bcc-cf12-4996-8b30-04185176fee7`. Unauthenticated checks of `/`, `/mcp`, `Origin` handling, `/authorize` and the OAuth metadata matched the pre-deploy baseline, and a tail showed every request `ok` with no exceptions. Signed-in verification still belongs to [#24](https://github.com/oliverames/ynab-mcp-server/issues/24). If a reconnected client misbehaves, roll back to `ade63bcc`.
+
 ## Historical record
 
 The [complete worklog through October 13, 2026](WORKLOG-2026-10-13.md) is an exact copy of the previous file. It stays at the repository root to preserve each relative link's original context. The [preservation record](docs/archive/worklog-2026-10-13.json) records the source revision, byte count and SHA-256 digest.
