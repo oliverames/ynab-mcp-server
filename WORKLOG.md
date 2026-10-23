@@ -26,6 +26,12 @@ Verification: root unit tests 240/240, safety and eval checks passed, Worker tes
 
 `9103ef4` raised the `ip-address` override to 10.7.4 in both packages, clearing the quadratic-time `Address6` zone parsing advisory and the `express-rate-limit` advisory that depended on it. Worker tests and the bundle dry run passed, `npm audit` reported 0 vulnerabilities in both packages, and CI passed. The root `npm test` is the live script, so it read the real budget: every read passed, and every write was refused by the consent gate with "No write was attempted." Worker version `b2aa17ce-1b56-4ccf-be83-b7f15071fa03` is deployed at 100% from `9103ef4` and replaced `ade63bcc-cf12-4996-8b30-04185176fee7`. Unauthenticated checks of `/`, `/mcp`, `Origin` handling, `/authorize` and the OAuth metadata matched the pre-deploy baseline, and a tail showed every request `ok` with no exceptions. Signed-in verification still belongs to [#24](https://github.com/oliverames/ynab-mcp-server/issues/24). If a reconnected client misbehaves, roll back to `ade63bcc`.
 
+## October 23, 2026: security review
+
+Reviewed the hosted OAuth and consent flow, encrypted credential storage, the preview-token write gate, token redaction and the workflows. No code defect was found. `4a7ef80` raised zod to 4.6.7 in both lockfiles for GHSA-mrhx-c7xc-m3w5 (high). GitHub updated that advisory at 18:26 UTC, after the morning's passing audit, so the next CI audit step would have failed. Root unit tests 240/240, safety and eval checks, release check, discovery smoke, Worker tests 60/60 and the bundle dry run passed; `npm audit --omit=dev` reports 0 vulnerabilities in both packages. The root live `npm test` did not run. The Worker is not redeployed, so the deployed bundle still carries zod 4.4.3 until the next deploy.
+
+The callback state is deliberately cookie-free (Mistral's embedded browser dropped cookies in July), so a YNAB sign-in link from someone else's flow still reaches the final confirmation page in the victim's browser. That page names the client, redirect and access level and needs a same-origin click; binding the flow to a browser cookie would close the gap at the cost of that client.
+
 ## Historical record
 
 The [complete worklog through October 13, 2026](WORKLOG-2026-10-13.md) is an exact copy of the previous file. It stays at the repository root to preserve each relative link's original context. The [preservation record](docs/archive/worklog-2026-10-13.json) records the source revision, byte count and SHA-256 digest.
