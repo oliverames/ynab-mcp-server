@@ -65,7 +65,7 @@
     "body-parser": "2.3.0",
     "fast-uri": "4.2.1",
     "hono": "4.13.13",
-    "ip-address": "10.7.3"
+    "ip-address": "10.7.4"
   },
   "engines": {
     "node": ">=20"
