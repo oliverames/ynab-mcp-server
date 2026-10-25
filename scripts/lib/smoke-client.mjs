@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
 const scriptsDir = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 export const projectRoot = path.dirname(scriptsDir);
@@ -95,7 +96,25 @@ export function serverParamsForOptions(options) {
   };
 }
 
+// Streamable HTTP with a bearer token, for the hosted connector. The token
+// goes only into the Authorization header and never into the label or errors.
+export async function withHostedClient({ url, bearerToken }, callback) {
+  const transport = new StreamableHTTPClientTransport(new URL(url), {
+    requestInit: { headers: { Authorization: `Bearer ${bearerToken}` } },
+  });
+  const client = new Client({ name: "ynab-mcp-smoke", version: packageJson.version });
+  try {
+    await client.connect(transport);
+    return await callback(client, { label: url });
+  } finally {
+    await client.close().catch(() => {});
+  }
+}
+
 export async function withSmokeClient(options, callback) {
+  if (options.mode === "hosted") {
+    return withHostedClient({ url: options.hostedUrl, bearerToken: options.bearerToken }, callback);
+  }
   const params = serverParamsForOptions(options);
   const transport = new StdioClientTransport({
     command: params.command,

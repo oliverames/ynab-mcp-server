@@ -122,6 +122,8 @@ npx wrangler secret put DATA_ENCRYPTION_KEY   # a different random 32+ byte stri
 npx wrangler deploy                           # provisions configured domains + certs
 ```
 
+After any deploy, run `npm run smoke:hosted` from the repository root. It signs in with the one-time consent token kept in 1Password and verifies the live tools, version and instructions (see the root README's "Hosted Connector Smoke Test" for the one-time `npm run smoke:hosted:consent` step).
+
 Prerequisites: a YNAB OAuth application (YNAB → Account Settings → Developer
 Settings) with `https://ames-ynab.link/callback` registered, and Wrangler
 authenticated against the Ames Consulting account that owns the new zone.

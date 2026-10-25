@@ -794,6 +794,19 @@ YNAB_API_TOKEN=your-token YNAB_BUDGET_ID=your-budget-id YNAB_ALLOW_WRITES=1 npm 
 
 `smoke:list-tools` verifies that high-value read tools such as `review_unapproved`, `get_transactions`, `search_transactions`, `search_categories`, and `search_payees` are present. When `YNAB_ALLOW_WRITES=1` is set, it also verifies `update_transactions`. `smoke:review-unapproved` calls `review_unapproved` with `summary: true` and prints only aggregate counts. `smoke:batch-verify` creates a temporary transaction, uses `update_transactions` to categorize and approve it in one call, refetches it through the MCP server, and deletes it afterward.
 
+### Hosted Connector Smoke Test
+
+After a `wrangler deploy`, `npm run smoke:hosted` signs in to the live connector without a browser and checks it against the checkout you deployed from. It is read-only: it lists tools and never calls one, so it makes no YNAB request.
+
+It reuses a one-time OAuth consent. Approve the connector once, and the refresh token lands in a 1Password API Credential item ("YNAB MCP hosted smoke token" in the Development vault). Each run reads that token with the 1Password CLI, exchanges it, writes the rotated refresh token back, and then asserts that the Worker serves the same server version, the same tool names and count, and the same `instructions` text as `createYnabServer()` in this checkout. It also confirms that an unauthenticated `POST /mcp` still returns 401. Nothing token-like is printed or written to the repository.
+
+```bash
+npm run smoke:hosted:consent   # once: opens the consent page; leave the write-access box unchecked
+npm run smoke:hosted           # after every deploy
+```
+
+Run the consent step again when the smoke check reports an expired or revoked grant. The OAuth provider fixes a grant's life at 30 days from consent and rotation does not extend it, so the check warns from day 25. Both commands accept `--url`, `--vault` and `--item`; `YNAB_HOSTED_URL`, `YNAB_SMOKE_OP_VAULT` and `YNAB_SMOKE_OP_ITEM` set the same defaults. The grant is read-only, so the smoke compares against the read-only tool surface; a write-capable grant is refused at consent and never stored. Unit tests cover the whole flow against a local mock connector (`test/hosted-smoke.test.mjs`).
+
 ---
 
 ## Development
@@ -828,6 +841,8 @@ npm pack --dry-run
 After publishing, run `npm run release:check:registry` to verify the npm `latest` dist-tag and repo metadata agree on the same version. `npm run build:mcpb` remains available for an explicit local bundle, but the normal install path is direct MCP registration through npm.
 
 Linear records the verified GitHub release and MCPB bundle in this repository's Ames Consulting (AME) release pipeline. npm publication and the hosted OAuth Worker require separate receiving checks. See [release reporting](.github/RELEASES.md) for issue references, credentials and reporting-only recovery.
+
+After deploying the hosted Worker, run `npm run smoke:hosted` (see [Hosted Connector Smoke Test](#hosted-connector-smoke-test)) from the commit you deployed. It is the signed-in check that the unauthenticated probes cannot give.
 
 Pushing a `v*` tag triggers the release workflow (`.github/workflows/release.yml`), which verifies the tag against `package.json`, re-runs the offline tests and consistency checks, builds the MCPB bundle, and publishes a GitHub release with the bundle attached.
 

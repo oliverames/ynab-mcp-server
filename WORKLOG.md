@@ -32,6 +32,14 @@ Reviewed the hosted OAuth and consent flow, encrypted credential storage, the pr
 
 The callback state is deliberately cookie-free (Mistral's embedded browser dropped cookies in July), so a YNAB sign-in link from someone else's flow still reaches the final confirmation page in the victim's browser. That page names the client, redirect and access level and needs a same-origin click; binding the flow to a browser cookie would close the gap at the cost of that client.
 
+## October 25, 2026: signed-in smoke check for the hosted connector
+
+Built the tooling for [#24](https://github.com/oliverames/ynab-mcp-server/issues/24) on Oliver's decision for a one-time consent token. `npm run smoke:hosted:consent` registers a public OAuth client with the Worker, sends Oliver through the consent page with a loopback redirect (`127.0.0.1`, any port, PKCE S256, `resource` set to the exact MCP URL, scope `read`) and stores the refresh token and client id in a 1Password API Credential item, "YNAB MCP hosted smoke token", in the Development vault. `npm run smoke:hosted` reads it, exchanges it, saves the rotated refresh token back, connects over Streamable HTTP with the bearer token (`scripts/lib/smoke-client.mjs`, `withHostedClient`), and asserts the server version, tool names and count, and the `instructions` text against `createYnabServer()` in the checkout, plus a 401 for an unauthenticated `POST /mcp`. It lists tools only; it calls none and makes no YNAB request.
+
+Constraints worth knowing. The provider (`@cloudflare/workers-oauth-provider`, default `refreshTokenTTL` 720 hours) ends a grant 30 days after consent and rotation does not extend it, so "one-time" means roughly monthly; the check warns from day 25 and names the renewal command. The provider accepts the previous refresh token for one more exchange, so a failed write-back to 1Password only warns. A write-capable consent is refused and never stored.
+
+Verification: `node --test test/hosted-smoke.test.mjs` passes 10/10 against a local mock connector (discovery, registration, PKCE, rotation, bearer-protected Streamable HTTP built on `createYnabServer`). The 1Password store was round-tripped live with a throwaway item that was then archived. A live probe against `https://ames-ynab.link` confirmed that dynamic registration accepts a loopback redirect, that two different loopback ports both reach the consent page, and that the consent page offers the write checkbox. The browser consent itself and a live `npm run smoke:hosted` need Oliver, so #24 stays open. No deploy, release or YNAB operation ran.
+
 ## Historical record
 
 The [complete worklog through October 13, 2026](WORKLOG-2026-10-13.md) is an exact copy of the previous file. It stays at the repository root to preserve each relative link's original context. The [preservation record](docs/archive/worklog-2026-10-13.json) records the source revision, byte count and SHA-256 digest.
