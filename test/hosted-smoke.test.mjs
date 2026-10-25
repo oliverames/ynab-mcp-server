@@ -287,7 +287,7 @@ test("1Password store sends secrets in a private template file, never as argumen
     const templateArg = args.find((arg) => arg.startsWith("--template="));
     const templatePath = templateArg?.slice("--template=".length);
     const input = templatePath ? readFileSync(templatePath, "utf8") : undefined;
-    if (templatePath) assert.equal(statSync(templatePath).mode & 0o077, 0, "template file must be private");
+    if (templatePath && process.platform !== "win32") assert.equal(statSync(templatePath).mode & 0o077, 0, "template file must be private");
     calls.push({ args, input, templatePath });
     if (args[1] === "get") {
       if (!item) throw new Error('"YNAB MCP hosted smoke token" isn\'t an item in the "Development" vault');
