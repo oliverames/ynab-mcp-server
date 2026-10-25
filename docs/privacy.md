@@ -1,6 +1,6 @@
 # Privacy Policy for MCP Server for YNAB
 
-Last Updated: October 9, 2026
+Last Updated: October 25, 2026
 
 MCP Server for YNAB is a local stdio MCP server that runs on the user's machine or in a user-controlled MCP host. It connects the user's MCP client to the YNAB API.
 
@@ -22,7 +22,7 @@ Authentication is configured by the user through one of these local mechanisms:
 
 - `YNAB_API_TOKEN`
 - `YNAB_API_TOKEN_FILE`
-- `YNAB_OP_PATH`
+- `YNAB_OP_PATH`, which resolves the token through the 1Password CLI. A successful lookup is cached for 10 minutes in a mode-600 file under `$XDG_CACHE_HOME/ynab-mcp-server/` or `~/.cache/ynab-mcp-server/` (mode-700 directory) so concurrent sessions prompt once. Set `YNAB_OP_CACHE=0` to turn the cache off.
 - Codex local plaintext settings in `~/.codex/config.toml`
 - Claude Code local plaintext settings in `~/.claude/settings.json`
 
@@ -43,7 +43,7 @@ The server redacts bearer tokens and authorization headers from surfaced errors.
 To erase locally persisted financial journal data, remove `~/.ynab-mcp-undo.json` after resolving any pending operations. Process exit clears its memory cache and previews. To stop future access:
 
 1. Remove the MCP server from the MCP host configuration.
-2. Delete any local token file or environment variable used for `YNAB_API_TOKEN`.
+2. Delete any local token file or environment variable used for `YNAB_API_TOKEN`, and the `ynab-mcp-server` folder in your cache directory if you used `YNAB_OP_PATH`.
 3. Revoke the personal access token in YNAB Developer Settings.
 
 For the hosted OAuth connector, use `https://ames-ynab.link/delete` to revoke connector grants and remove its consent-scoped encrypted credential, undo and durable operation records and legacy KV records.

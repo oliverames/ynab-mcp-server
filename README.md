@@ -279,7 +279,7 @@ Add `-e YNAB_ALLOW_WRITES=1` to enable write tools, and `-e YNAB_BUDGET_ID=...` 
 
 ### 1Password Token Lookup (Optional)
 
-If your token is stored in 1Password, set `YNAB_OP_PATH` instead of `YNAB_API_TOKEN`. The `op` CLI must be installed and authenticated in the environment that launches the MCP server.
+If your token is stored in 1Password, set `YNAB_OP_PATH` instead of `YNAB_API_TOKEN`. The `op` CLI must be installed and authenticated in the environment that launches the MCP server. A successful lookup is cached for 10 minutes so concurrent sessions prompt once; see [1Password Integration](#1password-integration) for the details and how to disable it.
 
 ```bash
 claude mcp add ynab --scope user \
@@ -627,6 +627,7 @@ Manual YNAB transfer fixes can replace one side of the pair with a new transacti
 | `YNAB_BUDGET_ID` | No | `last-used` | Default budget ID. If omitted, tools use YNAB's most recently accessed budget. Run `list_budgets` to find IDs. |
 | `YNAB_ALLOW_WRITES` | No | read-only | Set to `1` to register write tools. Any other value keeps the server read-only. |
 | `YNAB_OP_PATH` | No | (none) | 1Password secret reference for your API token. Used only if no direct token is configured. Can be provided through process env or agent settings. |
+| `YNAB_OP_CACHE` | No | on | Set to `0`, `false` or `off` to stop caching the `YNAB_OP_PATH` token on disk for 10 minutes. Read from process env only. See [1Password Integration](#1password-integration). |
 | `YNAB_DISABLE_AGENT_CONFIG_FALLBACK` | No | `0` | Set to `1` to stop the server from reading `~/.codex/config.toml` and `~/.claude/settings.json`. Intended for tests and tightly controlled runtimes. |
 | `YNAB_RATE_LIMIT_PER_HOUR` | No | `190` | Client-side rate limiter. Set to `0` to disable for controlled tests. |
 | `YNAB_RATE_LIMIT_BURST` | No | `10` | Maximum burst size before rate limiting pauses requests. |
@@ -681,7 +682,12 @@ If you store your YNAB token in [1Password CLI](https://developer.1password.com/
 }
 ```
 
-The server invokes `op read` once per process when it resolves `YNAB_OP_PATH`. MCP hosts can start a separate process for each session, so concurrent sessions can each prompt for 1Password authorization. The server does not share a token cache between processes.
+The server invokes `op read` when it resolves `YNAB_OP_PATH`. MCP hosts can start a separate process for each session, so concurrent sessions would otherwise each prompt for 1Password authorization. To avoid that, a successful lookup is kept for 10 minutes in a short-lived local cache, and processes that start inside that window read the cache instead of calling `op`.
+
+- **Where:** `$XDG_CACHE_HOME/ynab-mcp-server/` (when it is an absolute path) or `~/.cache/ynab-mcp-server/`. The directory is mode 700, and each file is mode 600. A file is named by the SHA-256 of the `op://` reference, so the reference is not visible in the name. The file contains the token in plaintext, which is the trade-off: the token is at rest in your cache directory for up to 10 minutes.
+- **When it is ignored:** the server skips a cache file or directory that is not owned by you, is group or world accessible, is a symlink, is unreadable, or is older than 10 minutes, and falls back to `op read`. It never logs the token, and `ynab_auth_status` shows `(short-lived local cache)` in `credential_source_label` when a cached token was used.
+- **Turn it off:** set `YNAB_OP_CACHE=0` (or `false` or `off`) in the server environment to read from 1Password on every start and write nothing to disk. The cache is also off on Windows, where the permission checks do not apply. To clear it now, delete `~/.cache/ynab-mcp-server/`.
+- **After rotating the token:** a cached copy keeps working for up to 10 minutes. Delete the cache directory, or restart after the window passes, to pick up the new token immediately.
 
 The fallback adds ~1-2s to startup. If `op` is unavailable or the item is not found, `ynab_auth_status` reports the lookup problem and returns setup guidance instead of letting a normal YNAB tool fail with a generic unauthorized error. If no token source is configured, the setup guide tells the calling agent to ask whether you have a token in 1Password or another password manager, request permission before editing agent config, and otherwise ask you to add `YNAB_API_TOKEN` to the appropriate Codex or Claude settings file.
 

@@ -17,6 +17,7 @@ import { z } from "zod";
 import * as ynab from "ynab";
 import { resolveIncomeCategoryIds, summarizeIncomeExpenseMilliunits, spendingTrends, forecastScheduledBalances, parseAnalyticsDate } from "./lib/analytics.mjs";
 import { createEntityCache } from "./lib/entity-cache.mjs";
+import { readCachedOpToken, writeCachedOpToken } from "./lib/op-token-cache.mjs";
 import { projectCollection } from "./lib/field-projections.mjs";
 
 // --- Init ---
@@ -125,23 +126,36 @@ function resolveYnabRuntimeConfig() {
   }
 
   if (!apiToken && values.YNAB_OP_PATH?.value) {
-    try {
-      apiToken = execFileSync(
-        "op", ["read", values.YNAB_OP_PATH.value],
-        { encoding: "utf-8", timeout: 10000, stdio: ["pipe", "pipe", "pipe"] }
-      ).trim();
+    const reference = values.YNAB_OP_PATH.value;
+    // Separate server processes share a short-lived local copy so concurrent
+    // MCP sessions do not each ask 1Password for authorization.
+    const cachedToken = readCachedOpToken(reference, { home: userHomeDir() });
+    if (cachedToken) {
+      apiToken = cachedToken;
       tokenSource = {
         source: "onepassword_cli",
-        source_label: "YNAB_OP_PATH via 1Password CLI",
+        source_label: "YNAB_OP_PATH via 1Password CLI (short-lived local cache)",
       };
-    } catch (e) {
-      // ENOENT means the `op` binary itself is absent (containers, hosted
-      // deployments like Glama) — name the real problem instead of a generic
-      // CLI error so the fix (use YNAB_API_TOKEN) is obvious.
-      const message = e?.code === "ENOENT"
-        ? "the 1Password CLI (op) is not installed in this environment, so YNAB_OP_PATH is unsupported here. Set YNAB_API_TOKEN instead."
-        : e.stderr?.toString().trim() || e.message || "unknown 1Password CLI error";
-      lookupErrors.push(`Could not read YNAB_OP_PATH via 1Password CLI: ${message}`);
+    } else {
+      try {
+        apiToken = execFileSync(
+          "op", ["read", reference],
+          { encoding: "utf-8", timeout: 10000, stdio: ["pipe", "pipe", "pipe"] }
+        ).trim();
+        tokenSource = {
+          source: "onepassword_cli",
+          source_label: "YNAB_OP_PATH via 1Password CLI",
+        };
+        writeCachedOpToken(reference, apiToken, { home: userHomeDir() });
+      } catch (e) {
+        // ENOENT means the `op` binary itself is absent (containers, hosted
+        // deployments like Glama) — name the real problem instead of a generic
+        // CLI error so the fix (use YNAB_API_TOKEN) is obvious.
+        const message = e?.code === "ENOENT"
+          ? "the 1Password CLI (op) is not installed in this environment, so YNAB_OP_PATH is unsupported here. Set YNAB_API_TOKEN instead."
+          : e.stderr?.toString().trim() || e.message || "unknown 1Password CLI error";
+        lookupErrors.push(`Could not read YNAB_OP_PATH via 1Password CLI: ${message}`);
+      }
     }
   }
 
