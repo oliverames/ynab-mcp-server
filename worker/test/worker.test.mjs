@@ -80,8 +80,9 @@ class MemoryKV {
     this.values.clear();
   }
 
-  async list() {
-    return new Map(this.values);
+  async list(options) {
+    const prefix = options?.prefix;
+    return new Map([...this.values].filter(([key]) => prefix === undefined || key.startsWith(prefix)));
   }
 
   async transaction(callback) {
@@ -1689,6 +1690,126 @@ test("encrypted hosted journal supports recovery across MCP sessions without dup
   assert.equal(amounts.get("fake-destination"), 1500);
   const raw = await env.YNAB_CREDENTIALS.storage().get(undoJournalKey(binding));
   assert.doesNotMatch(raw, /fake-source|fake-move|budgeted/);
+});
+
+async function connectHostedSession(env, binding, sessionName, fake, extra = {}) {
+  const [{ createYnabServer }, { Client }, { InMemoryTransport }] = await Promise.all([
+    import("../../index.js"),
+    import("@modelcontextprotocol/sdk/client/index.js"),
+    import("@modelcontextprotocol/sdk/inMemory.js"),
+  ]);
+  const { server } = createYnabServer({
+    ...hostedServerOptions(env, binding, sessionName),
+    defaultBudgetId: fake.budget("fake-token-a").id,
+    fetchImpl: fake.fetch,
+    ...extra,
+  });
+  const client = new Client({ name: `fake-${sessionName}`, version: "1.0.0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+  return {
+    async close() { await Promise.allSettled([client.close(), server.close()]); },
+    async preview(name, input) {
+      const result = await client.callTool({ name: "preview_write_tool", arguments: { tool_name: name, input } });
+      assert.notEqual(result.isError, true, JSON.stringify(result));
+      return result.structuredContent.result.preview_token;
+    },
+    write(name, input, previewToken) {
+      return client.callTool({ name, arguments: { ...input, previewToken, confirmed: true } });
+    },
+  };
+}
+
+test("hosted write previews survive a new MCP session for the same consent and stay single use", async (t) => {
+  const { FakeYnabHttpServer } = await import("../../test/support/fake-ynab.mjs");
+  const fake = await new FakeYnabHttpServer().start();
+  t.after(() => fake.close());
+  const env = credentialEnv();
+  const binding = await approveFakeConsent(env, { writes: true, access: "fake-token-a" });
+  const args = { transactionId: "fake-import", memo: "Synthetic cross-session edit" };
+  const sessions = [];
+  const open = async (name, extra) => { const session = await connectHostedSession(env, binding, name, fake, extra); sessions.push(session); return session; };
+  t.after(() => Promise.all(sessions.map((session) => session.close())));
+  const issuing = await open("session-a");
+  const approving = await open("session-b");
+  const token = await issuing.preview("update_transaction", args);
+  const written = await approving.write("update_transaction", args, token);
+  assert.notEqual(written.isError, true, JSON.stringify(written));
+  assert.equal(fake.writes().length, 1);
+  const third = await open("session-c");
+  assert.equal((await third.write("update_transaction", args, token)).isError, true, "a claimed preview cannot be replayed from any session");
+  assert.equal(fake.writes().length, 1);
+  const raw = JSON.stringify([...env.YNAB_CREDENTIALS.storage().values.entries()]);
+  assert.doesNotMatch(raw, new RegExp(token), "only a hash of the preview token is stored");
+});
+
+test("hosted write previews are bound to the consent, the exact plan and the expiry", async (t) => {
+  const { FakeYnabHttpServer } = await import("../../test/support/fake-ynab.mjs");
+  const fake = await new FakeYnabHttpServer().start();
+  t.after(() => fake.close());
+  const env = credentialEnv();
+  const binding = await approveFakeConsent(env, { writes: true, access: "fake-token-a" });
+  const otherClient = await approveFakeConsent(env, { client: "client-2", writes: true, access: "fake-token-a" });
+  const otherUser = await approveFakeConsent(env, { user: "user-2", writes: true, access: "fake-token-a" });
+  const args = { transactionId: "fake-import", memo: "Synthetic bound edit" };
+  let clock = 1_000_000;
+  const sessions = [];
+  const open = async (consent, name) => { const session = await connectHostedSession(env, consent, name, fake, { now: () => clock }); sessions.push(session); return session; };
+  t.after(() => Promise.all(sessions.map((session) => session.close())));
+  const issuing = await open(binding, "session-a");
+  // Another client's consent for the same YNAB user and another user cannot use the token.
+  const token = await issuing.preview("update_transaction", args);
+  assert.equal((await (await open(otherClient, "session-a")).write("update_transaction", args, token)).isError, true);
+  assert.equal((await (await open(otherUser, "session-a")).write("update_transaction", args, token)).isError, true);
+  assert.equal(fake.writes().length, 0);
+  // The foreign attempts did not consume the owner's preview, so a new session for the same consent can still use it.
+  const owner = await open(binding, "session-b");
+  assert.notEqual((await owner.write("update_transaction", args, token)).isError, true);
+  assert.equal(fake.writes().length, 1);
+  // A preview binds the exact plan: altered values fail in any session.
+  const reviewed = await issuing.preview("update_transaction", { ...args, memo: "Another reviewed memo" });
+  const altered = await owner.write("update_transaction", { ...args, memo: "Different memo" }, reviewed);
+  assert.equal(altered.isError, true, "an altered plan is rejected");
+  assert.equal(fake.writes().length, 1);
+  // Expiry holds across sessions, and an expired preview is not usable.
+  const expiring = await issuing.preview("update_transaction", args);
+  clock += 300_001;
+  assert.equal((await (await open(binding, "session-c")).write("update_transaction", args, expiring)).isError, true);
+  assert.equal(fake.writes().length, 1);
+});
+
+test("removing a consent removes its stored previews", async (t) => {
+  const { FakeYnabHttpServer } = await import("../../test/support/fake-ynab.mjs");
+  const fake = await new FakeYnabHttpServer().start();
+  t.after(() => fake.close());
+  const env = credentialEnv();
+  const binding = await approveFakeConsent(env, { writes: true, access: "fake-token-a" });
+  const session = await connectHostedSession(env, binding, "session-a", fake);
+  t.after(() => session.close());
+  await session.preview("update_transaction", { transactionId: "fake-import", memo: "Synthetic cleanup" });
+  const storage = env.YNAB_CREDENTIALS.storage();
+  assert.equal([...storage.values.keys()].filter((key) => key.startsWith("ynab_preview:")).length, 1);
+  assert.equal((await credentialStoreRequest(env, binding.ynabUserId, "/remove", { binding })).status, 204);
+  assert.equal([...storage.values.keys()].filter((key) => key.startsWith("ynab_preview:")).length, 0);
+});
+
+test("stored previews drop expired entries and cap each consent at its newest 100", async () => {
+  const env = credentialEnv();
+  const binding = await approveFakeConsent(env, { writes: true });
+  const hex = (n) => n.toString(16).padStart(64, "0");
+  const put = (n, expires, now) => credentialStoreRequest(env, binding.ynabUserId, "/preview/put", { binding, tokenHash: hex(n), fingerprint: hex(n), expires, now });
+  const claim = (n) => credentialStoreRequest(env, binding.ynabUserId, "/preview/claim", { binding, tokenHash: hex(n) });
+  for (let n = 1; n <= 105; n += 1) assert.equal((await put(n, 10_000 + n, 1000)).status, 204);
+  const keys = () => [...env.YNAB_CREDENTIALS.storage().values.keys()].filter((key) => key.startsWith("ynab_preview:"));
+  assert.equal(keys().length, 100);
+  assert.equal((await claim(5)).status, 404, "the oldest previews are evicted first");
+  assert.equal((await claim(6)).status, 200);
+  assert.equal((await claim(6)).status, 404, "a claim is single use");
+  // Storing after everything expired leaves only the new entry.
+  assert.equal((await put(200, 50_000, 20_000)).status, 204);
+  assert.equal(keys().length, 1);
+  assert.equal((await put(1, 5, 1)).status, 204);
+  assert.equal((await credentialStoreRequest(env, binding.ynabUserId, "/preview/put", { binding, tokenHash: "not-a-hash", fingerprint: hex(1), expires: 5, now: 1 })).status, 400);
 });
 
 test("full MCP sessions keep client scope and HTTP credentials isolated", async (t) => {

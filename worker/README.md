@@ -92,15 +92,18 @@ longer usable, instead of blindly repeating the move or merge.
 The private credential object serializes refresh across MCP sessions, but a
 successful upstream rotation followed by a lost response or storage failure can
 still require reauthorization. It does not make YNAB OAuth or financial writes
-transactional. New ordinary budget caches and previews live only in the MCP
-session's memory; durable operation records retain relevant before/after values
-for recovery and undo, and are encrypted with the journal.
+transactional. New ordinary budget caches live only in the MCP session's
+memory. Write previews are kept in the consent's credential object as a token
+hash, plan fingerprint and expiry, so an approved write works when the client
+opens a new MCP session per call; they are single-use and bound to the consent.
+Durable operation records retain relevant before/after values for recovery and
+undo, and are encrypted with the journal.
 Encrypted journals use atomically committed 512 KiB ciphertext chunks, with a
 16 MiB encrypted-journal bound, to avoid SQLite's single-value storage limit.
 Storage failures are surfaced; they never authorize an automatic financial retry.
 
 The agent's optional durable MCP response replay is disabled so ordinary
-financial response bodies and previews are not saved as stream events. If a
+financial response bodies and preview plans are not saved as stream events. If a
 stream disconnects, clients can reconnect and request fresh reads. A write with
 an uncertain result requires the encrypted operation journal, a fresh preview,
 and explicit approval before recovery.

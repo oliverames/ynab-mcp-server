@@ -10,10 +10,13 @@ import {
   saveTokenRecord,
   tokenRecordKey,
   undoJournalKey,
+  writePreviewKeyPrefix,
 } from "./ynab-oauth.js";
 
 const JOURNAL_CHUNK_SIZE = 512 * 1024;
 const MAX_JOURNAL_CHUNKS = 32;
+const MAX_STORED_PREVIEWS = 100;
+const SHA256_HEX = /^[0-9a-f]{64}$/;
 
 function journalChunkCount(raw) {
   const header = JSON.parse(raw);
@@ -50,6 +53,37 @@ async function persistStoredJournal(storage, key, encrypted, previousRaw) {
     for (let index = chunks; index < previousChunks; index += 1) await txn.delete(`${key}:chunk:${index}`);
     await txn.put(key, JSON.stringify({ storageVersion: 2, chunks }));
   });
+}
+
+// Stored previews are a token hash, a plan fingerprint and an expiry. Expired
+// entries are dropped whenever a new one is stored, and the oldest goes first
+// when a consent reaches its cap.
+async function storePreview(storage, binding, body) {
+  if (!SHA256_HEX.test(body.tokenHash) || !SHA256_HEX.test(body.fingerprint)
+    || !Number.isFinite(body.expires) || !Number.isFinite(body.now)) return new Response(null, { status: 400 });
+  const prefix = writePreviewKeyPrefix(binding);
+  await storage.transaction(async (txn) => {
+    const live = [];
+    for (const [key, raw] of await txn.list({ prefix })) {
+      let entry;
+      try { entry = JSON.parse(raw); } catch { entry = null; }
+      if (!entry || !(entry.expires > body.now)) await txn.delete(key);
+      else live.push({ key, expires: entry.expires });
+    }
+    live.sort((a, b) => a.expires - b.expires);
+    for (const { key } of live.slice(0, Math.max(0, live.length - MAX_STORED_PREVIEWS + 1))) await txn.delete(key);
+    await txn.put(`${prefix}${body.tokenHash}`, JSON.stringify({ fingerprint: body.fingerprint, expires: body.expires }));
+  });
+  return new Response(null, { status: 204 });
+}
+
+async function claimPreview(storage, binding, body) {
+  if (!SHA256_HEX.test(body.tokenHash)) return new Response(null, { status: 400 });
+  const key = `${writePreviewKeyPrefix(binding)}${body.tokenHash}`;
+  const raw = await storage.get(key);
+  if (!raw) return new Response(null, { status: 404 });
+  await storage.delete(key);
+  return new Response(raw, { headers: { "Content-Type": "application/json" } });
 }
 
 export class CredentialStoreCore {
@@ -107,11 +141,14 @@ export class CredentialStoreCore {
       const tokens = await readTokenRecord(this.storage, binding, this.env.DATA_ENCRYPTION_KEY);
       if (!tokens) return new Response(null, { status: 401 });
       if (path === "/exists") return new Response(null, { status: 204 });
+      if (path === "/preview/put") return storePreview(this.storage, binding, body);
+      if (path === "/preview/claim") return claimPreview(this.storage, binding, body);
       if (path === "/remove") {
         const journalKey = undoJournalKey(binding);
         const journalRaw = await this.storage.get(journalKey);
         const chunks = journalRaw ? journalChunkCount(journalRaw) : 0;
         await this.storage.transaction(async (txn) => {
+          await txn.delete([...(await txn.list({ prefix: writePreviewKeyPrefix(binding) })).keys()]);
           await txn.delete(tokenRecordKey(binding));
           await txn.delete(journalKey);
           for (let index = 0; index < chunks; index += 1) await txn.delete(`${journalKey}:chunk:${index}`);

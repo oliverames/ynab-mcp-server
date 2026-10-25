@@ -93,6 +93,17 @@ The hosted connector stores an independent credential for each final consent:
 - Commit encrypted journal chunks atomically (512 KiB per chunk, 16 MiB maximum
   encrypted journal), so an accumulated history need not fit SQLite's
   [2 MB key/value limit](https://developers.cloudflare.com/durable-objects/platform/limits/).
+- Store write previews per consent credential in the same Durable Object. A
+  stored preview holds only a SHA-256 hash of the token, the plan fingerprint
+  and the expiry. It is bound to the consent (YNAB user, client and credential),
+  not to the MCP session, because some hosted clients (ChatGPT's connector
+  gateway, for one) open a new MCP session for every tool call. The five-minute
+  expiry, the fresh-state fingerprint check and the separate `confirmed: true`
+  approval are unchanged. The object serializes requests, so a claim reads and
+  deletes in one step and each preview is single-use. Each consent keeps at most
+  100 previews, dropping expired entries first and the oldest after that.
+  Removing a consent removes its previews; deleting a user's data removes them
+  all. Local stdio keeps previews in process memory, bound to the MCP session.
 - Never expose YNAB access or refresh tokens to the MCP host or model context.
 
 The `v3` Worker migration adds `YNAB_CREDENTIALS`. Older grants with only a YNAB
@@ -118,8 +129,10 @@ grant is revoked when visible, but eventually consistent provider KV listing
 may temporarily retain an unusable grant. Deleted credentials cannot be used
 for API requests; retry deletion to remove residual provider records.
 
-Ordinary merged budget caches and write previews are held in session memory.
-Durable recovery/undo records contain the relevant operation identifiers and
+Ordinary merged budget caches are held in session memory. Write previews are
+stored durably per consent as described above, as a token hash, plan fingerprint
+and expiry only; the plan itself is never stored and is read fresh again before
+any write. Durable recovery/undo records contain the relevant operation identifiers and
 before/after values. All journal contents are encrypted; a preview token is not
 human consent and does not authorize a write without explicit user approval.
 The MCP agent disables durable response-event replay; interrupted reads may be
@@ -140,7 +153,7 @@ flow and a newly approved preview.
   See "Edge configuration (Cloudflare)" below.
 - Run read-only smoke tests through `/mcp`.
 - If writes are enabled, run the batch category+approval smoke against a dedicated test budget and assert post-write refetch verification.
-- Require an exact expiring session-bound preview token and separate `confirmed: true` human approval for every write. A preview is not consent. Validate stale state, conflicts, partial outcomes and credential/session boundaries with synthetic fixtures before any approved deployment.
+- Require an exact expiring consent-bound preview token and separate `confirmed: true` human approval for every write. A preview is not consent. Validate stale state, conflicts, partial outcomes and credential/session boundaries with synthetic fixtures before any approved deployment.
 
 ## Edge configuration (Cloudflare)
 

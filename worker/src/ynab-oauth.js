@@ -43,6 +43,12 @@ export function undoJournalKey(binding) {
   return typeof binding === "string" ? `ynab_undo:${binding}` : `ynab_undo:v2:${credentialIdentity(binding)}`;
 }
 
+// Hosted write previews live beside the consent's credential and journal so
+// they survive MCP clients that open a new session for every tool call.
+export function writePreviewKeyPrefix(binding) {
+  return `ynab_preview:v2:${credentialIdentity(binding)}:`;
+}
+
 export function credentialBindingsMatch(a, b) {
   return isCredentialBinding(a) && isCredentialBinding(b)
     && ["credentialVersion", "ynabUserId", "clientId", "credentialId", "writesEnabled"].every((key) => a[key] === b[key]);
@@ -269,6 +275,25 @@ export async function credentialStoreRequest(env, ynabUserId, path, value) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ynabUserId, ...value }),
   });
+}
+
+// Durable write-preview store for one consent: a token hash, the plan
+// fingerprint and the expiry. The Durable Object serializes requests, so a claim
+// reads and deletes in one step and each preview stays single-use.
+export function createKvPreviewStore(env, binding) {
+  credentialIdentity(binding);
+  return {
+    async put({ tokenHash, fingerprint, expires, now }) {
+      const response = await credentialStoreRequest(env, binding.ynabUserId, "/preview/put", { binding, tokenHash, fingerprint, expires, now });
+      if (!response.ok) throw new Error("Could not store the write preview. Request a new preview.");
+    },
+    async claim(tokenHash) {
+      const response = await credentialStoreRequest(env, binding.ynabUserId, "/preview/claim", { binding, tokenHash });
+      if (response.status === 404) return null;
+      if (!response.ok) throw new Error("Could not read the stored write preview. Request a new preview.");
+      return response.json();
+    },
+  };
 }
 
 export async function getFreshAccessToken(env, binding) {

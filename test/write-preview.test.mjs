@@ -10,25 +10,25 @@ process.env.YNAB_API_TOKEN = 'fake-preview-test-token';
 const { createFsJournal, transactionUpdateMismatches } = await import('../index.js');
 const plan = { tool:'update_transactions', budget:'fake-budget', ids:['fake-row'], before:{amount:-2,category:'fake-food',memo:'Untrusted fixture'}, after:{category:'fake-travel'} };
 
-test('previews expire, bind exact state and become single-use on stale or failed preparation', () => {
+test('previews expire, bind exact state and become single-use on stale or failed preparation', async () => {
   let clock = 1000;
   const manager = createWritePreviews({tenantId:'fake-tenant',sessionId:'fake-session',ttlMs:100,now:()=>clock});
-  const expired = manager.issue(plan); clock += 100;
-  assert.throws(()=>manager.consume(expired.preview_token,plan),/expired/);
-  const stale = manager.issue(plan);
-  assert.throws(()=>manager.consume(stale.preview_token,{...plan,ids:['different-row']}),/Stale preview/);
-  assert.throws(()=>manager.consume(stale.preview_token,plan),/already used/);
-  const failed = manager.issue(plan); const validate = manager.claim(failed.preview_token);
-  assert.throws(()=>manager.claim(failed.preview_token),/already used/);
+  const expired = await manager.issue(plan); clock += 100;
+  await assert.rejects(manager.consume(expired.preview_token,plan),/expired/);
+  const stale = await manager.issue(plan);
+  await assert.rejects(manager.consume(stale.preview_token,{...plan,ids:['different-row']}),/Stale preview/);
+  await assert.rejects(manager.consume(stale.preview_token,plan),/already used/);
+  const failed = await manager.issue(plan); const validate = await manager.claim(failed.preview_token);
+  await assert.rejects(manager.claim(failed.preview_token),/already used/);
   clock += 100; assert.throws(()=>validate(plan),/expired while/);
 });
 
-test('preview capability cannot move to another tenant/session or altered values', () => {
+test('preview capability cannot move to another tenant/session or altered values', async () => {
   const first = createWritePreviews({tenantId:'a',sessionId:'one'});
   const second = createWritePreviews({tenantId:'b',sessionId:'one'});
-  const token = first.issue(plan).preview_token;
-  assert.throws(()=>second.consume(token,plan),/another authenticated session/);
-  assert.throws(()=>first.consume(token,{...plan,after:{category:'different'}}),/Stale/);
+  const token = (await first.issue(plan)).preview_token;
+  await assert.rejects(second.consume(token,plan),/another authenticated session/);
+  await assert.rejects(first.consume(token,{...plan,after:{category:'different'}}),/Stale/);
 });
 
 test('split readback validates count, exact amount and requested category independently of generated IDs/order', () => {
