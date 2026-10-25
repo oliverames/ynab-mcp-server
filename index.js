@@ -602,7 +602,7 @@ const {
   previewStore = null,
   now = Date.now,
   runtime = {},
-  serverInfo = { name: "YNAB Local", version: "6.0.1" },
+  serverInfo = { name: "YNAB Local", version: "6.1.0" },
 } = options;
 
 // This state belongs to this factory invocation only. Hosted callers supply
