@@ -1,6 +1,8 @@
 # Container image for registry-hosted builds (e.g. Glama) and local use.
 # The server speaks MCP over stdio; pass credentials via environment:
 #   docker run -i -e YNAB_API_TOKEN=... -e YNAB_ALLOW_WRITES=0 <image>
+# Optional: -e SENTRY_DSN=... sends scrubbed error reports to Sentry. Unset
+# means no reporting; see SENTRY_DSN in the README.
 FROM node:22-alpine
 
 WORKDIR /app

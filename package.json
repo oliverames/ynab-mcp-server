@@ -61,6 +61,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
+    "@sentry/node": "11.9.0",
     "ynab": "^4.5.0",
     "zod": "^4.4.3"
   },

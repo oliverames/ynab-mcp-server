@@ -1,5 +1,9 @@
 #!/usr/bin/env node
 
+// Must stay the first import: initializes optional Sentry reporting
+// (SENTRY_DSN) before the rest of the server loads.
+import "./lib/instrument.mjs";
+import { captureFatalError, captureToolError, errorReportingEnabled, flushErrorReporting } from "./lib/error-reporting.mjs";
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -603,6 +607,9 @@ const {
   now = Date.now,
   runtime = {},
   serverInfo = { name: "YNAB Local", version: "6.1.0" },
+  // Called with (toolName, error) when a tool handler fails unexpectedly.
+  // Only the stdio entry point passes one; the hosted Worker does not.
+  onToolError = null,
 } = options;
 
 // This state belongs to this factory invocation only. Hosted callers supply
@@ -613,6 +620,7 @@ const invalidateReadCache = (budgetId) => entityCache.invalidate(budgetId);
 const journal = createSerializedJournal(journalAdapter);
 const operationRunner = createDurableOperationRunner({ journal, readStep: readOperationStep, writeStep: writeOperationStep });
 const writeContext = new AsyncLocalStorage();
+const toolErrorContext = onToolError ? new AsyncLocalStorage() : null;
 const previews = createWritePreviews({ tenantId, sessionId, ttlMs: previewTtlMs, now, store: previewStore });
 let writeQueue = Promise.resolve();
 function serializeWrite(fn) {
@@ -1317,6 +1325,7 @@ async function run(fn) {
   try {
     return await fn();
   } catch (e) {
+    reportToolError(e);
     const detail = e?.error?.detail;
     const name = e?.error?.name;
     const msg = detail
@@ -1324,6 +1333,30 @@ async function run(fn) {
       : (e?.message || String(e));
     return { content: [{ type: "text", text: `Error: ${withErrorHint(sanitizeErrorMessage(msg))}` }], isError: true };
   }
+}
+
+// Report a failed tool call by tool name only; arguments are never passed.
+function reportToolError(error) {
+  if (!onToolError) return;
+  try {
+    onToolError(toolErrorContext.getStore()?.toolName ?? "unknown", error);
+  } catch {
+    // Reporting must never change a tool's result.
+  }
+}
+
+// Track the active tool name for reportToolError, and report handler errors
+// that escape run() before the MCP SDK turns them into an error result.
+function withToolErrorReporting(name, handler) {
+  if (!onToolError) return handler;
+  return (args, extra) => toolErrorContext.run({ toolName: name }, async () => {
+    try {
+      return await handler(args, extra);
+    } catch (error) {
+      reportToolError(error);
+      throw error;
+    }
+  });
 }
 
 function missingCredentialsResult() {
@@ -1942,7 +1975,7 @@ server.registerTool = (name, config, handler) => {
         idempotentHint: true,
         openWorldHint: false,
       },
-    }, (args, extra) => withStructuredContent(handler, args, extra));
+    }, withToolErrorReporting(name, (args, extra) => withStructuredContent(handler, args, extra)));
   }
 
   if (!writesEnabled()) {
@@ -1959,12 +1992,12 @@ server.registerTool = (name, config, handler) => {
       idempotentHint: writeMetadata.idempotentHint,
       openWorldHint: false,
     },
-  }, async (args, extra) => {
+  }, withToolErrorReporting(name, async (args, extra) => {
     if (!writesEnabled()) {
       return writeDisabledResult(name);
     }
     return withStructuredContent(handler, args, extra);
-  });
+  }));
 };
 
 registerTool("preview_write_tool", {
@@ -4743,6 +4776,7 @@ const defaultInstance = IS_CLOUDFLARE_WORKERS ? null : createYnabServer({
   defaultBudgetId: DEFAULT_BUDGET_ID,
   writesEnabled: runtimeConfig.values.YNAB_ALLOW_WRITES?.value === "1",
   journal: IS_CLOUDFLARE_WORKERS ? null : createFsJournal(undoJournalPath()),
+  onToolError: errorReportingEnabled() ? captureToolError : null,
   runtime: {
     tokenSource: runtimeConfig.tokenSource,
     detected_agent: runtimeConfig.detected_agent,
@@ -4854,15 +4888,30 @@ export {
 // are meaningless; the Worker consumer calls createYnabServer itself.
 
 if (!IS_CLOUDFLARE_WORKERS) {
+  // Exit after a bounded Sentry flush; without SENTRY_DSN the flush is a
+  // resolved no-op and these exit immediately as before.
+  const exitAfterFlush = (code) => {
+    flushErrorReporting(2000).finally(() => process.exit(code));
+  };
+
   process.on("uncaughtException", (err) => {
     console.error("Uncaught exception:", sanitizeErrorMessage(err?.stack || err));
-    process.exit(1);
+    captureFatalError("uncaughtException", err);
+    exitAfterFlush(1);
   });
 
   process.on("unhandledRejection", (reason) => {
     console.error("Unhandled promise rejection:", sanitizeErrorMessage(reason?.stack || reason));
-    process.exit(1);
+    captureFatalError("unhandledRejection", reason);
+    exitAfterFlush(1);
   });
+
+  // Signal handlers replace Node's default termination, so install them only
+  // when there are queued Sentry events to flush.
+  if (errorReportingEnabled()) {
+    process.once("SIGTERM", () => exitAfterFlush(143));
+    process.once("SIGINT", () => exitAfterFlush(130));
+  }
 
   // YNAB_MCP_NO_AUTOSTART=1 lets tests import this module for its exported
   // helpers without binding an MCP server to stdio.

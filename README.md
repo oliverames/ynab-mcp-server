@@ -275,7 +275,7 @@ docker build -t mcp-server-for-ynab .
 docker run -i --rm -e YNAB_API_TOKEN=your-token-here mcp-server-for-ynab
 ```
 
-Add `-e YNAB_ALLOW_WRITES=1` to enable write tools, and `-e YNAB_BUDGET_ID=...` for a default budget.
+Add `-e YNAB_ALLOW_WRITES=1` to enable write tools, `-e YNAB_BUDGET_ID=...` for a default budget, and `-e SENTRY_DSN=...` to turn on optional error reporting (see [Environment Variables](#environment-variables)).
 
 ### 1Password Token Lookup (Optional)
 
@@ -634,6 +634,7 @@ Manual YNAB transfer fixes can replace one side of the pair with a new transacti
 | `YNAB_HTTP_TIMEOUT_MS` | No | `30000` | Per-request timeout in milliseconds. Set to `0` to disable the timeout. |
 | `YNAB_HTTP_RETRIES` | No | `2` | Automatic retries for retryable failures. HTTP 429 (rate limited) retries any request because YNAB rejected it before processing; 502/503/504 and network errors retry reads (`GET`/`HEAD`) only. Honors `Retry-After`. Set to `0` to disable. |
 | `YNAB_MAX_RESPONSE_BYTES` | No | `8388608` | Maximum direct-fetch response size for newer endpoints. |
+| `SENTRY_DSN` | No | (none) | Sentry DSN for error reporting from the local server. Unset means no reporting and `@sentry/node` is never loaded. When set, unexpected tool failures and fatal errors are sent with the error type, a fixed message, stack frames, the tool name and YNAB's error code only; tool arguments, error messages, response bodies, breadcrumbs, user and request data are dropped before sending. Read from process env only; the hosted connector does not use it. |
 
 *`YNAB_API_TOKEN` is required unless `YNAB_API_TOKEN_FILE` or `YNAB_OP_PATH` is set. These values may come from direct process env, Codex config, or Claude settings.
 
@@ -754,7 +755,7 @@ The local package, hosted OAuth connector, and host-specific plugin manifests ha
 
 ### Offline Tests (no YNAB account required)
 
-Unit tests cover the pure helpers (amount conversion, ID normalization, update verification, config parsing, URL safety, executor input validation), and the safety-model tests boot the real server over stdio to verify the read-only default, write-tool gating, annotations, and credential fallback behavior:
+Unit tests cover the pure helpers (amount conversion, ID normalization, update verification, config parsing, URL safety, executor input validation, Sentry error-report scrubbing), and the safety-model tests boot the real server over stdio to verify the read-only default, write-tool gating, annotations, and credential fallback behavior:
 
 ```bash
 npm run test:unit

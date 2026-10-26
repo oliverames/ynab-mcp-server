@@ -32,6 +32,8 @@ The server does not ask for, handle, or store bank credentials or other financia
 
 This package sends YNAB API requests only to `https://api.ynab.com`. Outbound API requests are host-pinned to `api.ynab.com`, HTTPS-only, and redirects are not followed.
 
+Error reporting is off by default. If the person running the package sets `SENTRY_DSN`, unexpected tool failures and fatal errors are reported to that Sentry project with the error type, a fixed message, stack frames, the tool name and YNAB's error code. Tool arguments, error messages, YNAB response bodies, breadcrumbs, user data and request data are removed before anything is sent, so no budget, payee, amount or memo text is included. Sentry may still derive a coarse location from the connection's IP address unless the receiving project is set to prevent storing IP addresses.
+
 The package does not sell YNAB user data and does not intentionally share YNAB user data with third parties. The connected MCP host and AI assistant may receive tool results because that is the purpose of the MCP connection; users should review their MCP host's own privacy and retention policies.
 
 ## Logs and Diagnostics
