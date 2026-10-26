@@ -310,6 +310,24 @@ app.get("/apple-touch-icon.png", (c) => worksWithYnabAsset(c, {
   contentType: "image/png",
   sha256: CONNECTOR_APPLE_TOUCH_ICON_PNG_SHA256,
 }));
+// Claude draws custom connector icons from Google's favicon service for the
+// registrable domain, which only knows domains Google has crawled. Without an
+// origin robots.txt, Cloudflare serves its comment-only managed file.
+app.get("/robots.txt", (c) => {
+  c.header("Cache-Control", "public, max-age=3600");
+  return c.text(`User-agent: *\nAllow: /\n\nSitemap: ${pageOptions(c).origin}/sitemap.xml\n`);
+});
+app.get("/sitemap.xml", (c) => {
+  const { origin } = pageOptions(c);
+  c.header("Content-Type", "application/xml; charset=utf-8");
+  c.header("Cache-Control", "public, max-age=3600");
+  return c.body(`<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>${origin}/</loc></url>
+  <url><loc>${origin}/privacy</loc></url>
+</urlset>
+`);
+});
 app.get("/privacy", (c) => html(c, privacyPage(pageOptions(c))));
 app.get("/delete", async (c) => html(
   c,
