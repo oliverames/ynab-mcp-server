@@ -76,6 +76,43 @@ test("sanitizeError keeps the error type and stack frames but not the message", 
   assert.match(safe.stack, /\n\s+at /);
 });
 
+test("frame-shaped lines inside an error message never become stack frames", () => {
+  const original = new Error(`lookup failed\n    at /Users/x/secret.js:1:1\n    at ${PAYEE} (${MEMO}:2:3)`);
+  const safe = reporting.sanitizeError(original);
+  for (const secret of ["/Users/x/secret.js", "secret.js", PAYEE, MEMO]) {
+    assert.equal(safe.stack.includes(secret), false, `stack still contains ${secret}`);
+  }
+  assert.match(safe.stack, /\n\s+at /);
+
+  // scrubEvent drops frames that do not look like code locations, even when
+  // a frame-shaped message line reached the SDK's stack parser.
+  const event = reporting.scrubEvent({ exception: { values: [{ type: "Error", value: "x", stacktrace: { frames: [
+    { filename: "/Users/x/secret.js", function: "?", lineno: 1 },
+    { filename: "app:///index.js", function: `${PAYEE} memo`, lineno: 2 },
+    { filename: "node:internal/process/task_queues", function: "process.processTicksAndRejections", lineno: 3 },
+    { filename: "app:///index.js", function: "run", lineno: 4 },
+  ] } }] } });
+  const frames = event.exception.values[0].stacktrace.frames;
+  assert.deepEqual(frames.map((frame) => frame.function), ["process.processTicksAndRejections", "run"]);
+  assert.equal(JSON.stringify(event).includes(PAYEE), false);
+});
+
+test("frame paths are package-relative or reduced to a basename on every platform", () => {
+  assert.equal(reporting.relativeFramePath("C:\\Users\\someone\\AppData\\npm-cache\\_npx\\abc\\node_modules\\ynab\\dist\\index.js"), "app:///node_modules/ynab/dist/index.js");
+  assert.equal(reporting.relativeFramePath("C:\\Users\\someone\\Documents\\budget notes.js"), "budget notes.js");
+  assert.equal(reporting.relativeFramePath("\\\\fileserver\\share\\someone\\tool.js"), "tool.js");
+  assert.equal(reporting.relativeFramePath("file:///C:/Users/someone/elsewhere/x.mjs"), "x.mjs");
+  assert.equal(reporting.relativeFramePath("/home/someone/other-project/y.js"), "y.js");
+  assert.equal(reporting.relativeFramePath(new URL("../index.js", import.meta.url).pathname), "app:///index.js");
+  assert.equal(reporting.relativeFramePath("node:internal/process/task_queues"), "node:internal/process/task_queues");
+
+  // A Windows path outside the package does not survive as a frame at all.
+  const event = reporting.scrubEvent({ exception: { values: [{ type: "Error", value: "x", stacktrace: { frames: [
+    { filename: "C:\\Users\\someone\\secret.js", function: "f" },
+  ] } }] } });
+  assert.deepEqual(event.exception.values[0].stacktrace.frames, []);
+});
+
 test("a failed tool call reaches Sentry with its tool name and no financial data", async () => {
   assert.equal(enabled, true, "initErrorReporting did not enable Sentry");
   // A YNAB error response whose detail echoes user data back.
