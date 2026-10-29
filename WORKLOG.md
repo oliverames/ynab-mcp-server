@@ -1,5 +1,11 @@
 # Worklog
 
+## October 28, 2026: offline default test command
+
+Fixed [#43](https://github.com/oliverames/ynab-mcp-server/issues/43): `npm test` now runs the existing offline unit, safety-model and synthetic agent checks. The live integration runner is available explicitly through `npm run test:live`, and the README distinguishes the two. The live runner and its exact-preview, interactive consent helper are unchanged; the earlier automated release check correctly refused writes rather than approving them.
+
+The same 262 tests passed on Node 20.20.2 and 26.12.1; Node 20 also counts two support modules as test entries. The safety-model checks and all seven synthetic agent fixtures passed on each runtime. Credential fallback was disabled, credential references and Sentry DSN were blank, and no live financial API call ran. Existing noninteractive refusal and separate-consent regressions passed. Release consistency and whitespace checks passed. Version 6.1.1 remains prepared for publication during the final kitchensync; no package publication or Worker deployment ran for this repair.
+
 ## October 28, 2026: Hono adapter security patch
 
 Prepared 6.1.1 with the existing Hono Node adapter overrides and both lockfiles raised to 2.1.5 for [GHSA-rmxm-3fg6-px4f](https://github.com/advisories/GHSA-rmxm-3fg6-px4f). The Node 20 minimum and other dependency versions remain unchanged, and the server and plugin version carriers agree.

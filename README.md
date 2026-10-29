@@ -758,12 +758,11 @@ The local package, hosted OAuth connector, and host-specific plugin manifests ha
 Unit tests cover the pure helpers (amount conversion, ID normalization, update verification, config parsing, URL safety, executor input validation, Sentry error-report scrubbing), and the safety-model tests boot the real server over stdio to verify the read-only default, write-tool gating, annotations, and credential fallback behavior:
 
 ```bash
-npm run test:unit
-npm run test:safety
+npm test
 cd worker && npm test
 ```
 
-The root suites run in CI (`.github/workflows/ci.yml`) on Node 20, 22, and 24 for pushes to main and every pull request, along with `release:check` and a credential-free MCP smoke test. The Worker suite covers consent-page escaping, OAuth state/PKCE, encrypted consent-scoped Durable Object credentials and CAS journals, multi-client/multi-user boundaries, refresh rotation, failed authorization rollback, and ownership-verified deletion. Legacy shared grants require deliberate reconnection after deployment.
+`npm test` runs the existing unit tests, safety-model checks and synthetic agent fixtures. The root suites run in CI (`.github/workflows/ci.yml`) on Node 20, 22, and 24 for pushes to main and every pull request, along with `release:check` and a credential-free MCP smoke test. The Worker suite covers consent-page escaping, OAuth state/PKCE, encrypted consent-scoped Durable Object credentials and CAS journals, multi-client/multi-user boundaries, refresh rotation, failed authorization rollback, and ownership-verified deletion. Legacy shared grants require deliberate reconnection after deployment.
 
 `npm run test:eval` runs scripted synthetic agent trajectories through real MCP and loopback fake HTTP. It makes no model-provider calls and does not claim to benchmark model reasoning. The stateful fake suite covers imports/splits, historical delta cache, applied-write timeouts, partial failures, stale previews, undo conflicts and malicious memo instructions. See [harness details](docs/testing-harness.md) and the [approved coverage checklist](docs/improvement-coverage.md).
 
@@ -772,12 +771,12 @@ The root suites run in CI (`.github/workflows/ci.yml`) on Node 20, 22, and 24 fo
 The integration test suite runs against a live YNAB budget. Most write tests create temporary transactions and delete or restore them, but category and category group creation is not reversible through the public API and is skipped unless explicitly enabled.
 
 ```bash
-YNAB_API_TOKEN=your-token YNAB_BUDGET_ID=your-budget-id npm test
+YNAB_API_TOKEN=your-token YNAB_BUDGET_ID=your-budget-id npm run test:live
 ```
 
 Use `YNAB_TEST_BUDGET_ID` to target a dedicated test budget without changing your server default. To include category and category group creation coverage, run with `YNAB_RUN_NONREVERSIBLE_TESTS=1`.
 
-Every live write in `npm test` and `smoke:batch-verify`, including cleanup or restoration, displays a fresh exact preview and requires you to type `yes` in an interactive terminal. Environment flags only expose tools; they do not approve writes. Without a terminal, write calls fail before execution while read calls remain available. If cleanup is declined or a preview becomes stale, inspect the reported test transaction in YNAB. Pending bank imports cannot be previewed exactly and must be performed in YNAB.
+Every live write in `npm run test:live` and `smoke:batch-verify`, including cleanup or restoration, displays a fresh exact preview and requires you to type `yes` in an interactive terminal. Environment flags only expose tools; they do not approve writes. Without a terminal, write calls fail before execution while read calls remain available. If cleanup is declined or a preview becomes stale, inspect the reported test transaction in YNAB. Pending bank imports cannot be previewed exactly and must be performed in YNAB.
 
 Tests cover all tool categories: reads, reversible writes, bulk operations, search, split transactions, scheduled transaction CRUD with fetch-then-merge verification, money movements, and payee locations.
 
