@@ -4,7 +4,9 @@
 
 Prepared 6.1.1 with the existing Hono Node adapter overrides and both lockfiles raised to 2.1.5 for [GHSA-rmxm-3fg6-px4f](https://github.com/advisories/GHSA-rmxm-3fg6-px4f). The Node 20 minimum and other dependency versions remain unchanged, and the server and plugin version carriers agree.
 
-Both full audits report zero vulnerabilities. All 44 scoped consent, transport, credential-cache and reporting tests pass on Node 20.20.2 and 26.12.1; 47 Worker auth/consent tests pass. Release consistency, Node 20 stdio enumeration and the Worker bundle dry run pass. Public npm delivery remains for final kitchensync. The existing Worker deployment result and rollback version will be recorded after the security cutover; no live financial operation ran during these checks.
+Both full audits report zero vulnerabilities. All 44 scoped consent, transport, credential-cache and reporting tests pass on Node 20.20.2 and 26.12.1; 47 Worker auth/consent tests pass. Release consistency, Node 20 stdio enumeration and the Worker bundle dry run pass. Public npm delivery remains for final kitchensync. No live financial operation ran during these checks.
+
+Deployed source `861a032` to the existing YNAB Worker as `16af328f-9333-4d0f-a8d1-2b2b380ad1a5` at 100% traffic, replacing rollback version `a97bd34d-bd9d-4200-aeed-ab9060a1f340`. The Ames Consulting account, existing resources, routes and variables were preserved, with no storage migration. Homepage and OAuth metadata return 200, unauthenticated MCP returns 401, hostile Origin returns 403, and the homepage security headers match the pre-deploy baseline. Authenticated live-budget acceptance remains separate under #24 and #40.
 
 ## Current guidance
 
