@@ -1,6 +1,6 @@
 {
   "name": "@oliverames/mcp-server-for-ynab",
-  "version": "6.1.0",
+  "version": "6.1.1",
   "description": "Local MCP server for YNAB budget operations",
   "license": "MIT",
   "repository": {
@@ -66,7 +66,7 @@
     "zod": "^4.4.3"
   },
   "overrides": {
-    "@hono/node-server": "2.0.11",
+    "@hono/node-server": "2.1.5",
     "body-parser": "2.4.0",
     "fast-uri": "4.2.3",
     "hono": "4.13.13",

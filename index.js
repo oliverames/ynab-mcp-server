@@ -606,7 +606,7 @@ const {
   previewStore = null,
   now = Date.now,
   runtime = {},
-  serverInfo = { name: "YNAB Local", version: "6.1.0" },
+  serverInfo = { name: "YNAB Local", version: "6.1.1" },
   // Called with (toolName, error) when a tool handler fails unexpectedly.
   // Only the stdio entry point passes one; the hosted Worker does not.
   onToolError = null,
