@@ -1,5 +1,17 @@
 # Worklog
 
+## 2026-10-29 - Verify npm delivery and recent-change checks
+
+**What changed**: Verified the public npm registry serves version 6.1.1, matching the committed package version. Both full maintenance runs found this version already up to date. No new upload ran. The prior publication-pending status is resolved by the registry check.
+
+**Decisions made**: Reused this session's passing `npm test` result: 262 offline unit tests, the safety-model checks and all seven synthetic agent fixtures, with zero failures. No source changed in this documentation update.
+
+**Left off at**: The existing Worker deployment and rollback receipt remain as recorded below. Live integration tests and financial provider calls did not run; the synthetic fixtures use local data. The final full maintenance run passed all eight stages.
+
+**Open questions**: Still open: Authenticated live-budget acceptance remains separate under #24 and #40.
+
+---
+
 ## October 28, 2026: offline default test command
 
 Fixed [#43](https://github.com/oliverames/ynab-mcp-server/issues/43): `npm test` now runs the existing offline unit, safety-model and synthetic agent checks. The live integration runner is available explicitly through `npm run test:live`, and the README distinguishes the two. The live runner and its exact-preview, interactive consent helper are unchanged; the earlier automated release check correctly refused writes rather than approving them.
