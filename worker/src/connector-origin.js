@@ -52,8 +52,22 @@ export function createOriginScopedOAuthRouter({
       } catch {
         return originError(500, "invalid_connector_configuration", "Connector origins are not configured correctly.");
       }
-      const requestedOrigin = new URL(request.url).origin;
+      const requestUrl = new URL(request.url);
+      const requestedOrigin = requestUrl.origin;
       if (!configuration.allowedOrigins.has(requestedOrigin)) {
+        // Plain HTTP for a configured HTTPS origin is sent to HTTPS. Google's
+        // favicon service looks a site up by its http:// address, and a 421 there
+        // keeps the connector logo out of Claude's list. The target is only ever
+        // an origin already in the allowed set, never one taken from the request.
+        if (requestUrl.protocol === "http:" && configuration.allowedOrigins.has(`https://${requestUrl.host}`)) {
+          return new Response(null, {
+            status: 308,
+            headers: {
+              Location: `https://${requestUrl.host}${requestUrl.pathname}${requestUrl.search}`,
+              "Cache-Control": "no-store",
+            },
+          });
+        }
         return originError(421, "unconfigured_connector_origin", "This origin is not configured for the connector.");
       }
 

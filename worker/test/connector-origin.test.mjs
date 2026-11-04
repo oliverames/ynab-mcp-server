@@ -108,6 +108,26 @@ test("unconfigured request origins and malformed configuration fail before provi
   assert.equal(guardCalls, 0);
 });
 
+test("plain HTTP for a configured HTTPS origin redirects to HTTPS and nothing else does", async () => {
+  const router = createOriginScopedOAuthRouter({
+    defaultOrigin: OLD_ORIGIN, providerOptions: {},
+    createProvider() { throw new Error("Must not create a provider"); },
+  });
+  const env = { CONNECTOR_BASE_URL: NEW_ORIGIN, CONNECTOR_COMPATIBILITY_ORIGINS: OLD_ORIGIN };
+  for (const host of ["connector.example", "ynab.amesvt.com"]) {
+    const response = await router.fetch(new Request(`http://${host}/favicon.ico?x=1`), env, {});
+    assert.equal(response.status, 308);
+    assert.equal(response.headers.get("location"), `https://${host}/favicon.ico?x=1`);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+  }
+  for (const url of [
+    "http://attacker.example/", "http://connector.example.attacker.example/", "http://connector.example:8080/",
+  ]) {
+    const response = await router.fetch(new Request(url, { headers: { "X-Forwarded-Host": "connector.example" } }), env, {});
+    assert.equal(response.status, 421);
+  }
+});
+
 test("trusted browser origins are checked against the selected connector origin", async () => {
   let providerCalls = 0;
   const router = createOriginScopedOAuthRouter({
