@@ -87,19 +87,24 @@ export const REMOTE_SERVER_INFO = {
     "Independent open-source connector for accessing a user's own YNAB budget. Not affiliated with, sponsored by, or endorsed by YNAB.",
   icons: [
     {
-      src: CONNECTOR_TREE_SVG_URL,
-      mimeType: "image/svg+xml",
-      sizes: ["any"],
+      src: `${CONNECTOR_ORIGIN}/icon-512.png`,
+      mimeType: "image/png",
+      sizes: ["512x512"],
     },
     {
-      src: CONNECTOR_TREE_4096_PNG_URL,
+      src: `${CONNECTOR_ORIGIN}/icon-192.png`,
       mimeType: "image/png",
-      sizes: ["4096x4096"],
+      sizes: ["192x192"],
     },
     {
-      src: CONNECTOR_FAVICON_256_PNG_URL,
+      src: `${CONNECTOR_ORIGIN}/apple-touch-icon.png`,
       mimeType: "image/png",
-      sizes: ["256x256"],
+      sizes: ["180x180"],
+    },
+    {
+      src: `${CONNECTOR_ORIGIN}/favicon-32x32.png`,
+      mimeType: "image/png",
+      sizes: ["32x32"],
     },
   ],
   websiteUrl: CONNECTOR_ORIGIN,
