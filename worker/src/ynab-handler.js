@@ -310,6 +310,16 @@ app.get("/apple-touch-icon.png", (c) => worksWithYnabAsset(c, {
   contentType: "image/png",
   sha256: CONNECTOR_APPLE_TOUCH_ICON_PNG_SHA256,
 }));
+app.get("/icon-512.png", (c) => worksWithYnabAsset(c, {
+  body: CONNECTOR_ICON_PNG,
+  contentType: "image/png",
+  sha256: CONNECTOR_ICON_PNG_SHA256,
+}));
+app.get("/icon-192.png", (c) => worksWithYnabAsset(c, {
+  body: CONNECTOR_FAVICON_256_PNG,
+  contentType: "image/png",
+  sha256: CONNECTOR_FAVICON_256_PNG_SHA256,
+}));
 // Claude draws custom connector icons from Google's favicon service for the
 // registrable domain, which only knows domains Google has crawled. Without an
 // origin robots.txt, Cloudflare serves its comment-only managed file.
