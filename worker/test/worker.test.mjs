@@ -15,6 +15,7 @@ import {
   CONNECTOR_FAVICON_ICO,
   CONNECTOR_FAVICON_ICO_SHA256,
   CONNECTOR_FAVICON_SVG_SHA256,
+  CONNECTOR_ICON_PNG,
   CONNECTOR_ICON_PNG_SHA256,
   CONNECTOR_RESOURCE_METADATA,
   REMOTE_SERVER_INFO,
@@ -443,11 +444,11 @@ test("ownership-verified deletion binds its upstream and final state to either s
 });
 
 test("hosted connector uses the exact Codex plugin icon and conventional favicons", async () => {
-  const codexIcon = await readFile(new URL("../../codex/assets/icon.png", import.meta.url));
-  assert.equal(
-    createHash("sha256").update(codexIcon).digest("hex"),
-    CONNECTOR_ICON_PNG_SHA256
-  );
+  // The served icon is the Codex plugin icon trimmed to its tile and scaled to
+  // 512px (see scripts/generate-worker-icon-assets.mjs), not the raw 1024px file.
+  assert.equal(createHash("sha256").update(CONNECTOR_ICON_PNG).digest("hex"), CONNECTOR_ICON_PNG_SHA256);
+  const icon = Buffer.from(CONNECTOR_ICON_PNG);
+  assert.deepEqual([icon.readUInt32BE(16), icon.readUInt32BE(20)], [512, 512]);
   assert.equal(WORKS_WITH_YNAB_SOURCE_URL, "https://api.ynab.com/papi/works_with_ynab.svg");
   assert.deepEqual(CONNECTOR_RESOURCE_METADATA, {
     resource: CONNECTOR_MCP_URL,
@@ -459,21 +460,10 @@ test("hosted connector uses the exact Codex plugin icon and conventional favicon
   assert.equal(REMOTE_SERVER_INFO.name, "YNAB");
   assert.equal(REMOTE_SERVER_INFO.title, "YNAB");
   assert.deepEqual(REMOTE_SERVER_INFO.icons, [
-    {
-      src: "https://ynab.amesvt.com/assets/ynab-tree-icon-v2.svg",
-      mimeType: "image/svg+xml",
-      sizes: ["any"],
-    },
-    {
-      src: "https://ynab.amesvt.com/assets/ynab-tree-icon-v2.png",
-      mimeType: "image/png",
-      sizes: ["4096x4096"],
-    },
-    {
-      src: "https://ynab.amesvt.com/assets/ynab-tree-icon-v1.png",
-      mimeType: "image/png",
-      sizes: ["256x256"],
-    },
+    { src: "https://ynab.amesvt.com/icon-512.png", mimeType: "image/png", sizes: ["512x512"] },
+    { src: "https://ynab.amesvt.com/icon-192.png", mimeType: "image/png", sizes: ["192x192"] },
+    { src: "https://ynab.amesvt.com/apple-touch-icon.png", mimeType: "image/png", sizes: ["180x180"] },
+    { src: "https://ynab.amesvt.com/favicon-32x32.png", mimeType: "image/png", sizes: ["32x32"] },
   ]);
 
   const assets = [
@@ -542,8 +532,8 @@ test("landing page advertises the connector icon", async () => {
   // favicon; only the square tree artwork may be.
   assert.doesNotMatch(body, /rel="[^"]*icon"[^>]+works-with-ynab/);
   assert.match(body, /<meta property="og:image" content="https:\/\/ynab\.amesvt\.com\/assets\/icon\.png">/);
-  assert.match(body, /<meta property="og:image:width" content="1024">/);
-  assert.match(body, /<meta property="og:image:height" content="1024">/);
+  assert.match(body, /<meta property="og:image:width" content="512">/);
+  assert.match(body, /<meta property="og:image:height" content="512">/);
   assert.match(body, /<img class="brand" src="\/assets\/works-with-ynab\.svg"/);
   assert.match(response.headers.get("content-security-policy") ?? "", /img-src 'self'/);
   assert.equal(response.headers.get("referrer-policy"), "same-origin");

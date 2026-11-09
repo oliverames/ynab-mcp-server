@@ -1,5 +1,13 @@
 # Worklog
 
+## 2026-11-09 - Connector icons fill their canvas; CI green again
+
+Search Console (checked while signed in) lists exactly two non-indexed URLs for ames-ynab.link: `http://ames-ynab.link/` (Page with redirect, the intended 308 from 2026-11-04) and `https://ames-ynab.link/mcp` (401, last crawled Oct 26, protected by design). The home page is indexed; a live URL test passed and indexing was requested.
+
+The icon problem was real, though. The `da24d76` icons were the 1024px rounded tile (822px of artwork inside 101px of transparent margin) scaled down whole, so the tile filled only about 64-80% of every canvas: a 32px favicon had a 3px empty border, and the 180px apple-touch icon had transparent corners, which iOS fills black. `scripts/generate-worker-icon-assets.mjs` now trims the tile and scales it to fill each canvas, and renders the apple-touch icon as an opaque full-bleed square (its crop is checked to be fully opaque). `/favicon.svg` and the legacy `/assets/ynab-tree-icon-v2.png` alias are carried over unchanged. `og:image` now declares the 512px it serves. Deployed as Worker version `f442246e-f8ab-4cbd-aa3f-d194f5951258`; live hashes match the generated files.
+
+The three icon tests that had failed since `da24d76` were stale expectations (4096px tree, the old icon list, the raw Codex icon hash) and now assert the current design. Worker tests 66/66. Not changed: `/icon-192.png` still serves the 256px favicon while the server info declares 192x192.
+
 ## 2026-11-09 - Search Console 401 and redirect report on ames-ynab.link
 
 Could not reproduce a block from outside Google. With a Googlebot user agent, `/`, `/favicon.ico`, `/apple-touch-icon.png`, `/robots.txt`, `/sitemap.xml` and `/privacy` all return 200 with no redirect and no auth, and the canonical URL and sitemap already match the final address. The only 401s are `/mcp` and `/sse`, which must stay protected. The only redirect is the plain-HTTP 308 added on 2026-11-04, which Search Console reports as "Page with redirect" for the `http://` variant and is intended. The Worker routes `/mcp` and `/sse` through the OAuth provider and everything else to the public handler, so no auth layer sits ahead of the public routes.

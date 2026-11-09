@@ -31,8 +31,8 @@ function layout(title, body, { origin = CONNECTOR_ORIGIN, canonicalPath } = {}) 
 ${canonicalPath ? `<link rel="canonical" href="${safeOrigin}${escapeHtml(canonicalPath)}">\n<meta property="og:url" content="${safeOrigin}${escapeHtml(canonicalPath)}">` : ""}
 <meta property="og:image" content="${safeOrigin}/assets/icon.png">
 <meta property="og:image:type" content="image/png">
-<meta property="og:image:width" content="1024">
-<meta property="og:image:height" content="1024">
+<meta property="og:image:width" content="512">
+<meta property="og:image:height" content="512">
 <style>
   body { font-family: -apple-system, system-ui, sans-serif; max-width: 44rem; margin: 3rem auto; padding: 0 1rem 3rem; line-height: 1.55; color: #1c1c1c; }
   h1 { font-size: 1.5rem; } code { background: #f4f4f4; padding: .1em .35em; border-radius: 4px; }

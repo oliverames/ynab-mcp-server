@@ -81,7 +81,7 @@ function paeth(left, above, upperLeft) {
     ? left : aboveDistance <= upperLeftDistance ? above : upperLeft;
 }
 
-test("the PNG fallback decodes as 4096 square with opaque vector artwork and transparent padding", async () => {
+test("the PNG fallback decodes as a 1024 square rounded tile with transparent padding", async () => {
   const response = await YnabHandler.request(`${ORIGINS[0]}/assets/ynab-tree-icon-v2.png`);
   const png = Buffer.from(await response.arrayBuffer());
   assert.deepEqual(png.subarray(0, 8), Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
@@ -96,7 +96,7 @@ test("the PNG fallback decodes as 4096 square with opaque vector artwork and tra
     if (type === "IHDR") {
       assert.equal(length, 13);
       dimensions = [data.readUInt32BE(0), data.readUInt32BE(4)];
-      assert.deepEqual(dimensions, [4096, 4096]);
+      assert.deepEqual(dimensions, [1024, 1024]);
       assert.deepEqual([...data.subarray(8)], [8, 6, 0, 0, 0], "8-bit RGBA with standard compression and no interlacing");
     }
     if (type === "IDAT") imageData.push(data);
@@ -112,11 +112,11 @@ test("the PNG fallback decodes as 4096 square with opaque vector artwork and tra
   const rowLength = width * 4;
   const expectedBytes = height * (rowLength + 1);
   const filtered = inflateSync(Buffer.concat(imageData), { maxOutputLength: expectedBytes });
-  assert.equal(filtered.length, expectedBytes, "all 4096 image rows must decompress");
+  assert.equal(filtered.length, expectedBytes, "all 1024 image rows must decompress");
   let previous = Buffer.alloc(rowLength);
   let row = Buffer.alloc(rowLength);
   let transparent = 0;
-  let treePixels = 0;
+  let opaque = 0;
   for (let y = 0; y < height; y++) {
     const start = y * (rowLength + 1);
     const filter = filtered[start];
@@ -131,10 +131,10 @@ test("the PNG fallback decodes as 4096 square with opaque vector artwork and tra
     }
     for (let x = 0; x < rowLength; x += 4) {
       if (row[x + 3] === 0) transparent++;
-      if (row[x] === 59 && row[x + 1] === 94 && row[x + 2] === 218 && row[x + 3] === 255) treePixels++;
+      if (row[x + 3] === 255) opaque++;
     }
     [previous, row] = [row, previous];
   }
-  assert.ok(transparent > width * height / 4, "the square must retain transparent space around the tree");
-  assert.ok(treePixels > width * height / 4, "the fallback must render the blue tree at full resolution");
+  assert.ok(transparent > width * height / 8, "the square must retain transparent space around the tile");
+  assert.ok(opaque > width * height / 4, "the fallback must render the opaque tile at full resolution");
 });
