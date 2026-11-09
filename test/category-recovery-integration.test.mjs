@@ -18,6 +18,11 @@ const move = {
 const categoryPath = (id) => `/months/2026-10-01/categories/${id}`;
 const category = (fake, id) => fake.budget().month_categories["2026-10-01"].find((row) => row.id === id);
 
+// "current" budget months resolve from the real clock, but the synthetic budget
+// lives in October 2026. Pin Date to it so these tests do not expire each month.
+const FIXTURE_NOW = Date.parse("2026-10-15T12:00:00Z");
+const pinFixtureMonth = (t) => t.mock.timers.enable({ apis: ["Date"], now: FIXTURE_NOW });
+
 async function partialMove(harness) {
   harness.fake.injectFault({ method: "PATCH", path: categoryPath("fake-travel"), status: 503 });
   const result = assertToolOk(await harness.write("move_category_budget", move));
@@ -178,6 +183,7 @@ test("corrupt and non-array file journals block multi-step writes without replac
 });
 
 test("merge moves full ordinary history plus exact allocations and reports split rows for manual action", async (t) => {
+  pinFixtureMonth(t);
   const harness = await createMcpHarness(); t.after(() => harness.close());
   const budget = harness.fake.budget();
   budget.transactions.push({
@@ -203,6 +209,7 @@ test("merge moves full ordinary history plus exact allocations and reports split
 });
 
 test("retire recategorizes ordinary history and zeros source without crediting destination", async (t) => {
+  pinFixtureMonth(t);
   const harness = await createMcpHarness(); t.after(() => harness.close());
   const result = assertToolOk(await harness.write("retire_category", {
     categoryId: "fake-food", replacementCategoryId: "fake-travel", zeroBudgetedMonths: "current",

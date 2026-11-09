@@ -8,6 +8,10 @@ The icon problem was real, though. The `da24d76` icons were the 1024px rounded t
 
 The three icon tests that had failed since `da24d76` were stale expectations (4096px tree, the old icon list, the raw Codex icon hash) and now assert the current design. Worker tests 66/66. Not changed: `/icon-192.png` still serves the 256px favicon while the server info declares 192x192.
 
+CI had been red on main since 2026-11-04 for a second, unrelated reason: `merge_category` and `retire_category` integration tests resolve `"current"` from the real clock while the synthetic budget lives in October 2026, so they began failing when November started (`actual 100000, expected 0`). The two tests now pin `Date` to the fixture month; root unit suite 262/262 locally. The Windows and Ubuntu matrix failed for the same reason.
+
+Search Console, later the same day: the 401 row (`/mcp`) was submitted for validation and the redirect row was left alone because `http://` redirecting is intended. `/mcp` is now disallowed in robots.txt, so Google may reclassify rather than clear it. All 14 zones in the Ames Consulting Cloudflare account are now verified Domain properties (DNS TXT through Search Console's Cloudflare authorization; leave those records in place), with sitemaps and indexing requested where a public sitemap exists. `sibleykemp.org` is a private directory (robots.txt disallow, `noindex`), so Google rejected its indexing request by design.
+
 ## 2026-11-09 - Search Console 401 and redirect report on ames-ynab.link
 
 Could not reproduce a block from outside Google. With a Googlebot user agent, `/`, `/favicon.ico`, `/apple-touch-icon.png`, `/robots.txt`, `/sitemap.xml` and `/privacy` all return 200 with no redirect and no auth, and the canonical URL and sitemap already match the final address. The only 401s are `/mcp` and `/sse`, which must stay protected. The only redirect is the plain-HTTP 308 added on 2026-11-04, which Search Console reports as "Page with redirect" for the `http://` variant and is intended. The Worker routes `/mcp` and `/sse` through the OAuth provider and everything else to the public handler, so no auth layer sits ahead of the public routes.
