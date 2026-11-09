@@ -325,7 +325,7 @@ app.get("/icon-192.png", (c) => worksWithYnabAsset(c, {
 // origin robots.txt, Cloudflare serves its comment-only managed file.
 app.get("/robots.txt", (c) => {
   c.header("Cache-Control", "public, max-age=3600");
-  return c.text(`User-agent: *\nAllow: /\n\nSitemap: ${pageOptions(c).origin}/sitemap.xml\n`);
+  return c.text(`User-agent: *\nAllow: /\nDisallow: /mcp\nDisallow: /sse\nDisallow: /authorize\nDisallow: /token\nDisallow: /register\nDisallow: /callback\n\nSitemap: ${pageOptions(c).origin}/sitemap.xml\n`);
 });
 app.get("/sitemap.xml", (c) => {
   const { origin } = pageOptions(c);

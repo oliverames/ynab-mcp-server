@@ -79,12 +79,12 @@ test("the homepage allows its exact copy script while policy pages remain script
   }
 });
 
-test("robots.txt allows crawling and names a sitemap of the public pages", async () => {
+test("robots.txt allows the public pages, keeps crawlers off the protected endpoints, and names a sitemap", async () => {
   const env = { CONNECTOR_BASE_URL: OLD_ORIGIN, CONNECTOR_CANONICAL_URL: CANONICAL_ORIGIN };
   const robots = await YnabHandler.request(`${OLD_ORIGIN}/robots.txt`, {}, env);
   assert.equal(robots.status, 200);
   assert.match(robots.headers.get("content-type") ?? "", /^text\/plain/);
-  assert.equal(await robots.text(), `User-agent: *\nAllow: /\n\nSitemap: ${CANONICAL_ORIGIN}/sitemap.xml\n`);
+  assert.equal(await robots.text(), `User-agent: *\nAllow: /\nDisallow: /mcp\nDisallow: /sse\nDisallow: /authorize\nDisallow: /token\nDisallow: /register\nDisallow: /callback\n\nSitemap: ${CANONICAL_ORIGIN}/sitemap.xml\n`);
 
   const sitemap = await YnabHandler.request(`${OLD_ORIGIN}/sitemap.xml`, {}, env);
   assert.equal(sitemap.status, 200);

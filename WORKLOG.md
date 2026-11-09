@@ -1,5 +1,13 @@
 # Worklog
 
+## 2026-11-09 - Search Console 401 and redirect report on ames-ynab.link
+
+Could not reproduce a block from outside Google. With a Googlebot user agent, `/`, `/favicon.ico`, `/apple-touch-icon.png`, `/robots.txt`, `/sitemap.xml` and `/privacy` all return 200 with no redirect and no auth, and the canonical URL and sitemap already match the final address. The only 401s are `/mcp` and `/sse`, which must stay protected. The only redirect is the plain-HTTP 308 added on 2026-11-04, which Search Console reports as "Page with redirect" for the `http://` variant and is intended. The Worker routes `/mcp` and `/sse` through the OAuth provider and everything else to the public handler, so no auth layer sits ahead of the public routes.
+
+Change: `/robots.txt` now also disallows `/mcp`, `/sse`, `/authorize`, `/token`, `/register` and `/callback`, so Google stops crawling the protected endpoints and reporting them as 401. Auth is unchanged. Deployed as Worker version `3bfed995-1ab1-420c-84be-960a20178896`. Checks after deploy: public paths 200, `http://` 308 to the same path, `/mcp`, `/sse` and `POST /mcp` still 401, OAuth metadata and `/register` respond.
+
+Not verified: Cloudflare zone settings (WAF, Bot Fight Mode, Access), because the 1Password token read was declined, and Search Console URL Inspection, which needs a signed-in browser. Known and left alone: three icon tests fail on `da24d76` (the served 1024px icon `2759b94d` is not `codex/assets/icon.png` `31347187`; the icons list and size expectations are stale).
+
 ## 2026-10-29 - Verify npm delivery and recent-change checks
 
 **What changed**: Verified the public npm registry serves version 6.1.1, matching the committed package version. Both full maintenance runs found this version already up to date. No new upload ran. The prior publication-pending status is resolved by the registry check.
