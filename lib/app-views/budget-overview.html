@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light dark"><title>YNAB budget overview</title>
+<style>
+/*SHARED_CSS*/
+.cols, .row { display: grid; grid-template-columns: minmax(0, 1fr) 6.5rem 6.5rem 7.5rem; column-gap: 8px; align-items: center; padding: 0 16px; }
+.cols { padding-top: 8px; padding-bottom: 8px; font-size: var(--sz-cap); font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--c-muted); border-bottom: 1px solid var(--c-border); }
+.group { border-bottom: 1px solid var(--c-border); }
+.group:last-child { border-bottom: 0; }
+.ghead { background: var(--c-subtle); min-height: 44px; font-weight: 600; }
+.ghead .name { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.ghead button.tog { display: flex; align-items: center; gap: 8px; min-width: 0; background: none; border: 0; padding: 8px 0; cursor: pointer; font-weight: 600; text-align: left; }
+.ghead button.tog svg { transition: transform 0.15s; }
+.ghead button.tog[aria-expanded="true"] svg { transform: rotate(90deg); }
+.ghead .gname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row { min-height: 52px; padding-top: 6px; padding-bottom: 6px; border-top: 1px solid var(--c-border); }
+.row:first-of-type { border-top: 0; }
+.row:hover { background: var(--fb-hover); }
+.cname { min-width: 0; }
+.cname .t { overflow-wrap: anywhere; }
+.goal { display: flex; align-items: center; gap: 8px; margin-top: 4px; font-size: var(--sz-cap); color: var(--c-muted); }
+.bar { flex: 1; max-width: 220px; height: 6px; border-radius: 999px; background: var(--pill-grey-bg); overflow: hidden; }
+.bar > i { display: block; height: 100%; border-radius: 999px; background: var(--good-text); }
+.bar.part > i { background: var(--pill-yellow-bg); }
+.bar.bad > i { background: var(--pill-red-bg); }
+.avail { display: flex; justify-content: flex-end; }
+.neg { color: var(--bad-text); }
+.rows[hidden] { display: none; }
+@container card (max-width: 560px) {
+  .cols { display: none; }
+  .row, .ghead.row { grid-template-columns: minmax(0, 1fr) auto; row-gap: 2px; }
+  .row .cname { grid-column: 1; grid-row: 1; }
+  .row .avail { grid-column: 2; grid-row: 1; }
+  .row .num[data-label] { grid-column: 1 / -1; text-align: left; font-size: var(--sz-cap); color: var(--c-muted); display: inline; }
+  .row .num[data-label]::before { content: attr(data-label) " "; }
+  .row .metrics { grid-column: 1 / -1; grid-row: 2; display: flex; gap: 16px; }
+  .ghead .num.m { display: none; }
+  .banner .stats { margin-left: 0; width: 100%; justify-content: space-between; }
+}
+@container card (min-width: 561px) { .row .metrics { display: contents; } }
+</style></head>
+<body>
+<div class="card" id="card" aria-live="polite"><div class="skel" aria-busy="true"><i></i><i></i><i></i><i></i></div></div>
+<div class="status" id="status" role="status"></div>
+<script type="module">
+/*APP_BUNDLE*/
+/*SHARED_JS*/
+const card = $("card");
+const state = { data: null, open: new Map(), busy: false };
+function $(id) { return document.getElementById(id); }
+const HIDDEN_GROUPS = new Set(["Internal Master Category", "Hidden Categories"]);
+
+function pillFor(c) {
+  const bal = Number(c.balance) || 0;
+  if (cents(bal) < 0) return { cls: "red", ic: "alert", word: "Overspent" };
+  if (cents(bal) === 0) return { cls: "grey", ic: null, word: "Zero" };
+  if (Number(c.goal_under_funded) > 0) return { cls: "yellow", ic: "alert", word: "Underfunded" };
+  return { cls: "green", ic: "check", word: "Available" };
+}
+function goalInfo(c, cur) {
+  if (!c.goal_type) return null;
+  const under = Number(c.goal_under_funded) || 0;
+  const target = Number(c.goal_target) || 0;
+  let frac;
+  if ((c.goal_type === "TB" || c.goal_type === "TBD") && target > 0) frac = (Number(c.balance) || 0) / target;
+  else if (under > 0) frac = (Number(c.budgeted) || 0) / ((Number(c.budgeted) || 0) + under);
+  else frac = 1;
+  frac = Math.max(0, Math.min(1, frac));
+  const targetGap = (c.goal_type === "TB" || c.goal_type === "TBD") && target > 0 ? Math.max(0, target - (Number(c.balance) || 0)) : 0;
+  const needed = under > 0 ? under : targetGap;
+  const funded = needed <= 0;
+  return { frac: funded ? 1 : frac, label: funded ? "Funded" : `${money(needed, cur)} more needed`, cls: funded ? "" : (frac > 0 ? "part" : "bad") };
+}
+function buildGroups(data) {
+  const groups = new Map();
+  for (const c of data.categories || []) {
+    if (c.hidden || c.deleted) continue;
+    const g = c.category_group_name || "Categories";
+    if (HIDDEN_GROUPS.has(g)) continue;
+    if (!groups.has(g)) groups.set(g, { name: g, cats: [], b: 0, a: 0, v: 0, over: 0 });
+    const grp = groups.get(g);
+    grp.cats.push(c);
+    grp.b += cents(c.budgeted); grp.a += cents(c.activity); grp.v += cents(c.balance);
+    if (cents(c.balance) < 0) grp.over += 1;
+  }
+  return [...groups.values()];
+}
+function monthLabel(iso) {
+  const m = /^(\d{4})-(\d{2})-\d{2}$/.exec(iso || "");
+  if (!m) return iso || "This month";
+  return new Intl.DateTimeFormat(view.locale, { month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(Date.UTC(+m[1], +m[2] - 1, 1)));
+}
+function shiftMonth(iso, delta) {
+  const m = /^(\d{4})-(\d{2})-\d{2}$/.exec(iso || "");
+  if (!m) return null;
+  const d = new Date(Date.UTC(+m[1], +m[2] - 1 + delta, 1));
+  return d.toISOString().slice(0, 10);
+}
+async function loadMonth(iso) {
+  if (!iso || state.busy) return;
+  state.busy = true; render();
+  try {
+    const args = { month: iso };
+    if (view.args.budgetId) args.budgetId = view.args.budgetId;
+    const res = await app.callServerTool({ name: "get_month", arguments: args });
+    const parsed = parseResult(res);
+    if (parsed.error) $("status").textContent = parsed.error; else { state.data = parsed.data; state.open.clear(); $("status").textContent = ""; }
+  } catch { $("status").textContent = "Couldn't load that month."; }
+  state.busy = false; render();
+}
+function isOpen(g, idx) {
+  if (state.open.has(g.name)) return state.open.get(g.name);
+  if (view.displayMode === "fullscreen") return true;
+  const anyOver = state.groups.some((x) => x.over > 0);
+  return anyOver ? g.over > 0 : idx === 0;
+}
+function render() {
+  const data = state.data;
+  if (!data) return;
+  const cur = data.to_be_budgeted_currency || data.budgeted_currency || "USD";
+  state.groups = buildGroups(data);
+  const tbb = Number(data.to_be_budgeted) || 0;
+  const bannerCls = cents(tbb) < 0 ? "over" : cents(tbb) === 0 ? "zero" : "";
+  const bannerLabel = cents(tbb) < 0 ? "Assigned more than you have" : cents(tbb) === 0 ? "All money assigned" : "Ready to Assign";
+  const prev = shiftMonth(data.month, -1), next = shiftMonth(data.month, 1);
+  const nav = view.canCallTools && !state.busy;
+  const top = h("div", { class: "topbar" },
+    h("div", { class: "month" },
+      h("button", { class: "iconbtn", type: "button", disabled: !nav, "aria-label": "Previous month", onclick: () => loadMonth(prev) }, icon("left")),
+      h("span", { class: "label", text: monthLabel(data.month) }),
+      h("button", { class: "iconbtn", type: "button", disabled: !nav, "aria-label": "Next month", onclick: () => loadMonth(next) }, icon("right"))),
+    fullscreenButton(app));
+  const banner = h("div", { class: "banner " + bannerCls },
+    h("div", null, h("div", { class: "amt num", style: "text-align:left", text: money(tbb, cur) }), h("div", { class: "lbl", text: bannerLabel })),
+    h("div", { class: "stats" },
+      h("div", null, "Income", h("b", { class: "num", style: "text-align:left", text: money(data.income, cur) })),
+      h("div", null, "Budgeted", h("b", { class: "num", style: "text-align:left", text: money(data.budgeted, cur) })),
+      h("div", null, "Activity", h("b", { class: "num", style: "text-align:left", text: money(data.activity, cur) })),
+      data.age_of_money != null ? h("div", null, "Age of money", h("b", { class: "num", style: "text-align:left", text: data.age_of_money + " days" })) : null));
+  const cols = h("div", { class: "cols", "aria-hidden": "true" }, h("div", { text: "Category" }), h("div", { class: "num", text: "Budgeted" }), h("div", { class: "num", text: "Activity" }), h("div", { class: "num", text: "Available" }));
+  const groupEls = state.groups.map((g, idx) => {
+    const open = isOpen(g, idx);
+    const rowsId = "g" + idx;
+    const head = h("div", { class: "row ghead" },
+      h("div", { class: "name" },
+        h("button", { class: "tog", type: "button", "aria-expanded": String(open), "aria-controls": rowsId,
+          onclick: () => { state.open.set(g.name, !open); render(); } },
+          icon("chevron"), h("span", { class: "gname", text: g.name }),
+          g.over ? h("span", { class: "chip red", text: g.over + " overspent" }) : null)),
+      h("div", { class: "num m", text: money(g.b / 100, cur) }),
+      h("div", { class: "num m", text: money(g.a / 100, cur) }),
+      h("div", { class: "num m", text: money(g.v / 100, cur) }));
+    const rows = h("div", { class: "rows", id: rowsId, hidden: !open }, g.cats.map((c) => {
+      const p = pillFor(c), gi = goalInfo(c, cur);
+      return h("div", { class: "row" },
+        h("div", { class: "cname" }, h("div", { class: "t", text: c.name }),
+          gi ? h("div", { class: "goal" },
+            h("div", { class: "bar " + gi.cls, role: "img", "aria-label": `Goal ${Math.round(gi.frac * 100)}% funded` }, h("i", { style: `width:${Math.round(gi.frac * 100)}%` })),
+            h("span", { text: gi.label })) : null),
+        h("div", { class: "metrics" },
+          h("div", { class: "num", "data-label": "Budgeted", text: money(c.budgeted, cur) }),
+          h("div", { class: "num" + (cents(c.activity) < 0 ? "" : ""), "data-label": "Activity", text: money(c.activity, cur) })),
+        h("div", { class: "avail" }, h("span", { class: "pill " + p.cls, title: p.word }, p.ic ? icon(p.ic) : null, h("span", { class: "sr", text: p.word + " " }), money(c.balance, cur))));
+    }));
+    return h("section", { class: "group" }, head, rows);
+  });
+  card.replaceChildren(top, banner, cols, ...(state.groups.length ? groupEls : [h("div", { class: "empty", text: "No category data in this month." })]));
+}
+const app = createView("YNAB budget overview", {
+  onData: ({ data, error }) => {
+    if (error) { card.replaceChildren(h("div", { class: "empty", text: error })); return; }
+    if (!data || !Array.isArray(data.categories)) { card.replaceChildren(h("div", { class: "empty", text: "No budget data to show." })); return; }
+    state.data = data; state.open.clear(); render();
+  },
+  onLayout: () => { if (state.data) render(); },
+});
+</script>
+</body></html>

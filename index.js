@@ -15,6 +15,7 @@ import { closeSync, fsyncSync, openSync, readFileSync, renameSync, unlinkSync, w
 import { homedir } from "node:os";
 import path from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { APP_VIEW_TOOLS, appToolMeta, registerAppViews } from "./lib/app-views.mjs";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
@@ -610,6 +611,9 @@ const {
   // Called with (toolName, error) when a tool handler fails unexpectedly.
   // Only the stdio entry point passes one; the hosted Worker does not.
   onToolError = null,
+  // Read-only MCP App views (ui:// resources). On by default for the local stdio server and
+  // off for the hosted Worker, which has no filesystem to read the view files from.
+  appViews = !IS_CLOUDFLARE_WORKERS,
 } = options;
 
 // This state belongs to this factory invocation only. Hosted callers supply
@@ -1647,6 +1651,7 @@ const SERVER_INSTRUCTIONS = [
 ].join("\n");
 
 const server = new McpServer(serverInfo, { instructions: SERVER_INSTRUCTIONS });
+if (appViews) registerAppViews(server);
 
 const registeredTools = new Map();
 const toolCatalog = new Map();
@@ -1808,6 +1813,7 @@ async function prepareWrite(name, input, rawHandler) {
 }
 
 function registerTool(name, config, handler) {
+  if (appViews && APP_VIEW_TOOLS[name]) config = { ...config, _meta: { ...config._meta, ...appToolMeta(APP_VIEW_TOOLS[name]) } };
   const isGuardedWrite = !!WRITE_TOOL_METADATA[name] && name !== "ynab_write_tool_execute";
   const completedConfig = completeToolConfig(name, isGuardedWrite ? {
     ...config,

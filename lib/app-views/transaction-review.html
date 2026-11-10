@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light dark"><title>YNAB transaction review</title>
+<style>
+/*SHARED_CSS*/
+:root { --flag-red: #e5484d; --flag-orange: #f08a24; --flag-yellow: #e5b800; --flag-green: #30a46c; --flag-blue: #3b82f6; --flag-purple: #8e4ec6; }
+.summary { display: flex; gap: 8px; flex-wrap: wrap; padding: 12px 16px; }
+.notice { margin: 0 16px 12px; padding: 8px 12px; border-radius: 8px; background: var(--c-subtle); font-size: var(--sz-cap); }
+.sec { border-top: 1px solid var(--c-border); }
+.sechead { display: flex; align-items: center; gap: 8px; padding: 12px 16px; background: var(--c-subtle); flex-wrap: wrap; }
+.sechead h2 { font-size: var(--sz-body); font-weight: 600; margin: 0; flex: 1; min-width: 8rem; }
+.tcols, .trow { display: grid; grid-template-columns: 24px 18px 5.5rem minmax(0, 1.8fr) minmax(0, 1fr) minmax(0, 1fr) 5.5rem 5.5rem minmax(0, 1fr); column-gap: 8px; align-items: center; padding: 0 16px; }
+.tcols { padding-top: 8px; padding-bottom: 8px; font-size: var(--sz-cap); font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--c-muted); border-bottom: 1px solid var(--c-border); }
+.trow { min-height: 52px; padding-top: 6px; padding-bottom: 6px; border-top: 1px solid var(--c-border); }
+.trow:first-of-type { border-top: 0; }
+.trow:hover { background: var(--fb-hover); }
+.trow > * { min-width: 0; }
+.trunc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.payee { overflow-wrap: anywhere; font-weight: 600; }
+.tags { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 2px; }
+.uncat { color: var(--warn-text); font-weight: 600; }
+.acct { display: flex; align-items: center; gap: 6px; }
+.pend { color: var(--c-muted); }
+.flagdot { display: inline-block; width: 12px; height: 12px; border-radius: 3px; }
+input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--fb-accent); }
+.tfoot { display: flex; gap: 16px; flex-wrap: wrap; padding: 10px 16px; border-top: 1px solid var(--c-border); font-size: var(--sz-cap); color: var(--c-muted); }
+.tfoot b { color: var(--c-text); font-variant-numeric: tabular-nums; }
+.more { padding: 8px 16px; border-top: 1px solid var(--c-border); }
+.m { display: none; }
+@container card (max-width: 780px) {
+  .tcols { display: none; }
+  .trow { grid-template-columns: 28px minmax(0, 1fr) auto; row-gap: 2px; padding-top: 10px; padding-bottom: 10px; }
+  .trow .c-flag { display: none; }
+  .trow .c-sel { grid-column: 1; grid-row: 1 / span 3; align-self: start; padding-top: 2px; }
+  .trow .c-payee { grid-column: 2; grid-row: 1; }
+  .trow .c-out, .trow .c-in { grid-column: 3; grid-row: 1; }
+  .trow .c-out:empty, .trow .c-in:empty { display: none; }
+  .trow .c-date, .trow .c-cat, .trow .c-memo, .trow .c-acct { font-size: var(--sz-cap); color: var(--c-muted); }
+  .trow .c-date { grid-column: 2 / -1; grid-row: 2; } .trow .c-acct { grid-column: 2 / -1; grid-row: 5; }
+  .trow .c-cat { grid-column: 2 / -1; grid-row: 3; } .trow .c-memo { grid-column: 2 / -1; grid-row: 4; }
+  .trow .c-memo:empty { display: none; }
+  .m { display: inline; }
+  .summary, .sechead { padding-left: 12px; padding-right: 12px; }
+}
+</style></head>
+<body>
+<div class="card" id="card" aria-live="polite"><div class="skel" aria-busy="true"><i></i><i></i><i></i><i></i></div></div>
+<div class="status" id="status" role="status"></div>
+<script type="module">
+/*APP_BUNDLE*/
+/*SHARED_JS*/
+const card = $("card");
+const state = { data: null, selected: new Set(), expanded: new Set() };
+function $(id) { return document.getElementById(id); }
+const FLAG_VARS = { red: "--flag-red", orange: "--flag-orange", yellow: "--flag-yellow", green: "--flag-green", blue: "--flag-blue", purple: "--flag-purple" };
+const SAFE_ID = /^[A-Za-z0-9_-]{1,80}$/;
+const PAGE = 6;
+
+function flatten(data) {
+  const needs = data.needs_category_first || {};
+  const ready = data.ready_to_approve || {};
+  const readyGroups = Array.isArray(ready.by_payee) ? ready.by_payee : [];
+  return {
+    needs: { key: "needs", title: "Needs a category", count: needs.count || 0, rows: needs.transactions || [], payees: needs.payees || [], chip: "yellow", verb: "categories", warn: needs.warning },
+    ready: { key: "ready", title: "Ready to approve", count: ready.count || 0, rows: readyGroups.flatMap((g) => g.transactions || []), payees: readyGroups.some((g) => !g.transactions) ? readyGroups : [], chip: "green", verb: "approval" },
+  };
+}
+function categoryCell(t, sec) {
+  if (t.subtransactions && t.subtransactions.length) return h("span", { text: `Split (${t.subtransactions.length})` });
+  if (t.transfer_account_id) return h("span", { class: "muted", text: "Transfer" });
+  if (!t.category_name || t.category_name === "Uncategorized") return h("span", { class: "uncat", text: "Uncategorized" });
+  return h("span", { class: "trunc", text: t.category_name });
+}
+function clearedCell(t) {
+  if (t.cleared === "reconciled") return h("span", { title: "Reconciled", "aria-label": "Reconciled" }, icon("lock"));
+  if (t.cleared === "cleared") return h("span", { title: "Cleared", "aria-label": "Cleared", style: "color:var(--good-text)" }, icon("check"));
+  if (t.cleared === "uncleared") return h("span", { class: "pend", title: "Pending (uncleared)", "aria-label": "Pending" }, icon("clock"));
+  return null;
+}
+function flagCell(t) {
+  const v = FLAG_VARS[t.flag_color];
+  if (!v) return null;
+  return h("span", { title: t.flag_name || t.flag_color + " flag", role: "img", "aria-label": (t.flag_color) + " flag" }, h("span", { class: "flagdot", style: `background:var(${v})` }));
+}
+function tagsFor(t) {
+  const flags = (t.flags || []).map((f) => String(f).split(":")[0].replace(/_/g, " "));
+  return flags.length ? h("div", { class: "tags" }, flags.map((f) => h("span", { class: "chip", text: f }))) : null;
+}
+function txRow(t, cur) {
+  const c = cents(t.amount);
+  const checked = state.selected.has(t.id);
+  const selectable = SAFE_ID.test(String(t.id || ""));
+  return h("div", { class: "trow" },
+    h("div", { class: "c-sel" }, selectable ? h("input", { type: "checkbox", checked: checked, "aria-label": "Select this transaction", onchange: (e) => { if (e.target.checked) state.selected.add(t.id); else state.selected.delete(t.id); renderActions(); } }) : null),
+    h("div", { class: "c-flag" }, flagCell(t)),
+    h("div", { class: "c-date num", style: "text-align:left", text: t.date || "" }),
+    h("div", { class: "c-payee" }, h("div", { class: "payee" }, h("span", { class: "m" }, flagCell(t), " "), t.payee_name || "Unknown payee"), tagsFor(t)),
+    h("div", { class: "c-cat trunc" }, categoryCell(t)),
+    h("div", { class: "c-memo trunc", text: t.memo || "" }),
+    h("div", { class: "c-out num" + (c < 0 ? "" : ""), text: c < 0 ? money(-c / 100, cur) : "" }),
+    h("div", { class: "c-in num", style: "color:var(--good-text)", text: c > 0 ? money(c / 100, cur) : "" }),
+    h("div", { class: "c-acct acct" }, clearedCell(t), h("span", { class: "trunc", text: t.account_name || "" })));
+}
+function payeeRow(g, cur) {
+  const c = cents(g.total);
+  return h("div", { class: "trow" },
+    h("div", { class: "c-sel" }), h("div", { class: "c-flag" }), h("div", { class: "c-date muted", text: g.count + " txn" + (g.count === 1 ? "" : "s") }),
+    h("div", { class: "c-payee" }, h("div", { class: "payee", text: g.payee_name || g.payee || "Unknown payee" }), tagsFor(g)),
+    h("div", { class: "c-cat trunc" }, g.category_name ? h("span", { text: g.category_name }) : h("span", { class: "muted", text: g.mixed_categories ? "Mixed" : "" })),
+    h("div", { class: "c-memo" }),
+    h("div", { class: "c-out num", text: c < 0 ? money(-c / 100, cur) : "" }),
+    h("div", { class: "c-in num", style: "color:var(--good-text)", text: c > 0 ? money(c / 100, cur) : "" }),
+    h("div", { class: "c-acct" }));
+}
+function totals(rows, cur) {
+  let out = 0, inn = 0;
+  for (const t of rows) { const c = cents(t.amount); if (c < 0) out += -c; else inn += c; }
+  return h("div", { class: "tfoot" },
+    h("span", null, "Transactions ", h("b", { text: String(rows.length) })),
+    h("span", null, "Outflow ", h("b", { text: money(out / 100, cur) })),
+    h("span", null, "Inflow ", h("b", { text: money(inn / 100, cur) })),
+    h("span", null, "Net ", h("b", { text: money((inn - out) / 100, cur) })));
+}
+// Builds the proposal request. Only ids, dates and amounts are sent: payee and memo text is
+// untrusted bank data and stays out of a message the user is asked to approve.
+function buildAsk(sec) {
+  const picked = sec.rows.filter((t) => state.selected.has(t.id) && SAFE_ID.test(String(t.id)));
+  const pool = picked.length ? picked : sec.rows.filter((t) => SAFE_ID.test(String(t.id || "")));
+  const body = sec.key === "needs"
+    ? "Please propose a category for each of these unapproved YNAB transactions, with a one-line reason based on payee history."
+    : "Please propose approving these categorized YNAB transactions after checking each one against payee history.";
+  const rule = "This is a request for a proposal only. Do not write anything yet: after I agree, use preview_write_tool and the normal confirmation steps.";
+  if (!pool.length) return `${body} Use review_unapproved and look at its ${sec.key === "needs" ? "needs_category_first" : "ready_to_approve"} group. ${rule}`;
+  const cap = 40;
+  const lines = pool.slice(0, cap).map((t) => `- ${t.id} | ${t.date || ""} | ${Number(t.amount).toFixed(2)}`);
+  const more = pool.length > cap ? ` (first ${cap} of ${pool.length}; I will ask for the rest after)` : "";
+  return `${body} ${rule}\nTransactions (id | date | amount)${more}:\n${lines.join("\n")}`;
+}
+function renderActions() {
+  document.querySelectorAll("[data-ask]").forEach((btn) => {
+    const sec = state.sections[btn.dataset.ask];
+    const n = sec.rows.filter((t) => state.selected.has(t.id)).length;
+    btn.lastChild.textContent = n ? ` Ask Claude to propose ${sec.verb} (${n})` : ` Ask Claude to propose ${sec.verb}`;
+  });
+}
+function section(sec, cur) {
+  if (!sec.count && !sec.rows.length && !sec.payees.length) return null;
+  const aggregate = !sec.rows.length && sec.payees.length;
+  const expanded = state.expanded.has(sec.key) || view.displayMode === "fullscreen";
+  const list = aggregate ? sec.payees : sec.rows;
+  const shown = expanded ? list : list.slice(0, PAGE);
+  const ask = h("button", { class: "btn" + (sec.key === "needs" ? " primary" : ""), type: "button", "data-ask": sec.key,
+    onclick: () => askClaude(app, buildAsk(sec), $("status")) }, icon("send"), document.createTextNode(""));
+  return h("section", { class: "sec" },
+    h("div", { class: "sechead" }, h("h2", { text: `${sec.title} (${sec.count})` }), ask),
+    h("div", { class: "tcols", "aria-hidden": "true" }, h("div"), h("div"), h("div", { text: aggregate ? "Count" : "Date" }), h("div", { text: "Payee" }), h("div", { text: "Category" }), h("div", { text: "Memo" }), h("div", { class: "num", text: "Outflow" }), h("div", { class: "num", text: "Inflow" }), h("div", { text: "Account" })),
+    h("div", null, shown.map((t) => (aggregate ? payeeRow(t, cur) : txRow(t, cur)))),
+    list.length > PAGE && view.displayMode !== "fullscreen" ? h("div", { class: "more" }, h("button", { class: "btn", type: "button",
+      onclick: () => { if (expanded) state.expanded.delete(sec.key); else state.expanded.add(sec.key); render(); } }, expanded ? "Show fewer" : `Show all ${list.length}`)) : null,
+    aggregate ? null : totals(sec.rows, cur));
+}
+function render() {
+  const data = state.data;
+  if (!data) return;
+  const cur = (data.needs_category_first?.transactions?.[0]?.amount_currency) || "USD";
+  state.sections = flatten(data);
+  const { needs, ready } = state.sections;
+  const parts = [
+    h("div", { class: "topbar" }, h("h1", { text: "Transaction review" }), fullscreenButton(app)),
+    h("div", { class: "summary" },
+      h("span", { class: "chip " + (needs.count ? "yellow" : "green"), text: `${needs.count} need a category` }),
+      h("span", { class: "chip green", text: `${ready.count} ready to approve` }),
+      h("span", { class: "chip", text: `${data.total ?? needs.count + ready.count} unapproved in total` })),
+    data.notice ? h("div", { class: "notice", text: data.notice }) : null,
+    section(needs, cur), section(ready, cur),
+  ];
+  if (!needs.count && !ready.count) parts.push(h("div", { class: "empty", text: "Nothing to review. Every transaction is approved." }));
+  card.replaceChildren(...parts.filter(Boolean));
+  renderActions();
+}
+const app = createView("YNAB transaction review", {
+  onData: ({ data, error }) => {
+    if (error) { card.replaceChildren(h("div", { class: "empty", text: error })); return; }
+    if (!data || typeof data !== "object" || !("ready_to_approve" in data || "needs_category_first" in data)) { card.replaceChildren(h("div", { class: "empty", text: "No transaction data to show." })); return; }
+    state.data = data; state.selected.clear(); render();
+  },
+  onLayout: () => { if (state.data) render(); },
+});
+</script>
+</body></html>

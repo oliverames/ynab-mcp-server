@@ -1,5 +1,11 @@
 # Worklog
 
+## 2026-11-10 - Read-only MCP App views for get_month and review_unapproved
+
+Added two inline MCP Apps views (budget overview and transaction review) served as `ui://ynab/*` resources and linked from `get_month` and `review_unapproved` through `_meta.ui.resourceUri`. They render the existing `structuredContent`, add no tool and no write path, and leave the text results unchanged. Buttons use `sendMessage` to ask Claude for a proposal (ids, dates and amounts only), so `preview_write_tool` stays the only write path. The MCP Apps client is inlined into each document, so there are no network loads or CSP entries. Views are on for stdio and off for the hosted Worker (no filesystem there); the Worker bundle still builds (`wrangler deploy --dry-run`) and its 66 tests pass. New dependency: `@modelcontextprotocol/ext-apps` ^1.7.5.
+
+Styling uses YNAB's published brand hex values and a Figtree-first font stack with original inline SVG icons; no YNAB artwork, logo or font file is used or embedded, and there is one build (`docs/mcp-app-views.md`). Not verified in a real host: the harness answered the MCP Apps handshake locally, but nothing ran inside Claude, so host theming, `data:` font loading under Claude's CSP, and the side panel are untested.
+
 ## 2026-11-09 - Connector icons fill their canvas; CI green again
 
 Search Console (checked while signed in) lists exactly two non-indexed URLs for ames-ynab.link: `http://ames-ynab.link/` (Page with redirect, the intended 308 from 2026-11-04) and `https://ames-ynab.link/mcp` (401, last crawled Oct 26, protected by design). The home page is indexed; a live URL test passed and indexing was requested.

@@ -529,6 +529,19 @@ Transaction writes retain relevant before/verified-after state in `~/.ynab-mcp-u
 
 Pass `matched_transaction_id` values from `review_unapproved` (including compact rows) to `resolve_matched_transactions` as `matchedTransactionIds`, with an optional `budgetId`. Each batch accepts 1–50 IDs and fetches each distinct ID once. It checks budget access first. Results contain the original matched ID and either `orphan` for a transaction 404 or `found` with the formatted transaction in dollars. Found rows require duplicate review before any separate write. Authentication, rate-limit, network, and other failures return an error, not orphan results. The tool performs only reads and never changes match links.
 
+### Interactive views (MCP Apps)
+
+In hosts that support [MCP Apps](https://claude.com/docs/connectors/building/mcp-apps/getting-started), such as Claude, two read tools render an inline, read-only view in addition to their normal text result:
+
+| Tool | View |
+| --- | --- |
+| `get_month` | Budget overview: Ready to Assign banner, collapsible category groups, Budgeted / Activity / Available columns with a colored pill (green funded, yellow underfunded, red overspent, grey zero), goal progress bars, and previous/next month buttons that re-run the read-only `get_month`. |
+| `review_unapproved` | Transaction review: unapproved rows split into "needs a category" and "ready to approve", with flag colors, cleared or pending markers, outflow and inflow columns, and totals. |
+
+The views cannot write. Their buttons use `sendMessage` to ask Claude for a *proposal* (ids, dates and amounts only, never payee or memo text), so `preview_write_tool`, the single-use `previewToken` and `confirmed:true` stay the only write path. All payee, memo and bank strings are rendered with `textContent`. The text and `structuredContent` results are unchanged, so hosts without MCP Apps support behave exactly as before.
+
+This is a local stdio server, so only inline views are available: app tools, entry points and embedded sites need a remote server. The views are self-contained HTML (the MCP Apps client is inlined) and declare no CSP origins. They are on for the local server and off for the hosted Worker. Details and how to preview them are in [docs/mcp-app-views.md](docs/mcp-app-views.md).
+
 ## Workflow Safety Notes
 
 ### Write Tool Opt-In

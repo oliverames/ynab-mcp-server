@@ -29,7 +29,7 @@ export function assertToolOk(result) {
   return toolData(result);
 }
 
-export async function createMcpHarness({ fake, token = "fake-token-a", sessionId = "fake-session-a", writesEnabled = true, journalPath, previewTtlMs, cacheTtlMs, now } = {}) {
+export async function createMcpHarness({ fake, token = "fake-token-a", sessionId = "fake-session-a", writesEnabled = true, journalPath, previewTtlMs, cacheTtlMs, now, appViews } = {}) {
   const ownsFake = !fake;
   fake ??= await new FakeYnabHttpServer().start();
   const directory = journalPath ? null : await mkdtemp(join(tmpdir(), "ynab-synthetic-integration-"));
@@ -45,6 +45,7 @@ export async function createMcpHarness({ fake, token = "fake-token-a", sessionId
     ...(previewTtlMs === undefined ? {} : { previewTtlMs }),
     ...(cacheTtlMs === undefined ? {} : { cacheTtlMs }),
     ...(now === undefined ? {} : { now }),
+    ...(appViews === undefined ? {} : { appViews }),
     fetchImpl: fake.fetch,
     journal,
     runtime: { tokenSource: "synthetic-test", sessionId },
