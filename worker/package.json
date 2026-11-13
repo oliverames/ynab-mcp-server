@@ -13,7 +13,7 @@
   "dependencies": {
     "@cloudflare/workers-oauth-provider": "~0.10.3",
     "agents": "~0.28.1",
-    "hono": "^4.13.5"
+    "hono": "^4.13.18"
   },
   "devDependencies": {
     "wrangler": "4.147.0"
