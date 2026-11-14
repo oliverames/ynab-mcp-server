@@ -220,3 +220,162 @@ test("retire recategorizes ordinary history and zeros source without crediting d
   assert.equal(category(harness.fake, "fake-travel").budgeted, 20000);
   assert.equal(harness.fake.writes().filter((row) => row.path.endsWith(categoryPath("fake-travel"))).length, 0);
 });
+
+const batch = {
+  month: "2026-10-01",
+  categories: [{ categoryId: "fake-food", budgeted: 50 }, { categoryId: "fake-travel", budgeted: 30 }],
+};
+const previewBatch = (harness, input) => harness.call("preview_write_tool", { tool_name: "update_month_categories", input });
+
+test("::batch applies every item with readback", async (t) => {
+  const harness = await createMcpHarness(); t.after(() => harness.close());
+  const result = assertToolOk(await harness.write("update_month_categories", batch));
+  assert.equal(result.status, "completed");
+  assert.deepEqual(result.items, [
+    { categoryId: "fake-food", before: 100, after: 50, status: "applied", outcome: "verified_applied" },
+    { categoryId: "fake-travel", before: 20, after: 30, status: "applied", outcome: "verified_applied" },
+  ]);
+  assert.equal(category(harness.fake, "fake-food").budgeted, 50000);
+  assert.equal(category(harness.fake, "fake-travel").budgeted, 30000);
+});
+
+test("::batch preview lists current and proposed amounts", async (t) => {
+  const harness = await createMcpHarness(); t.after(() => harness.close());
+  const { data } = await harness.preview("update_month_categories", batch);
+  assert.deepEqual(data.plan.before.map((row) => [row.target.categoryId, row.before.budgeted]), [["fake-food", 100000], ["fake-travel", 20000]]);
+  assert.deepEqual(data.plan.intents.map((row) => [row.target.categoryId, row.after.budgeted]), [["fake-food", 50000], ["fake-travel", 30000]]);
+  assert.equal(harness.fake.writes().length, 0);
+});
+
+test("::batch rejects duplicate category at preview", async (t) => {
+  const harness = await createMcpHarness(); t.after(() => harness.close());
+  const result = await previewBatch(harness, { ...batch, categories: [batch.categories[0], { categoryId: "fake-food", budgeted: 1 }] });
+  assert.equal(result.isError, true);
+  assert.match(String(toolData(result)), /duplicate.*fake-food/i);
+});
+
+test("::batch rejects unknown category at preview", async (t) => {
+  const harness = await createMcpHarness(); t.after(() => harness.close());
+  const result = await previewBatch(harness, { ...batch, categories: [...batch.categories, { categoryId: "fake-missing", budgeted: 1 }] });
+  assert.equal(result.isError, true);
+  assert.match(String(toolData(result)), /fake-missing/);
+});
+
+test("::batch rejects more than 50 items at preview", async (t) => {
+  const harness = await createMcpHarness(); t.after(() => harness.close());
+  const categories = Array.from({ length: 51 }, (_, index) => ({ categoryId: `fake-bulk-${index}`, budgeted: 1 }));
+  const result = await previewBatch(harness, { ...batch, categories });
+  assert.equal(result.isError, true);
+  assert.match(String(toolData(result)), /Invalid input for update_month_categories/);
+});
+
+test("::batch rejects malformed month at preview", async (t) => {
+  const harness = await createMcpHarness(); t.after(() => harness.close());
+  const result = await previewBatch(harness, { ...batch, month: "2026-10-15" });
+  assert.equal(result.isError, true);
+  assert.match(String(toolData(result)), /YYYY-MM-DD format and use the first day/);
+});
+
+test("::stale batch item aborts before any write", async (t) => {
+  const harness = await createMcpHarness(); t.after(() => harness.close());
+  const { previewToken } = await harness.preview("update_month_categories", batch);
+  category(harness.fake, "fake-travel").budgeted = 25000;
+  const result = await harness.call("update_month_categories", { ...batch, previewToken, confirmed: true });
+  assert.equal(result.isError, true);
+  assert.match(String(toolData(result)), /stale/i);
+  assert.equal(harness.fake.writes().length, 0);
+  assert.equal((await harness.journal.read()).length, 0);
+});
+
+test("::batch stops at first failed write", async (t) => {
+  const harness = await createMcpHarness(); t.after(() => harness.close());
+  harness.fake.injectFault({ method: "PATCH", path: categoryPath("fake-food"), status: 503 });
+  const result = assertToolOk(await harness.write("update_month_categories", batch));
+  assert.equal(result.status, "partial");
+  assert.equal(result.recovery_required, true);
+  assert.deepEqual(result.items.map((item) => item.status), ["pending", "pending"]);
+  assert.equal(harness.fake.writes().length, 1);
+  assert.equal(category(harness.fake, "fake-travel").budgeted, 20000);
+});
+
+test("::batch final readback mismatch is a conflict", async (t) => {
+  const harness = await createMcpHarness(); t.after(() => harness.close());
+  harness.fake.injectFault({ method: "PATCH", path: categoryPath("fake-food"), afterApply: true, mode: "persist-drift", persistOverride: { budgeted: 77000 } });
+  const result = assertToolOk(await harness.write("update_month_categories", batch));
+  assert.equal(result.status, "conflict");
+  assert.equal(result.recovery_required, true);
+  assert.deepEqual(result.items[0], { categoryId: "fake-food", before: 100, after: 50, status: "conflict", outcome: "final_readback_mismatch", observed: 77 });
+  assert.equal(result.items[1].status, "applied");
+});
+
+test("::partial batch resumes after new approval", async (t) => {
+  const harness = await createMcpHarness(); t.after(() => harness.close());
+  harness.fake.injectFault({ method: "PATCH", path: categoryPath("fake-travel"), status: 503 });
+  const partial = assertToolOk(await harness.write("update_month_categories", batch));
+  assert.equal(partial.status, "partial");
+  assert.equal(harness.fake.writes().length, 2);
+  const resumed = assertToolOk(await harness.write("resume_operation", { operationId: partial.operation_id }));
+  assert.equal(resumed.status, "completed");
+  assert.equal(harness.fake.writes().length, 3);
+  assert.ok(harness.fake.writes()[2].path.endsWith(categoryPath("fake-travel")));
+  assert.equal(category(harness.fake, "fake-food").budgeted, 50000);
+  assert.equal(category(harness.fake, "fake-travel").budgeted, 30000);
+});
+
+test("::batch unchanged item is not written", async (t) => {
+  const harness = await createMcpHarness(); t.after(() => harness.close());
+  const result = assertToolOk(await harness.write("update_month_categories", { ...batch, categories: [batch.categories[0], { categoryId: "fake-travel", budgeted: 20 }] }));
+  assert.equal(result.status, "completed");
+  assert.deepEqual(result.items[1], { categoryId: "fake-travel", before: 20, after: 20, status: "applied", outcome: "no_change" });
+  assert.equal(harness.fake.writes().length, 1);
+  assert.equal(harness.fake.writes().filter((row) => row.path.endsWith(categoryPath("fake-travel"))).length, 0);
+});
+
+test("::batch uses month reads only", async (t) => {
+  const harness = await createMcpHarness(); t.after(() => harness.close());
+  harness.fake.budget().month_categories["2026-10-01"].push({ id: "fake-gifts", name: "Gifts", category_group_id: "fake-living", budgeted: 5000, activity: 0, balance: 5000, deleted: false, hidden: false });
+  const input = { ...batch, categories: [...batch.categories, { categoryId: "fake-gifts", budgeted: 15 }] };
+  const { previewToken } = await harness.preview("update_month_categories", input);
+  const start = harness.fake.requests.length;
+  assertToolOk(await harness.call("update_month_categories", { ...input, previewToken, confirmed: true }));
+  const requests = harness.fake.requests.slice(start);
+  assert.equal(requests.filter((row) => row.method === "GET" && row.path.endsWith("/months/2026-10-01")).length, 3);
+  assert.equal(requests.filter((row) => row.method === "PATCH").length, 3);
+  assert.equal(requests.filter((row) => row.method === "GET" && /\/months\/2026-10-01\/categories\//.test(row.path)).length, 0);
+  assert.equal(requests.length, 6);
+});
+
+test("::batch rejects deleted category at preview", async (t) => {
+  const harness = await createMcpHarness(); t.after(() => harness.close());
+  harness.fake.budget().month_categories["2026-10-01"].push({ id: "fake-deleted", name: "Deleted", category_group_id: "fake-living", budgeted: 0, activity: 0, balance: 0, deleted: true, hidden: false });
+  const result = await previewBatch(harness, { ...batch, categories: [...batch.categories, { categoryId: "fake-deleted", budgeted: 1 }] });
+  assert.equal(result.isError, true);
+  assert.match(String(toolData(result)), /fake-deleted/);
+  assert.equal(harness.fake.writes().length, 0);
+});
+
+test("::batch final readback unavailable is unknown with a reason", async (t) => {
+  const harness = await createMcpHarness(); t.after(() => harness.close());
+  const { previewToken } = await harness.preview("update_month_categories", batch);
+  // Execution reads the month three times: re-prepare, preflight, final readback.
+  harness.fake.injectFault({ method: "GET", path: /\/months\/2026-10-01$/, status: 503, skip: 2, times: 10 });
+  const result = assertToolOk(await harness.call("update_month_categories", { ...batch, previewToken, confirmed: true }));
+  assert.equal(result.status, "unknown");
+  assert.equal(result.outcome, "final_readback_unavailable");
+  assert.equal(result.recovery_required, true);
+  assert.equal(harness.fake.writes().length, 2);
+});
+
+test("::batch resume after final mismatch reports no stale mismatch", async (t) => {
+  const harness = await createMcpHarness(); t.after(() => harness.close());
+  harness.fake.injectFault({ method: "PATCH", path: categoryPath("fake-food"), afterApply: true, mode: "persist-drift", persistOverride: { budgeted: 77000 } });
+  const conflict = assertToolOk(await harness.write("update_month_categories", batch));
+  assert.equal(conflict.status, "conflict");
+  category(harness.fake, "fake-food").budgeted = 50000;
+  const resumed = assertToolOk(await harness.write("resume_operation", { operationId: conflict.operation_id }));
+  assert.equal(resumed.status, "completed");
+  assert.equal(resumed.observed, undefined);
+  assert.equal(resumed.steps[0].outcome, "after_observed_on_recovery");
+  const listed = assertToolOk(await harness.call("list_operations")).operations[0];
+  assert.ok(listed.steps.every((step) => step.observed === undefined && step.outcome !== "final_readback_mismatch"));
+});

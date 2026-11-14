@@ -16,7 +16,7 @@ const requiredTools = [
 
 const options = parseSmokeOptions();
 const requiredWriteTools = process.env.YNAB_ALLOW_WRITES === "1"
-  ? ["update_transactions", "approve_transactions", "ynab_write_tool_execute"]
+  ? ["update_transactions", "approve_transactions", "update_month_categories", "ynab_write_tool_execute"]
   : [];
 
 await withSmokeClient(options, async (client, params) => {

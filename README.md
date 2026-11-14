@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <code>67 tools + 4 discovery helpers</code> &bull;
+  <code>68 tools + 4 discovery helpers</code> &bull;
   <code>6 guided prompts</code> &bull;
   <code>undo journal</code> &bull;
   <code>45 read-only operations by default</code> &bull;
@@ -329,13 +329,13 @@ YNAB_API_TOKEN=your-token-here npm run smoke:review-unapproved -- --published
 
 ## Features
 
-The source defines 67 tools for the YNAB v1 REST API and four discovery helpers, for 71 registered MCP operations. Read-only mode exposes 42 YNAB operations and three helpers. Enabling writes adds 25 YNAB operations and the write-execution helper. The server also defines MCP prompts and resources:
+The source defines 68 tools for the YNAB v1 REST API and four discovery helpers, for 72 registered MCP operations. Read-only mode exposes 42 YNAB operations and three helpers. Enabling writes adds 26 YNAB operations and the write-execution helper. The server also defines MCP prompts and resources:
 
 | Resource | Tools | Capabilities |
 |----------|-------|-------------|
 | **Budgets** | 4 | List, view details, settings |
 | **Accounts** | 3 | List, view, create |
-| **Categories** | 9 | Create and update categories/groups, search, goals, monthly budgets |
+| **Categories** | 10 | Create and update categories/groups, search, goals, monthly budgets |
 | **Payees** | 5 | List, view, create, rename, search |
 | **Payee Locations** | 3 | GPS coordinates for mobile transactions |
 | **Months** | 2 | Monthly summaries with per-category breakdown |
@@ -411,6 +411,7 @@ Read tools are available by default. Tools that create, update, import, or delet
 | `get_category` | Get full category details including goal progress and cadence |
 | `get_month_category` | Get category budget for a specific month |
 | `update_month_category` | Write tool: set the budgeted amount for a category in a month |
+| `update_month_categories` | Write tool: set up to 50 categories in one month from one preview; month-level reads, stops at the first failure, recover with `resume_operation` |
 | `update_category` | Write tool: update name, note, goal target, goal target date, or move to a different group. `goalFrequency` (`monthly` / `weekly` / `yearly`, YNAB API 1.86) sets a recurring target; it requires `goalTarget` and cannot be combined with `goalTargetDate`. |
 | `create_category` | Write tool: create a new category in an existing group, with an optional goal including a recurring `goalFrequency` target |
 | `create_category_group` | Write tool: create a new category group |
@@ -574,7 +575,7 @@ approved exact intent. A changed match count or changed values at the same
 count require a new preview and approval. YNAB has no conditional writes:
 an external change can still race the final read and write.
 
-`move_category_budget`, `merge_category` and `retire_category` persist their
+`move_category_budget`, `update_month_categories`, `merge_category` and `retire_category` persist their
 exact steps before writing and read back every step. Use `list_operations` and
 a newly approved `resume_operation` after a partial or unknown result; never
 blindly repeat a financial operation. Unverified or conflicting undo is refused,
@@ -722,7 +723,7 @@ All amounts in tool inputs and outputs are in **dollars** (e.g., `-12.34` for a 
 
 ## Rate Limiting
 
-The YNAB API allows **200 requests per hour** per access token, enforced on a rolling window. This server applies a client-side limiter at 190 requests per hour with a burst of 10 by default. Read tools typically use one request. Write previews, fresh-state checks and verification add reads. Batch update verification uses one bounded list request, with individual lookups for older rows outside that window. Creation verification and durable workflows can read each affected entity or step. Large workflows may require later explicit recovery after interruption or rate limiting.
+The YNAB API allows **200 requests per hour** per access token, enforced on a rolling window. This server applies a client-side limiter at 190 requests per hour with a burst of 10 by default. Read tools typically use one request. Write previews, fresh-state checks and verification add reads. Batch update verification uses one bounded list request, with individual lookups for older rows outside that window. Creation verification and durable workflows can read each affected entity or step. Large workflows may require later explicit recovery after interruption or rate limiting. A batch such as `update_month_categories` needs about N+4 requests at once, so raise `YNAB_RATE_LIMIT_BURST` (for example 150) to run it without local pacing.
 
 If a request still hits YNAB's limit (HTTP 429), the server waits for the `Retry-After` interval and retries automatically (up to `YNAB_HTTP_RETRIES` times). Transient 502/503/504 responses and network failures are retried for read requests only, since a failed write may have partially applied on the server.
 

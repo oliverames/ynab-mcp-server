@@ -1743,13 +1743,41 @@ async function writeOperationStep(step, { budgetId }) {
   if (step.kind === "transaction_category") {
     await api.transactions.updateTransaction(budgetId, step.target.transactionId, { transaction: { category_id: step.after.category_id } });
   } else {
-    await api.categories.updateMonthCategory(budgetId, step.target.month, step.target.categoryId, { category: { budgeted: step.after.budgeted } });
+    const { data } = await api.categories.updateMonthCategory(budgetId, step.target.month, step.target.categoryId, { category: { budgeted: step.after.budgeted } });
+    return { budgeted: data.category.budgeted };
   }
+}
+
+async function monthRows(bid, month) {
+  const { data } = await api.months.getPlanMonth(bid, month);
+  return new Map(data.month.categories.filter(c => !c.deleted).map(c => [c.id, c]));
+}
+
+// One month read for every category_budget step of a single-month batch.
+async function readMonthSteps(steps, { budgetId }) {
+  const rows = await monthRows(budgetId, steps[0].target.month);
+  return new Map(steps.map(step => [step.id, { budgeted: rows.get(step.target.categoryId)?.budgeted ?? null }]));
 }
 
 async function buildCategoryPlan(tool, input) {
   if (!journal) throw new Error("A durable journal is required before a multi-step category write.");
   const bid = input.budgetId;
+  if (tool === "update_month_categories") {
+    const { month } = input;
+    endOfMonth(month);
+    const seen = new Set();
+    for (const { categoryId } of input.categories) {
+      if (seen.has(categoryId)) throw new Error(`Duplicate category ${categoryId} in one batch is unsafe.`);
+      seen.add(categoryId);
+    }
+    const rows = await monthRows(bid, month);
+    const steps = input.categories.map(({ categoryId, budgeted }) => {
+      const row = rows.get(categoryId);
+      if (!row) throw new Error(`Category ${categoryId} was not found in ${month}.`);
+      return { id: `budget:${month}:${categoryId}`, kind: "category_budget", target: { month, categoryId }, before: { budgeted: row.budgeted }, after: { budgeted: milliunits(budgeted) } };
+    });
+    return { operationId: fingerprint({ tenantId, sessionId, bid, tool, intent: input, steps }), tenantId, sessionId, budgetId: bid, tool, intent: input, steps };
+  }
   const from = input.fromCategoryId || input.categoryId;
   const to = input.toCategoryId || input.replacementCategoryId;
   if (from === to) throw new Error("Source and destination categories must differ.");
@@ -1890,6 +1918,7 @@ const WRITE_TOOL_METADATA = {
   update_scheduled_transaction: { destructiveHint: false, idempotentHint: true },
   delete_scheduled_transaction: { destructiveHint: true, idempotentHint: true },
   move_category_budget: { destructiveHint: false, idempotentHint: true },
+  update_month_categories: { destructiveHint: false, idempotentHint: true },
   resume_operation: { destructiveHint: false, idempotentHint: true },
   merge_category: { destructiveHint: false, idempotentHint: true },
   retire_category: { destructiveHint: false, idempotentHint: true },
@@ -4093,6 +4122,22 @@ registerTool("move_category_budget", {
   description: "Move budgeted dollars between categories for a month with durable per-step readback and explicit recovery. No atomic YNAB move exists.",
   inputSchema: { budgetId: z.string().optional(), month: z.string(), fromCategoryId: z.string(), toCategoryId: z.string(), amount: z.number().positive(), operationId: z.string().optional() },
 }, () => run(executeCategoryPlan));
+
+registerTool("update_month_categories", {
+  description: "Set the budgeted amounts (dollars) of up to 50 categories in one month from one preview. Month-level reads, durable journal, stops at the first failure; recover with a newly approved resume_operation. Not atomic.",
+  inputSchema: { budgetId: z.string().optional(), month: z.string().describe("YYYY-MM-DD, first of month"), categories: z.array(z.object({ categoryId: z.string(), budgeted: z.number().finite() })).min(1).max(50) },
+}, () => run(async () => {
+  const plan = writeContext.getStore()?.plan?.operation;
+  if (!plan) throw new Error("A freshly verified exact category preview is required.");
+  const { observed, ...result } = await operationRunner.run(plan, { readAll: readMonthSteps });
+  const byId = new Map(result.steps.map(s => [s.id, s]));
+  const items = plan.steps.map(s => {
+    const { status, outcome } = byId.get(s.id);
+    const seen = observed?.[s.id];
+    return { categoryId: s.target.categoryId, before: dollars(s.before.budgeted), after: dollars(s.after.budgeted), status, ...(outcome ? { outcome } : {}), ...(seen ? { observed: dollars(seen.budgeted) } : {}) };
+  });
+  return ok({ ...result, items });
+}));
 
 registerTool("list_operations", {
   description: "Read durable multi-step operation outcomes for this authenticated tenant. Omit budgetId for all its budgets, or filter by an exact budget ID. No financial writes.",

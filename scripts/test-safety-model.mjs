@@ -30,6 +30,7 @@ const writeTools = [
   "update_scheduled_transaction",
   "delete_scheduled_transaction",
   "move_category_budget",
+  "update_month_categories",
   "resume_operation",
   "merge_category",
   "retire_category",

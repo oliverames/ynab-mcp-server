@@ -79,8 +79,9 @@ export class FakeYnabHttpServer {
     return row;
   }
 
-  injectFault({ method = "GET", path, mode = "status", status = 503, afterApply = false, applyLimit, transactionId, persistOverride, times = 1 }) {
-    this.faults.push({ method, path, mode, status, afterApply, applyLimit, transactionId, persistOverride, remaining: times });
+  // skip lets the first N matching requests through before the fault fires.
+  injectFault({ method = "GET", path, mode = "status", status = 503, afterApply = false, applyLimit, transactionId, persistOverride, times = 1, skip = 0 }) {
+    this.faults.push({ method, path, mode, status, afterApply, applyLimit, transactionId, persistOverride, remaining: times, skip });
   }
 
   writes() { return this.requests.filter((request) => !["GET", "HEAD"].includes(request.method)); }
@@ -121,13 +122,21 @@ export class FakeYnabHttpServer {
     const trace = { method, path: url.pathname, query: Object.fromEntries(url.searchParams), tenant: tenant?.id ?? null, body: copy(body), applied: false };
     this.requests.push(trace);
     if (!tenant) return this.respond(response, 401, { error: { id: "401", name: "unauthorized", detail: "Only synthetic harness tokens are accepted" } });
-    const fault = this.faults.find((item) => item.remaining > 0 && item.method === method && (!item.path || (typeof item.path === "string" ? url.pathname.includes(item.path) : item.path.test(url.pathname))));
+    const matched = this.faults.find((item) => item.remaining > 0 && item.method === method && (!item.path || (typeof item.path === "string" ? url.pathname.includes(item.path) : item.path.test(url.pathname))));
+    const fault = matched?.skip > 0 ? (matched.skip -= 1, undefined) : matched;
     if (fault) fault.remaining -= 1;
     if (fault && !fault.afterApply) return this.fail(response, fault);
     const routed = this.route(tenant, url, method, body, fault?.applyLimit);
     trace.applied = routed.applied ?? false;
     if (fault?.mode === "persist-drift") {
       // Return the original successful response, but independently change storage before readback.
+      const monthRow = routed.body?.data?.category;
+      if (monthRow && url.pathname.includes("/months/")) {
+        routed.body = clean(routed.body);
+        const budget = tenant.budgets.find((item) => Object.values(item.month_categories).some((rows) => rows.includes(monthRow)));
+        Object.assign(monthRow, copy(fault.persistOverride), { _knowledge: ++budget.server_knowledge });
+        return this.respond(response, routed.status ?? 200, routed.body);
+      }
       const returned = routed.body?.data?.transaction ?? routed.body?.data?.transactions?.[0];
       const id = fault.transactionId ?? returned?.id;
       const budget = tenant.budgets.find((item) => item.transactions.some((row) => row.id === id));
