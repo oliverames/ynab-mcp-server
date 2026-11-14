@@ -1,6 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "ynab-mcp-connector",
+  "observability": { "enabled": true, "head_sampling_rate": 1 },
   "main": "src/index.js",
   // Approved final retirement configuration: serve only the new custom domain.
   // Preserve the cutover version/settings for rollback; see docs/domain-migration.md.
