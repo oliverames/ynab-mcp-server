@@ -1,5 +1,11 @@
 # Worklog
 
+## 2026-11-16 - Release 6.2.0 with the MCP App views
+
+Oliver approved the release on 2026-11-16 ([#50](https://github.com/oliverames/ynab-mcp-server/issues/50)). `./publish.sh minor` bumped 6.1.1 to 6.2.0 (new feature, so a minor bump) after the unit, safety, list-tools, Worker test, Wrangler dry-run and release-consistency checks passed, built the MCPB bundle, and published `@oliverames/mcp-server-for-ynab@6.2.0` to npm. `npm pack --dry-run` lists `lib/app-views.mjs` and the three files under `lib/app-views/`. The tag `v6.2.0` triggers the Release workflow for the GitHub release and MCPB asset. The hosted Worker was not redeployed; it serves no views.
+
+Still open on #50: the Claude Desktop rendering checks (host theming and dark theme, month arrows, full-screen button, approve and categorize buttons sending a message instead of writing) and the non-USD currency and non-target-balance goal checks. Nothing has run in real Claude yet.
+
 ## 2026-11-10 - Read-only MCP App views for get_month and review_unapproved
 
 Added two inline MCP Apps views (budget overview and transaction review) served as `ui://ynab/*` resources and linked from `get_month` and `review_unapproved` through `_meta.ui.resourceUri`. They render the existing `structuredContent`, add no tool and no write path, and leave the text results unchanged. Buttons use `sendMessage` to ask Claude for a proposal (ids, dates and amounts only), so `preview_write_tool` stays the only write path. The MCP Apps client is inlined into each document, so there are no network loads or CSP entries. Views are on for stdio and off for the hosted Worker (no filesystem there); the Worker bundle still builds (`wrangler deploy --dry-run`) and its 66 tests pass. New dependency: `@modelcontextprotocol/ext-apps` ^1.7.5.
