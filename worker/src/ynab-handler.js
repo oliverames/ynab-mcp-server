@@ -42,6 +42,8 @@ import {
   CONNECTOR_FAVICON_96_PNG_SHA256,
   CONNECTOR_FAVICON_128_PNG,
   CONNECTOR_FAVICON_128_PNG_SHA256,
+  CONNECTOR_FAVICON_192_PNG,
+  CONNECTOR_FAVICON_192_PNG_SHA256,
   CONNECTOR_FAVICON_256_PNG,
   CONNECTOR_FAVICON_256_PNG_SHA256,
   CONNECTOR_FAVICON_ICO,
@@ -109,7 +111,11 @@ function worksWithYnabAsset(c, {
   body,
   contentType,
   sha256,
-  cacheControl = "public, max-age=31536000, immutable",
+  // The icon paths are unversioned, so nothing served here may be
+  // immutable: a changed icon must reach clients that cached the old one.
+  // One day bounds the staleness, and the ETag below still lets clients
+  // revalidate with a cheap 304 instead of re-downloading.
+  cacheControl = "public, max-age=86400",
 }) {
   const etag = `"sha256-${sha256}"`;
   c.header("Content-Type", contentType);
@@ -316,9 +322,9 @@ app.get("/icon-512.png", (c) => worksWithYnabAsset(c, {
   sha256: CONNECTOR_ICON_PNG_SHA256,
 }));
 app.get("/icon-192.png", (c) => worksWithYnabAsset(c, {
-  body: CONNECTOR_FAVICON_256_PNG,
+  body: CONNECTOR_FAVICON_192_PNG,
   contentType: "image/png",
-  sha256: CONNECTOR_FAVICON_256_PNG_SHA256,
+  sha256: CONNECTOR_FAVICON_192_PNG_SHA256,
 }));
 // Claude draws custom connector icons from Google's favicon service for the
 // registrable domain, which only knows domains Google has crawled. Without an

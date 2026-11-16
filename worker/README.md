@@ -45,10 +45,10 @@ removed credential cannot authorize a YNAB API request.
 ## Connector icons
 
 Hosted MCP initialization publishes `serverInfo.icons` using the supported
-`2025-11-25` protocol: the official YNAB tree as a genuine SVG, a transparent
-4096 × 4096 PNG rendered directly from that vector, and a small 256 × 256 PNG
-fallback. Icon URLs use the configured connector origin. The versioned public
-routes are `/assets/ynab-tree-icon-v2.svg` and `/assets/ynab-tree-icon-v2.png`;
+`2025-11-25` protocol: the official YNAB tree as a genuine SVG, a 1024 × 1024
+PNG of the trimmed tile, and a small 256 × 256 PNG fallback. Icon URLs use the
+configured connector origin. The public routes are
+`/assets/ynab-tree-icon-v2.svg` and `/assets/ynab-tree-icon-v2.png`;
 the existing `/assets/ynab-tree-icon-v1.png` remains available.
 
 The source artwork and its attribution are retained in
@@ -218,7 +218,7 @@ pages use this mark and carry the required non-affiliation and trademark
 language.
 
 For connector discovery, MCP `initialize` advertises the Blurple tree vector
-first, followed by a 4096px PNG and a small 256px PNG fallback. The versioned
+first, followed by a 1024px PNG and a small 256px PNG fallback. The public
 vector and high-resolution routes are described under Connector icons above.
 The existing 1024x1024 `/assets/icon.png` continues to match the Codex plugin
 artwork and remains the landing page's Open Graph image. Conventional
@@ -227,8 +227,9 @@ use the Blurple YNAB tree artwork from `assets/ynab-tree-blurple.svg`, downloade
 from YNAB's public Webflow CDN asset. The ICO uses one 32px frame and stays below
 10 KiB for clients that skip larger ICO responses. The Claude-facing 256px PNG
 is forced to 8-bit RGBA and served from the
-versioned `/assets/ynab-tree-icon-v1.png` route so a previously rejected image
-cannot remain pinned by the immutable asset cache. The generator, dimensions,
+`/assets/ynab-tree-icon-v1.png` route. Icon routes are cached for a day and
+revalidated by ETag, so a replaced image reaches clients within a day instead
+of staying pinned. The generator, dimensions,
 MIME types, and
 SHA-256 digests are pinned in source and covered by the Worker tests.
 

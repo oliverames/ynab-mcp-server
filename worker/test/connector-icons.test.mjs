@@ -6,6 +6,7 @@ import test from "node:test";
 import {
   CONNECTOR_FAVICON_SVG_SHA256,
   CONNECTOR_TREE_4096_PNG_SHA256,
+  REMOTE_SERVER_INFO,
 } from "../src/brand-assets.js";
 import { YnabHandler } from "../src/ynab-handler.js";
 
@@ -15,7 +16,7 @@ const ASSETS = [
   { path: "/assets/ynab-tree-icon-v2.png", mime: "image/png", hash: CONNECTOR_TREE_4096_PNG_SHA256 },
 ];
 
-test("versioned connector icons are public, cross-origin and cacheable without OAuth or secrets", async () => {
+test("connector icons are public, cross-origin and cacheable without OAuth or secrets", async () => {
   const env = {
     CONNECTOR_BASE_URL: ORIGINS[0],
     CONNECTOR_CANONICAL_URL: ORIGINS[0],
@@ -29,7 +30,10 @@ test("versioned connector icons are public, cross-origin and cacheable without O
       const response = await YnabHandler.request(url, { headers: { Origin: "https://gemini.google.com" } }, env);
       assert.equal(response.status, 200, asset.path);
       assert.equal(response.headers.get("content-type"), asset.mime);
-      assert.equal(response.headers.get("cache-control"), "public, max-age=31536000, immutable");
+      // The icon paths are unversioned, so they must not be immutable:
+      // a changed icon reaches clients within a day, and the ETag below
+      // still lets them revalidate with a cheap 304.
+      assert.equal(response.headers.get("cache-control"), "public, max-age=86400");
       assert.equal(response.headers.get("access-control-allow-origin"), "*");
       assert.equal(response.headers.get("cross-origin-resource-policy"), "cross-origin");
       assert.equal(response.headers.get("x-content-type-options"), "nosniff");
@@ -61,6 +65,19 @@ test("versioned connector icons are public, cross-origin and cacheable without O
   }
 });
 
+test("every advertised icon's declared size equals its real pixel size", async () => {
+  for (const icon of REMOTE_SERVER_INFO.icons) {
+    const response = await YnabHandler.request(icon.src);
+    assert.equal(response.status, 200, icon.src);
+    assert.equal(response.headers.get("content-type"), icon.mimeType);
+    const png = Buffer.from(await response.arrayBuffer());
+    assert.deepEqual(png.subarray(0, 8), Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+    assert.equal(png.toString("ascii", 12, 16), "IHDR");
+    const [width, height] = [png.readUInt32BE(16), png.readUInt32BE(20)];
+    assert.deepEqual(icon.sizes, [`${width}x${height}`], `${icon.src} declares ${icon.sizes} but serves ${width}x${height}`);
+  }
+});
+
 test("the advertised SVG preserves the official vector paths without an embedded bitmap", async () => {
   const source = await readFile(new URL("../../assets/ynab-tree-blurple.svg", import.meta.url), "utf8");
   const response = await YnabHandler.request(`${ORIGINS[0]}/assets/ynab-tree-icon-v2.svg`);
@@ -81,7 +98,7 @@ function paeth(left, above, upperLeft) {
     ? left : aboveDistance <= upperLeftDistance ? above : upperLeft;
 }
 
-test("the PNG fallback decodes as a 1024 square rounded tile with transparent padding", async () => {
+test("the PNG fallback decodes as a 1024 square trimmed tile", async () => {
   const response = await YnabHandler.request(`${ORIGINS[0]}/assets/ynab-tree-icon-v2.png`);
   const png = Buffer.from(await response.arrayBuffer());
   assert.deepEqual(png.subarray(0, 8), Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
@@ -135,6 +152,8 @@ test("the PNG fallback decodes as a 1024 square rounded tile with transparent pa
     }
     [previous, row] = [row, previous];
   }
-  assert.ok(transparent > width * height / 8, "the square must retain transparent space around the tile");
-  assert.ok(opaque > width * height / 4, "the fallback must render the opaque tile at full resolution");
+  // The trimmed tile fills the canvas: only the rounded corners stay
+  // transparent, and the artwork is opaque across the rest of the square.
+  assert.ok(transparent < width * height / 10, "only the rounded corners stay transparent");
+  assert.ok(opaque > width * height * 3 / 4, "the fallback renders the trimmed tile at full resolution");
 });

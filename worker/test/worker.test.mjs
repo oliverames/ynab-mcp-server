@@ -11,6 +11,7 @@ import {
   CONNECTOR_FAVICON_64_PNG_SHA256,
   CONNECTOR_FAVICON_96_PNG_SHA256,
   CONNECTOR_FAVICON_128_PNG_SHA256,
+  CONNECTOR_FAVICON_192_PNG_SHA256,
   CONNECTOR_FAVICON_256_PNG_SHA256,
   CONNECTOR_FAVICON_ICO,
   CONNECTOR_FAVICON_ICO_SHA256,
@@ -479,6 +480,7 @@ test("hosted connector uses the exact Codex plugin icon and conventional favicon
     ["/favicon-64x64.png", "image/png", CONNECTOR_FAVICON_64_PNG_SHA256],
     ["/favicon-96x96.png", "image/png", CONNECTOR_FAVICON_96_PNG_SHA256],
     ["/favicon-128x128.png", "image/png", CONNECTOR_FAVICON_128_PNG_SHA256],
+    ["/icon-192.png", "image/png", CONNECTOR_FAVICON_192_PNG_SHA256],
     ["/favicon-256x256.png", "image/png", CONNECTOR_FAVICON_256_PNG_SHA256],
     ["/assets/ynab-tree-icon-v1.png", "image/png", CONNECTOR_FAVICON_256_PNG_SHA256],
   ];
@@ -490,7 +492,7 @@ test("hosted connector uses the exact Codex plugin icon and conventional favicon
       response.headers.get("cache-control"),
       path === "/favicon.ico" || path === "/favicon.svg"
         ? "public, max-age=0, must-revalidate"
-        : "public, max-age=31536000, immutable"
+        : "public, max-age=86400"
     );
     assert.equal(response.headers.get("access-control-allow-origin"), "*");
     assert.equal(response.headers.get("cross-origin-resource-policy"), "cross-origin");
