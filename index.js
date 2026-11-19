@@ -1013,6 +1013,41 @@ async function getFormattedTransaction(budgetId, transactionId) {
 // succeeded). Rows older than the window fall back to per-transaction GETs.
 const VERIFY_REFETCH_WINDOW_DAYS = 90;
 
+// Group rows by account and take each account's [min, max] date. One
+// account-scoped list request per group covers rows of any age without
+// downloading the whole budget, so rows older than the window no longer fall
+// through to one GET each (a 100-row reconcile of year-old rows cost ~100
+// GETs, half the hourly rate budget).
+function accountDateScopes(rows) {
+  const scopes = new Map();
+  for (const t of rows) {
+    if (!t?.account_id || !t?.date) continue;
+    const s = scopes.get(t.account_id);
+    if (!s) scopes.set(t.account_id, { accountId: t.account_id, sinceDate: t.date, untilDate: t.date });
+    else {
+      if (t.date < s.sinceDate) s.sinceDate = t.date;
+      if (t.date > s.untilDate) s.untilDate = t.date;
+    }
+  }
+  return [...scopes.values()];
+}
+
+// Fill byId from account-scoped list requests. Failures are swallowed: callers
+// fall back to the window list and per-transaction GETs for anything missing.
+async function fetchScopedTransactions(budgetId, wantedIds, scopes, byId) {
+  for (const { accountId, sinceDate, untilDate } of scopes) {
+    try {
+      const data = await fetchTransactions({ budgetId, accountId, sinceDate, untilDate });
+      for (const t of data.transactions) {
+        const id = normalizeTransactionId(t.id);
+        if (wantedIds.has(id) && !byId.has(id)) byId.set(id, formatTransaction(t));
+      }
+    } catch {
+      // Fall through.
+    }
+  }
+}
+
 async function prefetchUpdatedTransactions(budgetId, requestedUpdates, responseTransactions = []) {
   const wantedIds = new Set(requestedUpdates.map((r) => r.id && normalizeTransactionId(r.id)).filter(Boolean));
   const dates = [];
@@ -1020,6 +1055,9 @@ async function prefetchUpdatedTransactions(budgetId, requestedUpdates, responseT
   for (const r of requestedUpdates) if (r.date) dates.push(r.date);
 
   const byId = new Map();
+  // The PATCH response carries each row's account and post-write date, which
+  // is exactly the range to refetch.
+  await fetchScopedTransactions(budgetId, wantedIds, accountDateScopes(responseTransactions), byId);
   // Clamp the refetch to the window even when no row carried a date (e.g. an
   // approval batch whose PATCH response omitted transactions): one bounded
   // list request still beats N per-transaction GETs against the rate budget.
@@ -1030,16 +1068,18 @@ async function prefetchUpdatedTransactions(budgetId, requestedUpdates, responseT
     const minDate = dates.reduce((min, d) => (d < min ? d : min));
     if (minDate > windowStart) sinceDate = minDate;
   }
-  try {
-    const data = await fetchTransactions({ budgetId, sinceDate });
-    for (const t of data.transactions) {
-      const id = normalizeTransactionId(t.id);
-      if (wantedIds.has(id)) byId.set(id, formatTransaction(t));
+  if (byId.size < wantedIds.size) {
+    try {
+      const data = await fetchTransactions({ budgetId, sinceDate });
+      for (const t of data.transactions) {
+        const id = normalizeTransactionId(t.id);
+        if (wantedIds.has(id) && !byId.has(id)) byId.set(id, formatTransaction(t));
+      }
+    } catch {
+      // The write already succeeded; a failed bulk refetch (e.g. a response
+      // over MAX_RESPONSE_BYTES on a very busy budget) must not fail the tool
+      // call. Fall through to per-transaction GETs below.
     }
-  } catch {
-    // The write already succeeded; a failed bulk refetch (e.g. a response
-    // over MAX_RESPONSE_BYTES on a very busy budget) must not fail the tool
-    // call. Fall through to per-transaction GETs below.
   }
 
   // Fetch stragglers (outside the window, or absent from the list response)
@@ -3030,7 +3070,7 @@ registerTool(
 
 registerTool(
   "update_transactions",
-  { description: "Batch-update by id/importId. Combine categoryId and approved:true to categorize/approve. Refetches and verifies fields; reports mismatches without retrying financial writes. Check verification, not review queue counts. approved_count includes already-approved rows; report newly_approved_count. Use IDs from results only.", inputSchema: {
+  { description: `Batch-update by id/importId. Combine categoryId and approved:true to categorize/approve. Refetches and verifies fields; reports mismatches without retrying financial writes. Check verification, not review queue counts. approved_count includes already-approved rows; report newly_approved_count. Use IDs from results only. Pass scope when rows share one account so the pre-write snapshot is one request.`, inputSchema: {
     budgetId: z.string().optional(),
     transactions: z
       .array(
@@ -3051,9 +3091,14 @@ registerTool(
         })
       )
       .describe("Array of transaction updates"),
+    scope: z.object({
+      accountId: z.string().describe("Account all updated rows belong to"),
+      sinceDate: z.string().describe("Earliest row date (YYYY-MM-DD)"),
+      untilDate: z.string().optional().describe("Latest row date (YYYY-MM-DD)"),
+    }).optional().describe("Optional hint for the pre-write snapshot: one account-scoped list request replaces per-row GETs for rows older than 90 days. Rows outside it still work at one GET each."),
     returnSummary: z.boolean().optional().describe("Return updated/approval/verification counts instead of rows. Recommended for large batches (~50+); writes unchanged."),
   } },
-  ({ budgetId, transactions: txns, returnSummary }) =>
+  ({ budgetId, transactions: txns, scope, returnSummary }) =>
     run(async () => {
       const bid = resolveBudgetId(budgetId);
       for (const t of txns) {
@@ -3069,7 +3114,7 @@ registerTool(
       }));
       // Capture before-states pre-write for the undo journal (id-based rows
       // only; importId-only rows have no id yet and journal as non-undoable).
-      const beforeById = await fetchTransactionsByIds(bid, txns.filter((t) => t.id !== undefined).map((t) => t.id));
+      const beforeById = await fetchTransactionsByIds(bid, txns.filter((t) => t.id !== undefined).map((t) => t.id), scope);
       const { data } = await api.transactions.updateTransactions(bid, {
         transactions: mapped,
       });
@@ -3926,19 +3971,24 @@ function beforeFieldsForUpdate(requested, beforeTransaction) {
 
 // One list request covering recent history, with per-transaction GET fallback
 // only for stragglers — same budget-friendly shape as prefetchUpdatedTransactions.
-async function fetchTransactionsByIds(budgetId, ids) {
+async function fetchTransactionsByIds(budgetId, ids, scope) {
   const wanted = new Set(ids.map(normalizeTransactionId));
   const byId = new Map();
+  // Optional caller hint: rows' account and date range aren't known before the
+  // write, so without it rows older than the window cost one GET each.
+  if (scope) await fetchScopedTransactions(budgetId, wanted, [scope], byId);
   const sinceDate = new Date(Date.now() - VERIFY_REFETCH_WINDOW_DAYS * 24 * 60 * 60 * 1000)
     .toISOString().slice(0, 10);
-  try {
-    const data = await fetchTransactions({ budgetId, sinceDate });
-    for (const t of data.transactions) {
-      const id = normalizeTransactionId(t.id);
-      if (wanted.has(id)) byId.set(id, formatTransaction(t));
+  if (byId.size < wanted.size) {
+    try {
+      const data = await fetchTransactions({ budgetId, sinceDate });
+      for (const t of data.transactions) {
+        const id = normalizeTransactionId(t.id);
+        if (wanted.has(id) && !byId.has(id)) byId.set(id, formatTransaction(t));
+      }
+    } catch {
+      // Fall through to per-transaction GETs.
     }
-  } catch {
-    // Fall through to per-transaction GETs.
   }
   const missing = [...wanted].filter((id) => !byId.has(id));
   await Promise.all(missing.map(async (id) => {
@@ -4745,6 +4795,8 @@ return {
     parseToolExecuteInput,
     invokeRegisteredTool,
     verifyBulkTransactionUpdates,
+    accountDateScopes,
+    fetchTransactionsByIds,
     beforeFieldsForUpdate,
     summarizeApprovalChanges,
     decodeHtmlEntities,
@@ -4824,6 +4876,8 @@ const {
   parseToolExecuteInput,
   invokeRegisteredTool,
   verifyBulkTransactionUpdates,
+  accountDateScopes,
+  fetchTransactionsByIds,
   beforeFieldsForUpdate,
   summarizeApprovalChanges,
   decodeHtmlEntities,
@@ -4869,6 +4923,8 @@ export {
   parseToolExecuteInput,
   invokeRegisteredTool,
   verifyBulkTransactionUpdates,
+  accountDateScopes,
+  fetchTransactionsByIds,
   beforeFieldsForUpdate,
   summarizeApprovalChanges,
   decodeHtmlEntities,
