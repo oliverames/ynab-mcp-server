@@ -11,7 +11,7 @@ import { createWritePreviews, fingerprint } from "./lib/write-previews.mjs";
 import { readWriteToolState } from "./lib/write-tool-state.mjs";
 import { createSerializedJournal, createDurableOperationRunner, retainJournalEntries } from "./lib/write-recovery.mjs";
 import { registerCategorySuggestionTools } from "./modules/category-suggestions.mjs";
-import { closeSync, fsyncSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, fsyncSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -614,6 +614,10 @@ const {
   // Read-only MCP App views (ui:// resources). On by default for the local stdio server and
   // off for the hosted Worker, which has no filesystem to read the view files from.
   appViews = !IS_CLOUDFLARE_WORKERS,
+  // Let tools read input from local files (update_transactions'
+  // transactionsFile). Only the stdio entry point enables it: on a hosted
+  // server a path in tool input would point at the server's filesystem.
+  localFiles = false,
 } = options;
 
 // This state belongs to this factory invocation only. Hosted callers supply
@@ -760,6 +764,63 @@ const subtransactionInputSchema = z.object({
   payeeName: z.string().max(200).optional().describe("Payee name"),
   memo: z.string().max(500).optional().describe("Memo"),
 });
+
+const transactionUpdateItemSchema = z.object({
+  id: z.string().min(1).optional().describe("Transaction ID. Provide either id or importId (not both) to identify the transaction."),
+  importId: z.string().min(1).max(36).optional().describe("Lookup by import ID instead of id; cannot change existing import_id."),
+  accountId: z.string().optional().describe("Account ID"),
+  date: z.string().optional().describe("Transaction date (YYYY-MM-DD)"),
+  amount: z.number().optional().describe("Amount in dollars"),
+  payeeId: z.string().nullable().optional().describe("Payee ID (null to remove)"),
+  payeeName: z.string().max(200).nullable().optional().describe("Payee name (null to clear)"),
+  categoryId: z.string().nullable().optional().describe("Category ID (null to uncategorize)"),
+  memo: z.string().max(500).nullable().optional().describe("Transaction memo (null to clear)"),
+  cleared: z.enum(["cleared", "uncleared", "reconciled"]).optional().describe("Cleared status"),
+  approved: z.boolean().optional().describe("Approved status"),
+  flagColor: z.enum(["red", "orange", "yellow", "green", "blue", "purple"]).nullable().optional().describe("Flag color (null to remove)"),
+  subtransactions: z.array(subtransactionInputSchema).optional().describe("Convert non-split transaction to split; existing splits unsupported."),
+});
+
+const TRANSACTIONS_FILE_MAX_BYTES = 5 * 1024 * 1024;
+
+// Read a batch of updates from a local JSON file so large batches (hundreds of
+// ids) need not be inlined in the tool call. The file must be an absolute .json
+// path holding a non-empty array that passes the inline schema. Errors name the
+// path and schema issue only, never file contents.
+function readTransactionsFile(filePath) {
+  if (!localFiles) throw new Error("transactionsFile is only available on the local stdio server.");
+  if (typeof filePath !== "string" || !path.isAbsolute(filePath) || path.extname(filePath).toLowerCase() !== ".json") {
+    throw new Error("transactionsFile must be an absolute path to a .json file.");
+  }
+  let text;
+  try {
+    const st = statSync(filePath);
+    if (!st.isFile()) throw new Error("not a regular file");
+    if (st.size > TRANSACTIONS_FILE_MAX_BYTES) throw new Error(`larger than ${TRANSACTIONS_FILE_MAX_BYTES} bytes`);
+    text = readFileSync(filePath, "utf8");
+  } catch (err) {
+    throw new Error(`Could not read transactionsFile ${filePath}: ${err.message}`);
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error(`transactionsFile ${filePath} is not valid JSON.`);
+  }
+  const result = z.array(transactionUpdateItemSchema).min(1).safeParse(parsed);
+  if (!result.success) {
+    const issues = result.error.issues.slice(0, 5).map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`);
+    throw new Error(`transactionsFile ${filePath} failed validation: ${issues.join("; ")}`);
+  }
+  return result.data;
+}
+
+function resolveTransactionsInput(transactions, transactionsFile) {
+  if ((transactions !== undefined) === (transactionsFile !== undefined)) {
+    throw new Error("Provide exactly one of transactions or transactionsFile.");
+  }
+  return transactionsFile !== undefined ? readTransactionsFile(transactionsFile) : transactions;
+}
 
 function mapSubtransactions(subtransactions) {
   return subtransactions.map((s) => ({
@@ -1798,6 +1859,7 @@ async function prepareWrite(name, input, rawHandler) {
   const plan = await readWriteToolState(name, input, {
     api, fetchTransactions, getTransaction: getFormattedTransaction,
     normalizeId: normalizeTransactionId, resolveBudgetId, journal, tenantId, getTransactionsByIds: fetchTransactionsByIds,
+    readTransactionsFile: localFiles ? readTransactionsFile : null,
     buildCategoryPlan, readOperationStep, matchesAfter,
   });
   if (name === "undo_operation" && plan.before.entry.undo.type === "delete_transactions") {
@@ -3030,32 +3092,24 @@ registerTool(
 
 registerTool(
   "update_transactions",
-  { description: "Batch-update by id/importId. Combine categoryId and approved:true to categorize/approve. Refetches and verifies fields; reports mismatches without retrying financial writes. Check verification, not review queue counts. approved_count includes already-approved rows; report newly_approved_count. Use IDs from results only.", inputSchema: {
+  { description: `Batch-update by id/importId. Combine categoryId and approved:true to categorize/approve. Refetches and verifies fields; reports mismatches without retrying financial writes. Check verification, not review queue counts. approved_count includes already-approved rows; report newly_approved_count. Use IDs from results only.${localFiles ? " For batches too large to inline, pass transactionsFile instead of transactions." : ""}`, inputSchema: {
     budgetId: z.string().optional(),
     transactions: z
-      .array(
-        z.object({
-          id: z.string().min(1).optional().describe("Transaction ID. Provide either id or importId (not both) to identify the transaction."),
-          importId: z.string().min(1).max(36).optional().describe("Lookup by import ID instead of id; cannot change existing import_id."),
-          accountId: z.string().optional().describe("Account ID"),
-          date: z.string().optional().describe("Transaction date (YYYY-MM-DD)"),
-          amount: z.number().optional().describe("Amount in dollars"),
-          payeeId: z.string().nullable().optional().describe("Payee ID (null to remove)"),
-          payeeName: z.string().max(200).nullable().optional().describe("Payee name (null to clear)"),
-          categoryId: z.string().nullable().optional().describe("Category ID (null to uncategorize)"),
-          memo: z.string().max(500).nullable().optional().describe("Transaction memo (null to clear)"),
-          cleared: z.enum(["cleared", "uncleared", "reconciled"]).optional().describe("Cleared status"),
-          approved: z.boolean().optional().describe("Approved status"),
-          flagColor: z.enum(["red", "orange", "yellow", "green", "blue", "purple"]).nullable().optional().describe("Flag color (null to remove)"),
-          subtransactions: z.array(subtransactionInputSchema).optional().describe("Convert non-split transaction to split; existing splits unsupported."),
-        })
-      )
-      .describe("Array of transaction updates"),
+      .array(transactionUpdateItemSchema)
+      .optional()
+      .describe(localFiles ? "Array of transaction updates. Provide exactly one of transactions or transactionsFile." : "Array of transaction updates"),
+    ...(localFiles ? {
+      transactionsFile: z.string().optional().describe("Absolute path to a local .json file holding the transactions array (same shape, max 5 MB). Its contents are bound into the preview."),
+    } : {}),
     returnSummary: z.boolean().optional().describe("Return updated/approval/verification counts instead of rows. Recommended for large batches (~50+); writes unchanged."),
   } },
-  ({ budgetId, transactions: txns, returnSummary }) =>
+  ({ budgetId, transactions: inlineTxns, transactionsFile, returnSummary }) =>
     run(async () => {
       const bid = resolveBudgetId(budgetId);
+      // Guarded writes arrive here with transactionsFile already resolved into
+      // transactions by readWriteToolState (so the preview binds the contents);
+      // this branch covers direct calls.
+      const txns = resolveTransactionsInput(inlineTxns, transactionsFile);
       for (const t of txns) {
         // Same predicate the mapping below uses; a present-but-empty id must
         // be rejected here, not silently sent to YNAB as the lookup key.
@@ -4745,6 +4799,7 @@ return {
     parseToolExecuteInput,
     invokeRegisteredTool,
     verifyBulkTransactionUpdates,
+    readTransactionsFile,
     beforeFieldsForUpdate,
     summarizeApprovalChanges,
     decodeHtmlEntities,
@@ -4783,6 +4838,7 @@ const defaultInstance = IS_CLOUDFLARE_WORKERS ? null : createYnabServer({
   writesEnabled: runtimeConfig.values.YNAB_ALLOW_WRITES?.value === "1",
   journal: IS_CLOUDFLARE_WORKERS ? null : createFsJournal(undoJournalPath()),
   onToolError: errorReportingEnabled() ? captureToolError : null,
+  localFiles: true,
   runtime: {
     tokenSource: runtimeConfig.tokenSource,
     detected_agent: runtimeConfig.detected_agent,
@@ -4824,6 +4880,7 @@ const {
   parseToolExecuteInput,
   invokeRegisteredTool,
   verifyBulkTransactionUpdates,
+  readTransactionsFile,
   beforeFieldsForUpdate,
   summarizeApprovalChanges,
   decodeHtmlEntities,
@@ -4869,6 +4926,7 @@ export {
   parseToolExecuteInput,
   invokeRegisteredTool,
   verifyBulkTransactionUpdates,
+  readTransactionsFile,
   beforeFieldsForUpdate,
   summarizeApprovalChanges,
   decodeHtmlEntities,
