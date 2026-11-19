@@ -997,9 +997,26 @@ function transactionUpdateMismatches(requested, actual) {
   return mismatches;
 }
 
+// Realized scheduled transactions have composite ids (uuid_YYYY-MM-DD), one
+// per occurrence, and YNAB serves each under its full id. Stripping the
+// suffix (normalizeTransactionId) collapses distinct occurrences into one key,
+// so identity always uses the exact id; the stripped form is only a fallback
+// for lookups where a store recorded the base id.
+function getByTransactionId(map, id) {
+  if (!map || id == null) return undefined;
+  return map.has(id) ? map.get(id) : map.get(normalizeTransactionId(id));
+}
+
 async function getFormattedTransaction(budgetId, transactionId) {
-  const { data } = await api.transactions.getTransactionById(budgetId, normalizeTransactionId(transactionId));
-  return formatTransaction(data.transaction);
+  try {
+    const { data } = await api.transactions.getTransactionById(budgetId, transactionId);
+    return formatTransaction(data.transaction);
+  } catch (e) {
+    const base = normalizeTransactionId(transactionId);
+    if (base === transactionId || e?.error?.name !== "resource_not_found") throw e;
+    const { data } = await api.transactions.getTransactionById(budgetId, base);
+    return formatTransaction(data.transaction);
+  }
 }
 
 // Refetch all updated transactions in a single list request instead of one
@@ -1014,7 +1031,7 @@ async function getFormattedTransaction(budgetId, transactionId) {
 const VERIFY_REFETCH_WINDOW_DAYS = 90;
 
 async function prefetchUpdatedTransactions(budgetId, requestedUpdates, responseTransactions = []) {
-  const wantedIds = new Set(requestedUpdates.map((r) => r.id && normalizeTransactionId(r.id)).filter(Boolean));
+  const wantedIds = new Set(requestedUpdates.map((r) => r.id).filter(Boolean));
   const dates = [];
   for (const t of responseTransactions) if (t?.date) dates.push(t.date);
   for (const r of requestedUpdates) if (r.date) dates.push(r.date);
@@ -1033,8 +1050,7 @@ async function prefetchUpdatedTransactions(budgetId, requestedUpdates, responseT
   try {
     const data = await fetchTransactions({ budgetId, sinceDate });
     for (const t of data.transactions) {
-      const id = normalizeTransactionId(t.id);
-      if (wantedIds.has(id)) byId.set(id, formatTransaction(t));
+      if (wantedIds.has(t.id)) byId.set(t.id, formatTransaction(t));
     }
   } catch {
     // The write already succeeded; a failed bulk refetch (e.g. a response
@@ -1059,7 +1075,7 @@ async function verifyBulkTransactionUpdates(budgetId, requestedUpdates, response
   };
   const prefetched = await prefetchUpdatedTransactions(budgetId, requestedUpdates, responseTransactions);
   const results = requestedUpdates.map((requested) => {
-    const refetched = prefetched.get(normalizeTransactionId(requested.id));
+    const refetched = getByTransactionId(prefetched, requested.id);
     return { requested, refetched, mismatches: transactionUpdateMismatches(requested, refetched) };
   });
 
@@ -1086,7 +1102,7 @@ function summarizeApprovalChanges(requestedUpdates, beforeById, verifiedTransact
   requestedUpdates.forEach((requested, i) => {
     if (!verifiedTransactions[i]?.approved) return;
     counts.approved_count += 1;
-    const before = beforeById?.get(normalizeTransactionId(requested?.id ?? ""));
+    const before = getByTransactionId(beforeById, requested?.id);
     if (!before) counts.approval_state_unknown_count += 1;
     else if (before.approved) counts.already_approved_count += 1;
     else counts.newly_approved_count += 1;
@@ -2846,8 +2862,7 @@ registerTool(
       const normalizedId = normalizeTransactionId(transactionId);
       const isComposite = /_\d{4}-\d{2}-\d{2}$/.test(transactionId);
       try {
-        const { data } = await api.transactions.getTransactionById(bid, normalizedId);
-        return ok(formatTransaction(data.transaction));
+        return ok(await getFormattedTransaction(bid, transactionId));
       } catch (e) {
         // Only fall back for composite IDs on resource_not_found. Other errors
         // (auth, rate limit, network) and non-composite not-founds bubble up unchanged.
@@ -2995,7 +3010,7 @@ registerTool(
         "update_transaction",
         bid,
         [requested],
-        new Map(before ? [[normalizeTransactionId(transactionId), before]] : []),
+        new Map(before ? [[transactionId, before]] : []),
         `Updated transaction ${transactionId} (${before?.payee_name ?? "unknown payee"})`,
         [after]
       );
@@ -3173,7 +3188,7 @@ registerTool(
       const mapped = updates.map((t) => ({ id: t.id, ...mapTransactionUpdate(t) }));
       const { data: updData } = await api.transactions.updateTransactions(bid, { transactions: mapped });
       // The pre-write fetch above is the before-state: every row was unapproved.
-      const beforeById = new Map(txns.map((t) => [normalizeTransactionId(t.id), formatTransaction(t)]));
+      const beforeById = new Map(txns.map((t) => [t.id, formatTransaction(t)]));
       const { verification, verified } = await verifyBulkTransactionUpdates(bid, updates, updData.transactions);
       await journalTransactionUpdates(
         "approve_transactions",
@@ -3234,7 +3249,7 @@ registerTool(
         "reassign_payee_transactions",
         bid,
         updates,
-        new Map(txns.map((t) => [normalizeTransactionId(t.id), formatTransaction(t)])),
+        new Map(txns.map((t) => [t.id, formatTransaction(t)])),
         `Reassigned ${updates.length} transactions from payee ${fromPayeeId} to ${toPayeeId}`,
         verified
       );
@@ -3927,15 +3942,14 @@ function beforeFieldsForUpdate(requested, beforeTransaction) {
 // One list request covering recent history, with per-transaction GET fallback
 // only for stragglers — same budget-friendly shape as prefetchUpdatedTransactions.
 async function fetchTransactionsByIds(budgetId, ids) {
-  const wanted = new Set(ids.map(normalizeTransactionId));
+  const wanted = new Set(ids);
   const byId = new Map();
   const sinceDate = new Date(Date.now() - VERIFY_REFETCH_WINDOW_DAYS * 24 * 60 * 60 * 1000)
     .toISOString().slice(0, 10);
   try {
     const data = await fetchTransactions({ budgetId, sinceDate });
     for (const t of data.transactions) {
-      const id = normalizeTransactionId(t.id);
-      if (wanted.has(id)) byId.set(id, formatTransaction(t));
+      if (wanted.has(t.id)) byId.set(t.id, formatTransaction(t));
     }
   } catch {
     // Fall through to per-transaction GETs.
@@ -3955,18 +3969,18 @@ async function fetchTransactionsByIds(budgetId, ids) {
 async function journalTransactionUpdates(tool, budgetId, requestedUpdates, beforeById, description, verifiedTransactions) {
   // Reuse the fresh verification snapshot; missing rows cannot be invented or
   // trigger another per-row read here. They remain audit-only.
-  const verifiedById = new Map((verifiedTransactions || []).filter(t => t?.id).map(t => [normalizeTransactionId(t.id), t]));
+  const verifiedById = new Map((verifiedTransactions || []).filter(t => t?.id).map(t => [t.id, t]));
   const rows = [];
   const after = [];
   let missingBefore = 0;
   for (const requested of requestedUpdates) {
-    const before = beforeById.get(normalizeTransactionId(requested.id));
+    const before = getByTransactionId(beforeById, requested.id);
     const fields = beforeFieldsForUpdate(requested, before);
-    const actual = verifiedById.get(normalizeTransactionId(requested.id));
+    const actual = getByTransactionId(verifiedById, requested.id);
     if (!actual) { missingBefore++; continue; }
-    after.push({ id: normalizeTransactionId(requested.id), snapshot: operationTransactionState(actual) });
+    after.push({ id: requested.id, snapshot: operationTransactionState(actual) });
     const sparse = Object.fromEntries(Object.entries(requested).filter(([,v]) => v !== undefined));
-    if (fields && Object.keys(fields).length > 0 && transactionUpdateMismatches(sparse, actual).length === 0) rows.push({ id: normalizeTransactionId(requested.id), fields });
+    if (fields && Object.keys(fields).length > 0 && transactionUpdateMismatches(sparse, actual).length === 0) rows.push({ id: requested.id, fields });
     else missingBefore++;
   }
   return appendUndoEntry({ tool, budget_id: budgetId, description, undoable: rows.length > 0,
